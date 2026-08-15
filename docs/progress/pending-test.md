@@ -21,3 +21,4 @@ description: 当前版本已实现但仍需人工验证的变更项
 - 失效 blob 且无 server/原链时显示失效占位，不白屏；保存/同步 JSON 不含 blob:。
 - Safari 打开 content 为 /api/files/.../content 的云端视频/音频应能正常播放（需支持 Range）。
 - gpt-image-2 等仅返回 base64 的生图：生成成功后刷新浏览器图片仍在；有对象存储时应尽量变成 server:，无存储时至少有 image: 本地键。
+- Agent 对话框输入 @ 可弹出画布图片/视频/音频列表；插入芯片后发送，Agent 应识别对应节点引用。

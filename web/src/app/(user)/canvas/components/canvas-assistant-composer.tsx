@@ -8,14 +8,17 @@ import { canvasThemes } from "@/lib/canvas-theme";
 import { useEffectiveConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasNodeType, type CanvasAgentConfig, type CanvasAssistantReference } from "../types";
+import type { CanvasResourceReference } from "../utils/canvas-resource-references";
 import { isCanvasImageNodeType } from "../utils/canvas-panorama";
 import { CanvasImageSettingsPopover } from "./canvas-image-settings-popover";
+import { CanvasPromptChipInput } from "./canvas-prompt-chip-input";
 import { CanvasVideoSettingsPopover } from "./canvas-video-settings-popover";
 
 export type CanvasAssistantComposerProps = {
     prompt: string;
     isRunning: boolean;
     references: CanvasAssistantReference[];
+    mentionReferences: CanvasResourceReference[];
     agentConfig: CanvasAgentConfig;
     onAgentConfigChange: (patch: Partial<CanvasAgentConfig>) => void;
     onPromptChange: (prompt: string) => void;
@@ -31,6 +34,7 @@ export function CanvasAssistantComposer({
     prompt,
     isRunning,
     references,
+    mentionReferences,
     agentConfig,
     onAgentConfigChange,
     onPromptChange,
@@ -56,23 +60,15 @@ export function CanvasAssistantComposer({
                 </div>
             ) : null}
             <div className="rounded-2xl border px-3 pb-3 pt-3" style={{ background: theme.toolbar.panel, borderColor: theme.node.stroke }}>
-                <textarea
+                <CanvasPromptChipInput
                     value={prompt}
-                    onChange={(event) => onPromptChange(event.target.value)}
-                    onPaste={(event) => {
-                        const file = Array.from(event.clipboardData.files).find((item) => item.type.startsWith("image/"));
-                        if (!file) return;
-                        event.preventDefault();
-                        onPasteImage(file);
-                    }}
-                    onKeyDown={(event) => {
-                        if (event.key !== "Enter" || event.ctrlKey || event.metaKey || event.shiftKey) return;
-                        event.preventDefault();
-                        void onSubmit();
-                    }}
-                    className="thin-scrollbar h-20 w-full resize-none border-0 bg-transparent px-1 py-1 text-sm leading-5 outline-none placeholder:opacity-40"
+                    references={mentionReferences}
+                    onChange={onPromptChange}
+                    onSubmit={() => void onSubmit()}
+                    onPasteImage={onPasteImage}
+                    className="thin-scrollbar h-20 w-full resize-none border-0 bg-transparent px-1 py-1 text-sm leading-5"
                     style={{ color: theme.node.text }}
-                    placeholder="描述创作目标，或让我继续操作画布"
+                    placeholder={mentionReferences.length ? "描述创作目标，输入 @ 选择画布图片/视频/音频" : "描述创作目标，或让我继续操作画布"}
                 />
                 <div className="mt-2 flex items-center justify-between gap-2">
                     <div className="flex min-w-0 flex-1 items-center gap-1">

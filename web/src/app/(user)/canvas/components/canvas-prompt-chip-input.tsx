@@ -14,6 +14,7 @@ type CanvasPromptChipInputProps = {
     references: CanvasResourceReference[];
     onChange: (value: string) => void;
     onSubmit?: () => void;
+    onPasteImage?: (file: File) => void;
     className?: string;
     style?: CSSProperties;
     placeholder?: string;
@@ -28,7 +29,7 @@ type PromptToken =
     | { type: "text"; value: string }
     | { type: "reference"; label: string };
 
-export function CanvasPromptChipInput({ value, references, onChange, onSubmit, className, style, placeholder }: CanvasPromptChipInputProps) {
+export function CanvasPromptChipInput({ value, references, onChange, onSubmit, onPasteImage, className, style, placeholder }: CanvasPromptChipInputProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const editorRef = useRef<HTMLDivElement>(null);
     const composingRef = useRef(false);
@@ -143,6 +144,12 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
                     if (!composingRef.current) syncFromEditor();
                 }}
                 onPaste={(event) => {
+                    const imageFile = Array.from(event.clipboardData.files || []).find((item) => item.type.startsWith("image/"));
+                    if (imageFile && onPasteImage) {
+                        event.preventDefault();
+                        onPasteImage(imageFile);
+                        return;
+                    }
                     const text = event.clipboardData.getData("text/plain");
                     if (!text) return;
 

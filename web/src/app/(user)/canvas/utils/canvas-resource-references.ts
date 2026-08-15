@@ -16,6 +16,11 @@ export type CanvasResourceReference = {
     active: boolean;
 };
 
+export function buildAgentResourceReferences(nodes: CanvasNodeData[]) {
+    // Agent can mention any resource currently on the canvas.
+    return labelResourceNodes(nodes.filter(isResourceNode), true);
+}
+
 export function buildCanvasResourceReferences(nodes: CanvasNodeData[], connections: CanvasConnection[], contextNodeId?: string | null) {
     const contextNodes = contextNodeId ? getMentionResourceNodes(contextNodeId, nodes, connections) : [];
     const globalReferences = labelResourceNodes(nodes.filter(isResourceNode), false);
@@ -71,7 +76,7 @@ function labelResourceNodes(nodes: CanvasNodeData[], active: boolean) {
                 kind,
                 label,
                 title: node.title || label,
-                previewUrl: node.metadata?.content,
+                previewUrl: node.metadata?.content || undefined,
                 text: node.type === CanvasNodeType.Text ? node.metadata?.content || node.metadata?.prompt : undefined,
                 active,
             },
@@ -91,9 +96,11 @@ function isResourceNode(node: CanvasNodeData) {
 }
 
 function resourceKind(node: CanvasNodeData): CanvasResourceKind | null {
-    if (isCanvasImageNodeType(node.type) && node.metadata?.content) return "image";
-    if (node.type === CanvasNodeType.Video && node.metadata?.content) return "video";
-    if (node.type === CanvasNodeType.Audio && node.metadata?.content) return "audio";
-    if (node.type === CanvasNodeType.Text && (node.metadata?.content || node.metadata?.prompt)) return "text";
+    const content = node.metadata?.content;
+    const storageKey = node.metadata?.storageKey;
+    if (isCanvasImageNodeType(node.type) && (content || storageKey)) return "image";
+    if (node.type === CanvasNodeType.Video && (content || storageKey)) return "video";
+    if (node.type === CanvasNodeType.Audio && (content || storageKey)) return "audio";
+    if (node.type === CanvasNodeType.Text && (content || node.metadata?.prompt)) return "text";
     return null;
 }

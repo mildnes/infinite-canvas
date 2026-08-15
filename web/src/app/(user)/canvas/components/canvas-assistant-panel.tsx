@@ -38,6 +38,7 @@ import {
     type CanvasNodeData,
 } from "../types";
 import { isCanvasImageNodeType } from "../utils/canvas-panorama";
+import { buildAgentResourceReferences } from "../utils/canvas-resource-references";
 import { AssistantReferenceChip, CanvasAssistantComposer } from "./canvas-assistant-composer";
 
 const PANEL_MOTION_MS = 500;
@@ -141,6 +142,7 @@ export function CanvasAssistantPanel({
     }, [messages, view]);
     const allSelectedReferences = useMemo(() => buildAssistantReferences(nodes, selectedNodeIds), [nodes, selectedNodeIds]);
     const selectedReferences = useMemo(() => allSelectedReferences.filter((item) => !removedReferenceIds.has(item.id)), [allSelectedReferences, removedReferenceIds]);
+    const mentionReferences = useMemo(() => buildAgentResourceReferences(nodes), [nodes]);
     const iconButtonStyle = { color: theme.node.muted };
     const settleDeleteConfirmation = (confirmed: boolean) => {
         const pending = pendingDeleteRef.current;
@@ -216,7 +218,9 @@ export function CanvasAssistantPanel({
             commitSessions([session], session.id);
         }
 
-        const references = savedReferences || selectedReferences;
+        const explicitReferences = savedReferences || selectedReferences;
+        const mentionedReferences = savedReferences ? [] : collectMentionedAssistantReferences(text, nodes, mentionReferences);
+        const references = mergeAssistantReferences(explicitReferences, mentionedReferences);
         const messageReferenceNodeIds = references.map((reference) => reference.id);
         const userMessage: CanvasAssistantMessage = { id: nanoid(), role: "user", text, references, status: "success" };
         const assistantId = nanoid();
@@ -443,6 +447,7 @@ export function CanvasAssistantPanel({
                             prompt={prompt}
                             isRunning={isRunning}
                             references={selectedReferences}
+                            mentionReferences={mentionReferences}
                             agentConfig={agentConfig}
                             onAgentConfigChange={onAgentConfigChange}
                             onPromptChange={setPrompt}
@@ -611,30 +616,56 @@ function MessageReferences({ message }: { message: CanvasAssistantMessage }) {
 }
 
 function nodeToReference(node: CanvasNodeData): CanvasAssistantReference | null {
-    if (isCanvasImageNodeType(node.type) && node.metadata?.content) {
+    if (isCanvasImageNodeType(node.type) && (node.metadata?.content || node.metadata?.storageKey)) {
         return {
             id: node.id,
             type: node.type,
             title: node.title,
-            dataUrl: node.metadata.content,
-            storageKey: node.metadata.storageKey,
-            mimeType: node.metadata.mimeType,
+            dataUrl: node.metadata?.content,
+            storageKey: node.metadata?.storageKey,
+            mimeType: node.metadata?.mimeType,
         };
     }
-    if (node.type === CanvasNodeType.Text && node.metadata?.content) {
-        return { id: node.id, type: node.type, title: node.title, text: node.metadata.content };
+    if (node.type === CanvasNodeType.Text && (node.metadata?.content || node.metadata?.prompt)) {
+        return { id: node.id, type: node.type, title: node.title, text: node.metadata?.content || node.metadata?.prompt };
     }
-    if ((node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) && node.metadata?.content) {
+    if ((node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) && (node.metadata?.content || node.metadata?.storageKey)) {
         return {
             id: node.id,
             type: node.type,
             title: node.title,
-            url: node.metadata.content,
-            storageKey: node.metadata.storageKey,
-            mimeType: node.metadata.mimeType,
+            url: node.metadata?.content,
+            storageKey: node.metadata?.storageKey,
+            mimeType: node.metadata?.mimeType,
         };
     }
     return null;
+}
+
+function collectMentionedAssistantReferences(text: string, nodes: CanvasNodeData[], mentionReferences: ReturnType<typeof buildAgentResourceReferences>) {
+    if (!text.trim() || !mentionReferences.length) return [] as CanvasAssistantReference[];
+    const labels = mentionReferences.map((item) => item.label).sort((a, b) => b.length - a.length);
+    const hitLabels = new Set<string>();
+    for (const label of labels) {
+        if (!label) continue;
+        if (text.includes(label) || text.includes("@" + label)) hitLabels.add(label);
+    }
+    if (!hitLabels.size) return [];
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
+    return mentionReferences
+        .filter((item) => hitLabels.has(item.label))
+        .map((item) => nodeById.get(item.nodeId))
+        .filter((node): node is CanvasNodeData => Boolean(node))
+        .map(nodeToReference)
+        .filter((item): item is CanvasAssistantReference => Boolean(item));
+}
+
+function mergeAssistantReferences(...groups: CanvasAssistantReference[][]) {
+    const map = new Map<string, CanvasAssistantReference>();
+    groups.flat().forEach((item) => {
+        if (!map.has(item.id)) map.set(item.id, item);
+    });
+    return Array.from(map.values());
 }
 
 function buildAssistantReferences(nodes: CanvasNodeData[], selectedNodeIds: Set<string>) {
