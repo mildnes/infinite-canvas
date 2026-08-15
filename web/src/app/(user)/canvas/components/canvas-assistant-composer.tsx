@@ -18,7 +18,8 @@ export type CanvasAssistantComposerProps = {
     prompt: string;
     isRunning: boolean;
     references: CanvasAssistantReference[];
-    mentionReferences: CanvasResourceReference[];
+    /** 首页等无画布上下文场景可省略，默认空列表 */
+    mentionReferences?: CanvasResourceReference[];
     agentConfig: CanvasAgentConfig;
     onAgentConfigChange: (patch: Partial<CanvasAgentConfig>) => void;
     onPromptChange: (prompt: string) => void;
@@ -34,7 +35,7 @@ export function CanvasAssistantComposer({
     prompt,
     isRunning,
     references,
-    mentionReferences,
+    mentionReferences = [],
     agentConfig,
     onAgentConfigChange,
     onPromptChange,

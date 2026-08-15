@@ -11,7 +11,7 @@ import type { CanvasResourceReference } from "../utils/canvas-resource-reference
 
 type CanvasPromptChipInputProps = {
     value: string;
-    references: CanvasResourceReference[];
+    references?: CanvasResourceReference[];
     onChange: (value: string) => void;
     onSubmit?: () => void;
     onPasteImage?: (file: File) => void;
@@ -29,7 +29,7 @@ type PromptToken =
     | { type: "text"; value: string }
     | { type: "reference"; label: string };
 
-export function CanvasPromptChipInput({ value, references, onChange, onSubmit, onPasteImage, className, style, placeholder }: CanvasPromptChipInputProps) {
+export function CanvasPromptChipInput({ value, references = [], onChange, onSubmit, onPasteImage, className, style, placeholder }: CanvasPromptChipInputProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const editorRef = useRef<HTMLDivElement>(null);
     const composingRef = useRef(false);
