@@ -218,9 +218,13 @@ export function CanvasAssistantPanel({
             commitSessions([session], session.id);
         }
 
-        const explicitReferences = savedReferences || selectedReferences;
+        // @ 提及优先：输入里有 @/芯片引用时，不再自动附带画布当前选中节点（避免总带上“第一张图”）。
         const mentionedReferences = savedReferences ? [] : collectMentionedAssistantReferences(text, nodes, mentionReferences);
-        const references = mergeAssistantReferences(explicitReferences, mentionedReferences);
+        const references = savedReferences
+            ? savedReferences
+            : mentionedReferences.length
+                ? mentionedReferences
+                : selectedReferences;
         const messageReferenceNodeIds = references.map((reference) => reference.id);
         const userMessage: CanvasAssistantMessage = { id: nanoid(), role: "user", text, references, status: "success" };
         const assistantId = nanoid();
@@ -446,7 +450,7 @@ export function CanvasAssistantPanel({
                         <CanvasAssistantComposer
                             prompt={prompt}
                             isRunning={isRunning}
-                            references={selectedReferences}
+                            references={composerAttachmentReferences(prompt, selectedReferences, mentionReferences, nodes)}
                             mentionReferences={mentionReferences}
                             agentConfig={agentConfig}
                             onAgentConfigChange={onAgentConfigChange}
@@ -642,13 +646,25 @@ function nodeToReference(node: CanvasNodeData): CanvasAssistantReference | null 
     return null;
 }
 
+
+function composerAttachmentReferences(
+    prompt: string,
+    selectedReferences: CanvasAssistantReference[],
+    mentionReferences: ReturnType<typeof buildAgentResourceReferences>,
+    nodes: CanvasNodeData[],
+) {
+    const mentioned = collectMentionedAssistantReferences(prompt, nodes, mentionReferences);
+    // 输入已有 @ 引用时，顶部附件区不再显示画布选中节点，避免“默认第一张图”。
+    return mentioned.length ? [] : selectedReferences;
+}
+
 function collectMentionedAssistantReferences(text: string, nodes: CanvasNodeData[], mentionReferences: ReturnType<typeof buildAgentResourceReferences>) {
     if (!text.trim() || !mentionReferences.length) return [] as CanvasAssistantReference[];
     const labels = mentionReferences.map((item) => item.label).sort((a, b) => b.length - a.length);
     const hitLabels = new Set<string>();
     for (const label of labels) {
         if (!label) continue;
-        if (text.includes(label) || text.includes("@" + label)) hitLabels.add(label);
+        if (textMentionsLabel(text, label)) hitLabels.add(label);
     }
     if (!hitLabels.size) return [];
     const nodeById = new Map(nodes.map((node) => [node.id, node]));
@@ -660,12 +676,10 @@ function collectMentionedAssistantReferences(text: string, nodes: CanvasNodeData
         .filter((item): item is CanvasAssistantReference => Boolean(item));
 }
 
-function mergeAssistantReferences(...groups: CanvasAssistantReference[][]) {
-    const map = new Map<string, CanvasAssistantReference>();
-    groups.flat().forEach((item) => {
-        if (!map.has(item.id)) map.set(item.id, item);
-    });
-    return Array.from(map.values());
+function textMentionsLabel(text: string, label: string) {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // Chip 序列化通常是 “图片2”，也可能带 @；边界匹配避免 图片1 误伤 图片10。
+    return new RegExp(`(?:^|[\\s，,。.!！？?:：;；、])@?${escaped}(?=$|[\\s，,。.!！？?:：;；、])`).test(text);
 }
 
 function buildAssistantReferences(nodes: CanvasNodeData[], selectedNodeIds: Set<string>) {
