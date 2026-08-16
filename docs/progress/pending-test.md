@@ -22,3 +22,6 @@ description: 当前版本已实现但仍需人工验证的变更项
 - Safari 打开 content 为 /api/files/.../content 的云端视频/音频应能正常播放（需支持 Range）。
 - gpt-image-2 等仅返回 base64 的生图：生成成功后刷新浏览器图片仍在；有对象存储时应尽量变成 server:，无存储时至少有 image: 本地键。
 - Agent 对话框输入 @ 可弹出画布图片/视频/音频列表；插入芯片后发送，Agent 应识别对应节点引用。
+- 后台私有设置新增画布 Agent 扩展：可新增/启停/编辑 Skill，新增/启停 MCP 服务，读取工具列表；保存后 API Key 脱敏并可沿用。
+- 画布 Agent 会话应自动加载启用 Skill 与 MCP 工具，模型可调用 `mcp__<服务>__<工具>` 工具，后端转发 JSON-RPC `tools/call` 并把真实结果回传模型继续执行。
+- 用可生成视频的 MCP 工具走 Agent 生成视频并落回画布，确认工具参数传递、媒体 URL/文件结果能被模型识别，并通过 `create_media_node` 创建视频节点。

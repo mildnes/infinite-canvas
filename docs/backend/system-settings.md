@@ -41,6 +41,7 @@ description: settings 表中 public 和 private 配置结构说明
 | --- | --- | --- |
 | `modelChannel` | object | 模型渠道公开配置组 |
 | `auth` | object | 认证相关公开配置 |
+| `agent` | object | 已启用的画布 Agent Skill 与 MCP 工具元数据；不包含 MCP API Key |
 
 `modelChannel` 字段：
 
@@ -75,6 +76,22 @@ description: settings 表中 public 和 private 配置结构说明
 | --- | --- | --- |
 | `allowRegister` | boolean | 是否允许用户注册，默认允许；关闭后注册入口隐藏，注册接口拒绝新用户创建 |
 | `linuxDo.enabled` | boolean | 是否开启 Linux.do 登录 |
+
+`agent` 字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `skills` | object[] | 后台启用的 Skill；公开只返回名称、说明和提示词 |
+| `mcpServers` | object[] | 后台启用的 MCP 服务及工具定义；公开不返回 Endpoint 和 API Key |
+
+`private.agent` 字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `skills[].id/name/description/prompt/enabled` | string/string/string/string/boolean | Skill 标识、名称、说明、追加到 Agent 的工作流提示词和启用状态 |
+| `mcpServers[].id/name/endpoint/apiKey/description/tools/enabled` | mixed | MCP 服务私有配置；`apiKey` 仅后端使用，`tools` 是允许暴露给 Agent 的工具白名单 |
+| `mcpServers[].allowUsers` | boolean | 是否允许普通登录用户调用该全局 MCP；管理员始终可调用 |
+| `mcpServers[].tools[].name/description/inputSchema` | string/string/object | MCP 工具名称、说明和 OpenAI function calling 参数 Schema |
 
 ## private.value
 

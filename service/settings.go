@@ -24,6 +24,7 @@ func PublicSettings() (model.PublicSetting, error) {
 	settings, err := repository.GetSettings()
 	settings = normalizeSettings(settings)
 	settings.Public.ModelChannel.Channels = publicChannelInfos(settings.Private.Channels)
+	settings.Public.Agent = model.PublicAgentSetting{Skills: []model.AgentSkill{}, MCPServers: []model.PublicMCPServer{}}
 	if len(settings.Public.ModelChannel.AvailableModels) == 0 {
 		settings.Public.ModelChannel.AvailableModels = enabledChannelModels(settings.Private.Channels)
 	}
@@ -51,6 +52,7 @@ func SaveSettings(settings model.Settings) (model.Settings, error) {
 	settings = normalizeSettings(settings)
 	keepPrivateAPIKeys(&settings, normalizeSettings(saved))
 	keepPrivateAuthSecrets(&settings, normalizeSettings(saved))
+	keepPrivateAgentSecrets(&settings, normalizeSettings(saved))
 	keepPrivateStorageSecrets(&settings, normalizeSettings(saved))
 	if err := validateEnabledStorageProviderTypes(settings.Private.Storage.Providers); err != nil {
 		return model.Settings{}, err
@@ -213,6 +215,25 @@ func normalizePrivateSetting(setting model.PrivateSetting) model.PrivateSetting 
 	setting.PromptSync = normalizePromptSyncSetting(setting.PromptSync)
 	setting.AILog = normalizeAILogSetting(setting.AILog)
 	setting.Storage = normalizePrivateStorageSetting(setting.Storage)
+	if setting.Agent.Skills == nil {
+		setting.Agent.Skills = []model.AgentSkill{}
+	}
+	if setting.Agent.MCPServers == nil {
+		setting.Agent.MCPServers = []model.MCPServer{}
+	}
+	for i := range setting.Agent.Skills {
+		if setting.Agent.Skills[i].ID == "" {
+			setting.Agent.Skills[i].ID = stableAgentID(setting.Agent.Skills[i].Name, i)
+		}
+	}
+	for i := range setting.Agent.MCPServers {
+		if setting.Agent.MCPServers[i].ID == "" {
+			setting.Agent.MCPServers[i].ID = stableAgentID(setting.Agent.MCPServers[i].Name+"|"+setting.Agent.MCPServers[i].Endpoint, i)
+		}
+		if setting.Agent.MCPServers[i].Tools == nil {
+			setting.Agent.MCPServers[i].Tools = []model.MCPTool{}
+		}
+	}
 	for i := range setting.Channels {
 		if setting.Channels[i].Protocol == "" {
 			setting.Channels[i].Protocol = "openai"
@@ -233,6 +254,15 @@ func normalizePrivateSetting(setting model.PrivateSetting) model.PrivateSetting 
 	return setting
 }
 
+func stableAgentID(name string, index int) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return fmt.Sprintf("agent-%d", index+1)
+	}
+	digest := sha256.Sum256([]byte(name))
+	return "agent-" + hex.EncodeToString(digest[:])[:8]
+}
+
 func hidePrivateAPIKeys(settings model.Settings) model.Settings {
 	for i := range settings.Private.Channels {
 		settings.Private.Channels[i].APIKey = ""
@@ -242,6 +272,9 @@ func hidePrivateAPIKeys(settings model.Settings) model.Settings {
 		settings.Private.Storage.Providers[i].Password = ""
 	}
 	settings.Private.Auth.LinuxDo.ClientSecret = ""
+	for i := range settings.Private.Agent.MCPServers {
+		settings.Private.Agent.MCPServers[i].APIKey = ""
+	}
 	return settings
 }
 
@@ -259,6 +292,20 @@ func keepPrivateAPIKeys(settings *model.Settings, saved model.Settings) {
 func keepPrivateAuthSecrets(settings *model.Settings, saved model.Settings) {
 	if strings.TrimSpace(settings.Private.Auth.LinuxDo.ClientSecret) == "" {
 		settings.Private.Auth.LinuxDo.ClientSecret = saved.Private.Auth.LinuxDo.ClientSecret
+	}
+}
+
+func keepPrivateAgentSecrets(settings *model.Settings, saved model.Settings) {
+	for i := range settings.Private.Agent.MCPServers {
+		if strings.TrimSpace(settings.Private.Agent.MCPServers[i].APIKey) != "" {
+			continue
+		}
+		for _, old := range saved.Private.Agent.MCPServers {
+			if (old.ID != "" && old.ID == settings.Private.Agent.MCPServers[i].ID && old.Endpoint == settings.Private.Agent.MCPServers[i].Endpoint) || (old.Name == settings.Private.Agent.MCPServers[i].Name && old.Endpoint == settings.Private.Agent.MCPServers[i].Endpoint) {
+				settings.Private.Agent.MCPServers[i].APIKey = old.APIKey
+				break
+			}
+		}
 	}
 }
 

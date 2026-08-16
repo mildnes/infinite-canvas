@@ -1,4 +1,5 @@
 import { requestCanvasAgentTurn } from "@/services/api/canvas-agent";
+import { callAgentMCPTool, fetchAgentSettings } from "@/services/api/agent";
 import type { AiConfig } from "@/stores/use-config-store";
 import type {
     CanvasAgentContent,
@@ -8,7 +9,7 @@ import type {
     CanvasAssistantReference,
 } from "../types";
 import type { CanvasAgentContext } from "./canvas-agent-context";
-import { buildCanvasAgentSkillPrompt } from "./canvas-agent-skills";
+import { buildCanvasAgentSkillPromptWithExtra } from "./canvas-agent-skills";
 import {
     CANVAS_AGENT_TOOLS,
     canvasAgentActionLabel,
@@ -45,6 +46,7 @@ export type RunCanvasAgentInput = {
     onEvent?: (event: CanvasAgentRuntimeEvent) => void;
     onCheckpoint?: (checkpoint: { state: CanvasAgentState; protocolMessages: CanvasAgentProtocolMessage[] }) => void;
     signal?: AbortSignal;
+    authToken?: string;
 };
 
 export type RunCanvasAgentResult = {
@@ -71,6 +73,7 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
         ...input.protocolMessages,
         { role: "user" as const, content: buildUserContent(input.userText, input.references, input.config.textModel || input.config.model) },
     ]);
+    const extensions = await loadAgentExtensions(input.authToken);
 
     for (let step = 0; step < MAX_AGENT_STEPS; step++) {
         throwIfAborted(input.signal);
@@ -78,20 +81,23 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
         const context = input.getContext(state);
         const turn = await requestCanvasAgentTurn({
             config: input.config,
-            systemPrompt: buildCanvasAgentSkillPrompt(state.phase, input.userText, context),
+            systemPrompt: buildCanvasAgentSkillPromptWithExtra(state.phase, input.userText, context, extensions.skillPrompts),
             messages: protocolMessages,
-            tools: CANVAS_AGENT_TOOLS,
+            tools: [...CANVAS_AGENT_TOOLS, ...extensions.tools],
             allowTools,
             signal: input.signal,
         });
         if (turn.usedJsonFallback) allowTools = false;
 
         const parsedJson = parseCanvasAgentJson(turn.content);
-        const nativeActions = turn.toolCalls.map((toolCall) => normalizeCanvasAgentAction(toolCall.name, toolCall.arguments, toolCall.id));
+        const mcpCalls = turn.toolCalls.filter((toolCall) => toolCall.name.startsWith("mcp__"));
+        const nativeActions = turn.toolCalls.filter((toolCall) => !toolCall.name.startsWith("mcp__")).map((toolCall) => normalizeCanvasAgentAction(toolCall.name, toolCall.arguments, toolCall.id));
         const arrangeRequested = /整理|排列|排序|对齐|布局|排版|重新摆放/.test(input.userText) && !/(不要|别|无需|不用).{0,8}(整理|排列|排序|对齐|布局|排版|重新摆放)/.test(input.userText);
-        const actions = (nativeActions.length ? nativeActions : parsedJson.actions).filter((action) => action.name !== "arrange_nodes" || arrangeRequested);
+        const actions = mcpCalls.length && !nativeActions.length
+            ? []
+            : (nativeActions.length ? nativeActions : parsedJson.actions).filter((action) => action.name !== "arrange_nodes" || arrangeRequested);
 
-        if (!actions.length) {
+        if (!actions.length && !mcpCalls.length) {
             const reply = (parsedJson.parsed ? parsedJson.reply : turn.content).trim();
             if (!hasExecutedActions && userLikelyRequestedCanvasAction(input.userText) && !looksLikeClarifyingQuestion(reply)) {
                 const unsupported = "当前文本模型没有返回可执行的画布工具指令。可以继续讨论文本内容，但无法可靠地自动创建节点或执行生成；请在全局配置中更换支持 Tool Calling 或稳定 JSON 输出的文本模型。";
@@ -103,16 +109,26 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
             return { reply: finalReply, state, protocolMessages: persistCanvasAgentProtocolMessages(protocolMessages) };
         }
 
-        input.onEvent?.({ status: "running", label: actions.length === 1 ? canvasAgentActionLabel(actions[0]) : "正在执行 " + actions.length + " 个画布操作" });
-        const assistantToolMessage: CanvasAgentProtocolMessage = nativeActions.length
-            ? { role: "assistant", content: turn.content || undefined, ...(turn.reasoningContent !== undefined ? { reasoningContent: turn.reasoningContent } : {}), toolCalls: actions.map((action) => ({ id: action.id, name: action.name, arguments: action.arguments })) }
+        input.onEvent?.({ status: "running", label: mcpCalls.length ? "正在调用 MCP 工具" : actions.length === 1 ? canvasAgentActionLabel(actions[0]) : "正在执行 " + actions.length + " 个画布操作" });
+        const assistantToolMessage: CanvasAgentProtocolMessage = nativeActions.length || mcpCalls.length
+            ? { role: "assistant", content: turn.content || undefined, ...(turn.reasoningContent !== undefined ? { reasoningContent: turn.reasoningContent } : {}), toolCalls: [...actions.map((action) => ({ id: action.id, name: action.name, arguments: action.arguments })), ...mcpCalls.map((call) => ({ id: call.id, name: call.name, arguments: call.arguments }))] }
             : { role: "assistant", content: turn.content };
 
         const results = await executeActions(actions, state, input.executeAction, input.signal, input.onEvent);
+        const mcpResults = await Promise.all(mcpCalls.map(async (call) => {
+            const target = extensions.lookup.get(call.name);
+            if (!target || !input.authToken) return { id: call.id, name: call.name, result: { ok: false, message: "MCP 调用需要登录且工具必须已配置" } };
+            try {
+                const result = await callAgentMCPTool(input.authToken, { serverId: target.serverId, toolName: target.toolName, arguments: call.arguments });
+                return { id: call.id, name: call.name, result: { ok: true, ...result } };
+            } catch (error) {
+                return { id: call.id, name: call.name, result: { ok: false, message: error instanceof Error ? error.message : "MCP 工具调用失败" } };
+            }
+        }));
         hasExecutedActions = true;
         state = results.state;
 
-        if (nativeActions.length && allowTools) {
+        if ((nativeActions.length || mcpCalls.length) && allowTools) {
             protocolMessages = trimProtocolMessages([
                 ...protocolMessages,
                 assistantToolMessage,
@@ -120,8 +136,9 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
                     role: "tool" as const,
                     toolCallId: action.id,
                     name: action.name,
-                    content: JSON.stringify(result),
+                    content: serializeToolResult(result),
                 })),
+                ...mcpResults.map((item) => ({ role: "tool" as const, toolCallId: item.id, name: item.name, content: serializeToolResult(item.result) })),
             ]);
         } else {
             protocolMessages = trimProtocolMessages([
@@ -139,6 +156,29 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
     const reply = "本轮已达到安全操作步数上限，当前已完成的节点和任务都已保存。你可以让我继续下一步。";
     protocolMessages = trimProtocolMessages([...protocolMessages, { role: "assistant" as const, content: reply }]);
     return { reply, state, protocolMessages: persistCanvasAgentProtocolMessages(protocolMessages) };
+}
+
+async function loadAgentExtensions(authToken?: string) {
+    const result = { skillPrompts: [] as string[], tools: [] as typeof CANVAS_AGENT_TOOLS, lookup: new Map<string, { serverId: string; toolName: string }>() };
+    try {
+        const settings = await fetchAgentSettings(authToken);
+        result.skillPrompts = settings.skills.filter((skill) => skill.enabled && skill.prompt.trim()).map((skill) => `【后台 Skill：${skill.name}】\n${skill.prompt}`);
+        for (const server of settings.mcpServers) for (const tool of server.tools || []) {
+            const name = `mcp__${server.id}__${tool.name}`;
+            result.lookup.set(name, { serverId: server.id, toolName: tool.name });
+            const schema = tool.inputSchema && typeof tool.inputSchema === "object" ? tool.inputSchema : {};
+            result.tools.push({ type: "function", function: { name, description: `${server.name}：${tool.description || tool.name}`, parameters: { type: "object", ...schema } } });
+        }
+    } catch {
+        // 后台扩展不可用时，继续使用内置 Agent 能力。
+    }
+    return result;
+}
+
+function serializeToolResult(result: unknown) {
+    const serialized = JSON.stringify(result);
+    if (serialized.length <= 20000) return serialized;
+    return JSON.stringify({ ok: false, code: "tool_result_truncated", message: "工具结果过大，已截取前 18000 个字符", preview: serialized.slice(0, 18000) });
 }
 
 async function executeActions(

@@ -1,4 +1,5 @@
 import { mimoTextModels } from "@/lib/mimo-tts";
+import { nanoid } from "nanoid";
 import { aiApiUrl, aiHeaders, refreshRemoteUser } from "@/services/api/image";
 import type { AiConfig } from "@/stores/use-config-store";
 import type { CanvasAgentProtocolMessage, CanvasAgentToolCall } from "@/app/(user)/canvas/types";
@@ -123,12 +124,12 @@ async function requestCompletion(config: AiConfig, systemPrompt: string, message
     return {
         content: typeof message.content === "string" ? message.content : "",
         ...(reasoningContent !== undefined ? { reasoningContent } : {}),
-        toolCalls: (message.tool_calls || []).flatMap((toolCall, index) => {
+        toolCalls: (message.tool_calls || []).flatMap((toolCall) => {
             const name = toolCall.function?.name?.trim();
             if (!name) return [];
             return [
                 {
-                    id: toolCall.id || "tool-call-" + index,
+                    id: toolCall.id || "tool-call-" + nanoid(),
                     name,
                     arguments: parseToolArguments(toolCall.function?.arguments),
                 },

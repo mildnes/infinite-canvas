@@ -13,3 +13,4 @@ description: 当前项目后续值得处理的事项
 - [x] grok2api/xAI 请求归一化：多参考图 `reference_images:[{url}]`、单图/首帧 `image:{url}`、参数透传、`/tts` 默认 `language=en`。
 - [x] 管理端 grok2api/xai 渠道内置 Grok 模型目录。
 - [x] grok2api/xAI 协议测试（路径、图片、视频、TTS）。
+- [x] 画布 Agent 支持后台 Skill 工作流与 MCP 工具：Skill 追加系统提示，MCP 由后端 JSON-RPC 代理调用。

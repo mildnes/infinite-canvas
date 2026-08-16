@@ -72,6 +72,49 @@ type PublicSetting struct {
 	ModelChannel PublicModelChannelSetting `json:"modelChannel"`
 	Auth         PublicAuthSetting         `json:"auth"`
 	Storage      PublicStorageSetting      `json:"storage"`
+	Agent        PublicAgentSetting        `json:"agent"`
+}
+
+type AgentSkill struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Prompt      string `json:"prompt"`
+	Enabled     bool   `json:"enabled"`
+}
+
+type MCPServer struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Endpoint    string    `json:"endpoint"`
+	APIKey      string    `json:"apiKey"`
+	Description string    `json:"description"`
+	Tools       []MCPTool `json:"tools"`
+	Enabled     bool      `json:"enabled"`
+	AllowUsers  bool      `json:"allowUsers"`
+}
+
+type MCPTool struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	InputSchema map[string]any `json:"inputSchema"`
+}
+
+type PublicMCPServer struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Tools       []MCPTool `json:"tools"`
+}
+
+type PublicAgentSetting struct {
+	Skills     []AgentSkill      `json:"skills"`
+	MCPServers []PublicMCPServer `json:"mcpServers"`
+}
+
+type PrivateAgentSetting struct {
+	Skills     []AgentSkill `json:"skills"`
+	MCPServers []MCPServer  `json:"mcpServers"`
 }
 
 type PublicStorageSetting struct {
@@ -92,6 +135,7 @@ type PublicLinuxDoAuthSetting struct {
 // PrivateSetting 私有配置。
 type PrivateSetting struct {
 	Channels   []ModelChannel        `json:"channels"`
+	Agent      PrivateAgentSetting   `json:"agent"`
 	PromptSync PromptSyncSetting     `json:"promptSync"`
 	AILog      AILogSetting          `json:"aiLog"`
 	Auth       PrivateAuthSetting    `json:"auth"`

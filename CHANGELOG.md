@@ -2,6 +2,8 @@
 
 ## Unreleased
 
++ [新增] 画布 Agent 支持后台 Skill 与 MCP 工具：Skill 追加工作流提示，MCP 通过后端 JSON-RPC 代理调用，管理端可配置服务与工具白名单
++ [新增] 管理后台新增画布 Agent 扩展配置：Skill 工作流列表、MCP 服务/API Key/工具定义，支持读取 MCP tools/list
 + [新增] Agent 输入支持 @ 选择画布图片/视频/音频引用（芯片展示，发送时带入真实节点）
 + [修复] gpt-image 等 base64 生图结果刷新丢失：生成完成写入本地/云端 storageKey，打开画板自动物化 data URL
 ## v0.5.4 - 2026-08-15

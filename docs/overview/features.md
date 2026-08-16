@@ -179,6 +179,8 @@ Base URL 如果已经以 `/v1`、`/api/v3` 或 `/api/plan/v3` 结尾，系统不
 - 手动插入素材、读取或澄清不会消耗首次自动命名机会
 - 首次执行非主剧本写操作、导入项目或手动改名后，不再自动覆盖项目标题
 - 自动项目标题只修改项目名称，不改写剧本正文、对白、旁白和媒体提示词
+- 后台可配置 Skill 工作流提示词与 MCP HTTP 服务；启用 Skill 会自动追加到画布 Agent 系统提示词
+- MCP 工具以 `mcp__服务ID__工具名` 暴露给 Agent，调用由后端按 JSON-RPC `tools/call` 代理，API Key 不下发前端；返回稳定媒体 URL 后，Agent 可用 `create_media_node` 放回画布
 
 ## 提示词库
 

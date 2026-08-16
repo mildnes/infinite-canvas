@@ -3146,6 +3146,34 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     return { ok: true, ...canvasAgentTaskSummary(node) };
                 }
 
+                if (action.name === "create_media_node") {
+                    const content = stringValue("content");
+                    const mediaType = stringValue("mediaType");
+                    const targetType = mediaType === "video" ? CanvasNodeType.Video : mediaType === "audio" ? CanvasNodeType.Audio : CanvasNodeType.Image;
+                    const sourceNodeIds = stringValues("sourceNodeIds");
+                    const missingNodeId = validateNodeIds(sourceNodeIds);
+                    if (missingNodeId) return missingNodeResult(missingNodeId);
+                    const sourceNodes = sourceNodeIds.map((nodeId) => getNode(nodeId)!);
+                    const media = createCanvasNode(targetType, nextNodeCenter(targetType, sourceNodes), {
+                        content,
+                        status: NODE_STATUS_SUCCESS,
+                        mediaStatus: "ok",
+                        mimeType: mediaType === "video" ? "video/mp4" : mediaType === "audio" ? "audio/mpeg" : "image/png",
+                    });
+                    media.title = stringValue("title") || (mediaType === "video" ? "MCP 视频" : mediaType === "audio" ? "MCP 音频" : "MCP 图片");
+                    if (targetType === CanvasNodeType.Video) {
+                        const size = fitNodeSize(1280, 720, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+                        media.width = size.width;
+                        media.height = size.height;
+                        media.position = { x: media.position.x + (NODE_DEFAULT_SIZE[CanvasNodeType.Video].width - size.width) / 2, y: media.position.y + (NODE_DEFAULT_SIZE[CanvasNodeType.Video].height - size.height) / 2 };
+                    }
+                    const createdConnections = sourceNodeIds.map((sourceNodeId) => ({ id: nanoid(), fromNodeId: sourceNodeId, toNodeId: media.id }));
+                    commitNodes([...nodesRef.current, media]);
+                    commitConnections([...connectionsRef.current, ...createdConnections]);
+                    selectOnly(media.id);
+                    return { ok: true, nodeId: media.id, connectionIds: createdConnections.map((connection) => connection.id), node: canvasAgentNodeSummary(media) };
+                }
+
                 if (action.name === "create_primary_script_node" || action.name === "create_text_node") {
                     const sourceNodeIds = stringValues("sourceNodeIds");
                     const missingNodeId = validateNodeIds(sourceNodeIds);

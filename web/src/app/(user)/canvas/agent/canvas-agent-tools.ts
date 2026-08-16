@@ -25,6 +25,7 @@ export const CANVAS_AGENT_ACTION_NAMES = [
     "edit_image",
     "generate_video",
     "generate_audio",
+    "create_media_node",
     "get_media_task_status",
 ] as const;
 
@@ -46,13 +47,13 @@ export type CanvasAgentToolResult = {
 export type CanvasAgentToolDefinition = {
     type: "function";
     function: {
-        name: CanvasAgentActionName;
+        name: string;
         description: string;
-        parameters: {
+        parameters: Record<string, unknown> & {
             type: "object";
             properties: Record<string, unknown>;
             required?: string[];
-            additionalProperties: false;
+            additionalProperties?: boolean;
         };
     };
 };
@@ -161,6 +162,17 @@ export const CANVAS_AGENT_TOOLS: CanvasAgentToolDefinition[] = [
         "调用现有音频任务链路。prompt 是实际朗读文本，instructions 是音色/演绎说明；sourceNodeIds 只放真实直接来源，独立生成必须传空数组。",
         { prompt: STRING, title: STRING, sourceNodeIds: STRING_ARRAY, voice: STRING, instructions: STRING },
         ["prompt", "sourceNodeIds"],
+    ),
+    defineTool(
+        "create_media_node",
+        "把 MCP 或其他外部工具返回的稳定图片、视频或音频 URL 直接落到画布。content 必须是可访问 URL 或 data URL。",
+        {
+            mediaType: { type: "string", enum: ["image", "video", "audio"] },
+            content: STRING,
+            title: STRING,
+            sourceNodeIds: STRING_ARRAY,
+        },
+        ["mediaType", "content"],
     ),
     defineTool("get_media_task_status", "读取图片、视频或音频节点的生成状态。", { nodeId: STRING }, ["nodeId"]),
 ];
@@ -278,6 +290,21 @@ export function normalizeCanvasAgentAction(name: unknown, args: unknown, id = na
             };
             break;
         }
+        case "create_media_node": {
+            const mediaType = optionalString(input.mediaType);
+            if (!["image", "video", "audio"].includes(mediaType)) throw new Error("mediaType 必须是 image、video 或 audio");
+            const content = requiredString(input.content, "content");
+            const dataPrefix = content.match(/^data:(image|video|audio)\//i)?.[1]?.toLowerCase();
+            if (!/^https?:\/\//i.test(content) && !dataPrefix) throw new Error("content 必须是 http(s) 或 data URL");
+            if (dataPrefix && dataPrefix !== mediaType) throw new Error("data URL 类型必须与 mediaType 一致");
+            normalized = {
+                mediaType,
+                content,
+                ...(optionalString(input.title) ? { title: optionalString(input.title) } : {}),
+                sourceNodeIds: stringArray(input.sourceNodeIds),
+            };
+            break;
+        }
     }
 
     return { id, name: actionName, arguments: normalized };
@@ -320,6 +347,7 @@ export function canvasAgentActionLabel(action: CanvasAgentAction) {
         edit_image: "正在提交图片编辑",
         generate_video: "正在提交视频生成",
         generate_audio: "正在提交音频生成",
+        create_media_node: "正在把外部媒体放入画布",
         get_media_task_status: "正在读取媒体任务",
     };
     return labels[action.name];

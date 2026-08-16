@@ -222,7 +222,16 @@ export type AdminPublicSettings = {
         mode: string;
         allowUserProvider: boolean;
     };
+    agent: {
+        skills: AdminAgentSkill[];
+        mcpServers: AdminPublicMCPServer[];
+    };
 };
+
+export type AdminAgentSkill = { id: string; name: string; description: string; prompt: string; enabled: boolean };
+export type AdminMCPTool = { name: string; description: string; inputSchema: Record<string, unknown> };
+export type AdminPublicMCPServer = { id: string; name: string; description: string; tools: AdminMCPTool[] };
+export type AdminMCPServer = AdminPublicMCPServer & { endpoint: string; apiKey: string; enabled: boolean; allowUsers: boolean; toolsJson?: string };
 
 export type AdminStorageProvider = {
     id: string;
@@ -277,6 +286,10 @@ export type AdminPrivateSettings = {
         };
         capacityLimitBytes: number;
     };
+    agent: {
+        skills: AdminAgentSkill[];
+        mcpServers: AdminMCPServer[];
+    };
 };
 
 export type AdminAICallLog = {
@@ -321,6 +334,10 @@ export async function fetchAdminSettings(token: string) {
 
 export async function saveAdminSettings(token: string, settings: AdminSettings) {
     return apiPost<AdminSettings>("/api/admin/settings", settings, token);
+}
+
+export async function fetchMCPServerTools(token: string, payload: { server: Partial<AdminMCPServer> }) {
+    return apiPost<AdminMCPTool[]>("/api/admin/settings/mcp-tools", payload, token);
 }
 
 export type AdminChannelActionRequest = {

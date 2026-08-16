@@ -26,6 +26,7 @@ import { useAssetStore } from "@/stores/use-asset-store";
 import { useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { createCanvasAgentState, runCanvasAgent } from "../agent/canvas-agent-runtime";
+import { useUserStore } from "@/stores/use-user-store";
 import type { CanvasAgentContext } from "../agent/canvas-agent-context";
 import type { CanvasAgentAction, CanvasAgentToolResult } from "../agent/canvas-agent-tools";
 import {
@@ -92,6 +93,7 @@ export function CanvasAssistantPanel({
     initialRequest,
     onInitialRequestConsumed,
 }: CanvasAssistantPanelProps) {
+    const authToken = useUserStore((state) => state.token);
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const effectiveConfig = useEffectiveConfig();
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
@@ -279,6 +281,7 @@ export function CanvasAssistantPanel({
                     });
                     return confirmed ? onExecuteAction(action, messageReferenceNodeIds) : { ok: false, code: "delete_cancelled", message: "用户取消删除，原节点已保留" };
                 },
+                authToken,
                 signal: controller.signal,
                 onEvent: (event) => updateMessage(session.id, assistantId, { status: event.status, activity: event.label }),
                 onCheckpoint: (checkpoint) =>

@@ -15,6 +15,10 @@ import { VIDEO_SINGLE_SHOT_SKILL } from "./skills/video-single-shot";
 import { WORKFLOW_SKILL } from "./skills/workflow";
 
 export function buildCanvasAgentSkillPrompt(phase: CanvasAgentPhase, userText: string, context: CanvasAgentContext) {
+	return buildCanvasAgentSkillPromptWithExtra(phase, userText, context, []);
+}
+
+export function buildCanvasAgentSkillPromptWithExtra(phase: CanvasAgentPhase, userText: string, context: CanvasAgentContext, extraSkills: string[]) {
     const intent = buildIntentText(userText, context);
     const selectedTypes = new Set<string>(context.nodes.filter((node) => context.selectedNodeIds.includes(node.id)).map((node) => node.type));
     const skills = [CORE_SKILL, WORKFLOW_SKILL];
@@ -73,7 +77,7 @@ export function buildCanvasAgentSkillPrompt(phase: CanvasAgentPhase, userText: s
     if (wantsAudio) skills.push(AUDIO_SKILL);
     if (wantsOrganize) skills.push(ORGANIZE_SKILL);
 
-    return skills.join("\n\n") + "\n\n【当前真实画布上下文 JSON】\n" + serializeCanvasAgentContext(context);
+	return [...skills, ...extraSkills.filter(Boolean)].join("\n\n") + "\n\n【当前真实画布上下文 JSON】\n" + serializeCanvasAgentContext(context);
 }
 
 function buildIntentText(userText: string, context: CanvasAgentContext) {
