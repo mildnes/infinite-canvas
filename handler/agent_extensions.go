@@ -43,3 +43,17 @@ func AdminListMCPTools(w http.ResponseWriter, r *http.Request) {
 	}
 	OK(w, tools)
 }
+
+func AdminInstallRemoteAgentSkill(w http.ResponseWriter, r *http.Request) {
+	var request service.RemoteAgentSkillRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		Fail(w, "远程 Skill 参数格式错误")
+		return
+	}
+	skill, err := service.InstallRemoteAgentSkill(r.Context(), request)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, skill)
+}

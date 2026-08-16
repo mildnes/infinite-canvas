@@ -51,7 +51,7 @@ func CallMCPTool(ctx context.Context, request MCPToolCallRequest) (map[string]an
 			break
 		}
 	}
-	if server == nil || strings.TrimSpace(server.Endpoint) == "" {
+	if server == nil || !mcpServerConfigured(*server) {
 		return nil, errors.New("MCP 服务不存在或未启用")
 	}
 	allowed := false

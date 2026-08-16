@@ -81,6 +81,11 @@ type AgentSkill struct {
 	Description string `json:"description"`
 	Prompt      string `json:"prompt"`
 	Enabled     bool   `json:"enabled"`
+	Source      string `json:"source"`
+	Repository  string `json:"repository"`
+	Ref         string `json:"ref"`
+	Path        string `json:"path"`
+	InstalledAt string `json:"installedAt"`
 }
 
 type MCPServer struct {

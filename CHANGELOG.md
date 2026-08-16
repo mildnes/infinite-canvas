@@ -6,6 +6,7 @@
 + [新增] 管理后台新增画布 Agent 扩展配置：Skill 工作流列表、MCP 服务/API Key/工具定义，支持读取 MCP tools/list
 + [新增] MCP 支持 Streamable HTTP 与 stdio 长驻进程，并支持 JSON/SSE 工具结果
 + [新增] Agent 对话框支持 `/` 选择内置或后台 Skill，保留 `@` 画布素材引用
++ [新增] 管理后台支持从 GitHub 仓库或 `SKILL.md` 地址安装 Skill，仅保存文本提示词，不执行远程代码
 + [新增] Agent 输入支持 @ 选择画布图片/视频/音频引用（芯片展示，发送时带入真实节点）
 + [修复] gpt-image 等 base64 生图结果刷新丢失：生成完成写入本地/云端 storageKey，打开画板自动物化 data URL
 ## v0.5.4 - 2026-08-15

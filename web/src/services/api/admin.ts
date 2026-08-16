@@ -228,7 +228,18 @@ export type AdminPublicSettings = {
     };
 };
 
-export type AdminAgentSkill = { id: string; name: string; description: string; prompt: string; enabled: boolean };
+export type AdminAgentSkill = {
+    id: string;
+    name: string;
+    description: string;
+    prompt: string;
+    enabled: boolean;
+    source?: "admin" | "github";
+    repository?: string;
+    ref?: string;
+    path?: string;
+    installedAt?: string;
+};
 export type AdminMCPTool = { name: string; description: string; inputSchema: Record<string, unknown> };
 export type AdminPublicMCPServer = { id: string; name: string; description: string; tools: AdminMCPTool[] };
 export type AdminMCPServer = AdminPublicMCPServer & {
@@ -351,6 +362,10 @@ export async function saveAdminSettings(token: string, settings: AdminSettings) 
 
 export async function fetchMCPServerTools(token: string, payload: { server: Partial<AdminMCPServer> }) {
     return apiPost<AdminMCPTool[]>("/api/admin/settings/mcp-tools", payload, token);
+}
+
+export async function installRemoteAgentSkill(token: string, payload: { repository: string; ref?: string; path?: string; name?: string }) {
+    return apiPost<AdminAgentSkill>("/api/admin/settings/skills/install", payload, token);
 }
 
 export type AdminChannelActionRequest = {

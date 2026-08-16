@@ -27,3 +27,4 @@ description: 当前版本已实现但仍需人工验证的变更项
 - 用可生成视频的 MCP 工具走 Agent 生成视频并落回画布，确认工具参数传递、媒体 URL/文件结果能被模型识别，并通过 `create_media_node` 创建视频节点。
 - 后台 MCP 分别配置 `Streamable HTTP` 和 `stdio`；HTTP 服务验证初始化/会话头，stdio 服务验证进程复用、异常重启和工具调用。
 - Agent 输入 `/` 应能筛选并引用内置 Skill、后台 Skill；Skill 芯片只作用本轮，重试历史消息时仍能带回对应 Skill。
+- 管理后台使用“从 GitHub 安装”输入仓库地址或 `SKILL.md` 地址，确认名称、描述、正文和来源信息正确保存，刷新后仍可启停并被 Agent 使用。

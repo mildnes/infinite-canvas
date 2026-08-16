@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircleOutlined, DeleteOutlined, FormatPainterOutlined, LoadingOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
+import { CheckCircleOutlined, DeleteOutlined, FormatPainterOutlined, GithubOutlined, LoadingOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import { json } from "@codemirror/lang-json";
 import { App, Button, Card, Checkbox, Col, Drawer, Flex, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from "antd";
 import dynamic from "next/dynamic";
@@ -11,6 +11,7 @@ import {
     fetchAdminSettings,
     fetchChannelModels,
     fetchMCPServerTools,
+    installRemoteAgentSkill,
     measureAdminStorageProvider,
     saveAdminSettings,
     testChannelModel,
@@ -89,7 +90,7 @@ const emptyS3StorageProvider: AdminStorageProvider = {
     capacityExceeded: false,
 };
 const emptyWebDAVStorageProvider: AdminStorageProvider = { ...emptyS3StorageProvider, name: "", type: "webdav", region: "" };
-const emptyAgentSkill: AdminAgentSkill = { id: "", name: "", description: "", prompt: "", enabled: true };
+const emptyAgentSkill: AdminAgentSkill = { id: "", name: "", description: "", prompt: "", enabled: true, source: "admin" };
 const emptyMCPServer: AdminMCPServer = { id: "", name: "", endpoint: "", apiKey: "", transport: "streamable_http", command: "", args: [], env: {}, workingDirectory: "", description: "", tools: [], enabled: true, allowUsers: true };
 
 type SettingsTabKey = "public" | "private";
@@ -123,11 +124,15 @@ export default function AdminSettingsPage() {
     const [isLoading, setIsLoading] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [fetchingMCPToolsIndex, setFetchingMCPToolsIndex] = useState<number | null>(null);
+    const [isSkillInstallOpen, setIsSkillInstallOpen] = useState(false);
+    const [isInstallingSkill, setIsInstallingSkill] = useState(false);
+    const [skillInstallForm] = Form.useForm<{ repository: string; ref?: string; path?: string; name?: string }>();
     const [measuringProviderIndex, setMeasuringProviderIndex] = useState<number | null>(null);
     const [modelCosts, setModelCosts] = useState<AdminModelCost[]>([]);
     const [knownModels, setKnownModels] = useState<string[]>([]);
     const publicModels = Form.useWatch(["public", "modelChannel", "availableModels"], form) || [];
     const storageProviders = Form.useWatch(["private", "storage", "providers"], form) || [];
+    const agentSkills = Form.useWatch(["private", "agent", "skills"], form) || [];
     const agentMCPServers = Form.useWatch(["private", "agent", "mcpServers"], form) || [];
     const channelModels = useMemo(() => collectChannelModels(channels), [channels]);
     const channelTableData = useMemo(() => channels.map((channel, index) => ({ ...channel, _index: index, _rowKey: `${index}-${channel.name}-${channel.baseUrl}` })), [channels]);
@@ -435,6 +440,28 @@ export default function AdminSettingsPage() {
         }
     }
 
+    async function installSkillFromGitHub() {
+        if (!token) return;
+        const values = await skillInstallForm.validateFields();
+        setIsInstallingSkill(true);
+        try {
+            await installRemoteAgentSkill(token, values);
+            const next = normalizeSettings(await fetchAdminSettings(token));
+            form.setFieldsValue(withAgentVisualSettings(next));
+            setChannels(next.private.channels);
+            setModelCosts(next.public.modelChannel.modelCosts);
+            rememberKnownModels(next);
+            setJsonText({ public: JSON.stringify(next.public, null, 2), private: JSON.stringify(next.private, null, 2) });
+            skillInstallForm.resetFields();
+            setIsSkillInstallOpen(false);
+            message.success("GitHub Skill 已安装");
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "安装 GitHub Skill 失败");
+        } finally {
+            setIsInstallingSkill(false);
+        }
+    }
+
     async function measureStorageProviderAt(index: number) {
         if (!token) return;
         const provider = normalizeStorageProvider(form.getFieldValue(["private", "storage", "providers", index]));
@@ -710,10 +737,28 @@ export default function AdminSettingsPage() {
                                                         <Button icon={<PlusOutlined />} onClick={() => add(emptyAgentSkill)}>
                                                             新增 Skill
                                                         </Button>
+                                                        <Button icon={<GithubOutlined />} onClick={() => setIsSkillInstallOpen(true)}>
+                                                            从 GitHub 安装
+                                                        </Button>
                                                     </Flex>
                                                     {fields.map((field) => (
                                                         <Card key={field.key} size="small" title={`Skill ${field.name + 1}`} extra={<Button danger size="small" icon={<DeleteOutlined />} onClick={() => remove(field.name)} />}>
                                                             <Form.Item name={[field.name, "id"]} hidden>
+                                                                <Input />
+                                                            </Form.Item>
+                                                            <Form.Item name={[field.name, "source"]} hidden>
+                                                                <Input />
+                                                            </Form.Item>
+                                                            <Form.Item name={[field.name, "repository"]} hidden>
+                                                                <Input />
+                                                            </Form.Item>
+                                                            <Form.Item name={[field.name, "ref"]} hidden>
+                                                                <Input />
+                                                            </Form.Item>
+                                                            <Form.Item name={[field.name, "path"]} hidden>
+                                                                <Input />
+                                                            </Form.Item>
+                                                            <Form.Item name={[field.name, "installedAt"]} hidden>
                                                                 <Input />
                                                             </Form.Item>
                                                             <Row gutter={12}>
@@ -732,15 +777,18 @@ export default function AdminSettingsPage() {
                                                                         <Switch />
                                                                     </Form.Item>
                                                                 </Col>
-                                                                <Col xs={24} md={4}>
-                                                                    <Form.Item name={[field.name, "allowUsers"]} label="允许普通用户" valuePropName="checked">
-                                                                        <Switch />
-                                                                    </Form.Item>
-                                                                </Col>
                                                                 <Col span={24}>
                                                                     <Form.Item name={[field.name, "prompt"]} label="工作流提示词">
                                                                         <Input.TextArea rows={5} placeholder="写入 Agent 必须遵循的工作流步骤和约束" />
                                                                     </Form.Item>
+                                                                </Col>
+                                                                <Col span={24}>
+                                                                    <Typography.Text type="secondary">
+                                                                        来源：
+                                                                        {agentSkills[field.name]?.source === "github"
+                                                                            ? `${agentSkills[field.name]?.repository || "GitHub"}${agentSkills[field.name]?.path ? `/${agentSkills[field.name]?.path}` : ""}`
+                                                                            : "后台手动配置"}
+                                                                    </Typography.Text>
                                                                 </Col>
                                                             </Row>
                                                         </Card>
@@ -1097,6 +1145,43 @@ export default function AdminSettingsPage() {
                         </div>
                     )}
                 </Card>
+                <Modal
+                    title="从 GitHub 安装 Skill"
+                    open={isSkillInstallOpen}
+                    onCancel={() => {
+                        if (!isInstallingSkill) {
+                            skillInstallForm.resetFields();
+                            setIsSkillInstallOpen(false);
+                        }
+                    }}
+                    onOk={() => void installSkillFromGitHub()}
+                    okText="安装"
+                    cancelText="取消"
+                    confirmLoading={isInstallingSkill}
+                    destroyOnHidden
+                >
+                    <Form form={skillInstallForm} layout="vertical" requiredMark={false}>
+                        <Form.Item name="repository" label="GitHub 仓库或 SKILL.md 地址" rules={[{ required: true, message: "请输入 GitHub 地址" }]}>
+                            <Input placeholder="https://github.com/owner/repo 或 .../blob/main/SKILL.md" />
+                        </Form.Item>
+                        <Row gutter={12}>
+                            <Col span={12}>
+                                <Form.Item name="ref" label="分支/版本">
+                                    <Input placeholder="默认 main" />
+                                </Form.Item>
+                            </Col>
+                            <Col span={12}>
+                                <Form.Item name="path" label="Skill 文件路径">
+                                    <Input placeholder="默认 SKILL.md" />
+                                </Form.Item>
+                            </Col>
+                        </Row>
+                        <Form.Item name="name" label="显示名称" extra="留空时读取 SKILL.md front matter 的 name">
+                            <Input placeholder="可选" />
+                        </Form.Item>
+                        <Typography.Text type="secondary">只读取并保存 SKILL.md 文本，不执行 GitHub 仓库中的代码。</Typography.Text>
+                    </Form>
+                </Modal>
                 <Drawer
                     title={editingChannelIndex === null ? "新增渠道" : "编辑渠道"}
                     open={isChannelDrawerOpen}
@@ -1416,6 +1501,11 @@ function normalizeAgentSkill(item: Partial<AdminAgentSkill> = {}): AdminAgentSki
         description: item.description || "",
         prompt: item.prompt || "",
         enabled: item.enabled !== false,
+        source: item.source === "github" ? "github" : "admin",
+        repository: item.repository || "",
+        ref: item.ref || "",
+        path: item.path || "",
+        installedAt: item.installedAt || "",
     };
 }
 

@@ -94,6 +94,8 @@ description: settings 表中 public 和 private 配置结构说明
 | `mcpServers[].allowUsers` | boolean | 是否允许普通登录用户调用该全局 MCP；管理员始终可调用 |
 | `mcpServers[].tools[].name/description/inputSchema` | string/string/object | MCP 工具名称、说明和 OpenAI function calling 参数 Schema |
 
+GitHub Skill 安装后会写入 `private.agent.skills`，保存 `source=github`、`repository`、`ref`、`path` 和 `installedAt`；Skill 正文保存于 `prompt`，安装过程不会执行远程代码。
+
 ## private.value
 
 ```json

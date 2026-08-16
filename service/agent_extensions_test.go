@@ -102,3 +102,28 @@ func TestStdioMCPProcessCanReuseClient(t *testing.T) {
 		t.Fatalf("stdio responses missing ids: %#v %#v", first, second)
 	}
 }
+
+func TestNormalizeGitHubSkillSource(t *testing.T) {
+	rawURL, repositoryURL, ref, skillPath, err := normalizeGitHubSkillSource(RemoteAgentSkillRequest{
+		Repository: "https://github.com/acme/video-skills/blob/main/skills/video/SKILL.md",
+	})
+	if err != nil {
+		t.Fatalf("normalizeGitHubSkillSource() error = %v", err)
+	}
+	if rawURL != "https://raw.githubusercontent.com/acme/video-skills/main/skills/video/SKILL.md" {
+		t.Fatalf("raw URL = %q", rawURL)
+	}
+	if repositoryURL != "https://github.com/acme/video-skills" || ref != "main" || skillPath != "skills/video/SKILL.md" {
+		t.Fatalf("source = %q %q %q", repositoryURL, ref, skillPath)
+	}
+}
+
+func TestSplitSkillFrontMatter(t *testing.T) {
+	frontMatter, prompt := splitSkillFrontMatter("---\nname: 视频工作流\ndescription: 自动生成视频\n---\n\n请先拆分镜头。")
+	if frontMatter["name"] != "视频工作流" || frontMatter["description"] != "自动生成视频" {
+		t.Fatalf("front matter = %#v", frontMatter)
+	}
+	if prompt != "请先拆分镜头。" {
+		t.Fatalf("prompt = %q", prompt)
+	}
+}

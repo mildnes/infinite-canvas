@@ -183,6 +183,7 @@ Base URL 如果已经以 `/v1`、`/api/v3` 或 `/api/plan/v3` 结尾，系统不
 - MCP 工具以 `mcp__服务ID__工具名` 暴露给 Agent，调用由后端按 JSON-RPC `tools/call` 代理，API Key 不下发前端；返回稳定媒体 URL 后，Agent 可用 `create_media_node` 放回画布
 - MCP 支持远程 `Streamable HTTP` 和后端长驻 `stdio` 进程；后台可以分别配置 Endpoint 或 Command/Args/Env/工作目录
 - Agent 对话框支持输入 `/` 选择内置或后台 Skill；Skill 以本轮引用方式追加，`@` 继续用于引用画布素材
+- 管理员可以从 GitHub 仓库或 `SKILL.md` 地址安装 Skill；系统只读取提示词文本，不执行远程仓库代码
 
 ## 提示词库
 
