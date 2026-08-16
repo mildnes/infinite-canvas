@@ -84,14 +84,19 @@ type AgentSkill struct {
 }
 
 type MCPServer struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Endpoint    string    `json:"endpoint"`
-	APIKey      string    `json:"apiKey"`
-	Description string    `json:"description"`
-	Tools       []MCPTool `json:"tools"`
-	Enabled     bool      `json:"enabled"`
-	AllowUsers  bool      `json:"allowUsers"`
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Transport   string            `json:"transport"`
+	Endpoint    string            `json:"endpoint"`
+	APIKey      string            `json:"apiKey"`
+	Command     string            `json:"command"`
+	Args        []string          `json:"args"`
+	Env         map[string]string `json:"env"`
+	WorkingDir  string            `json:"workingDirectory"`
+	Description string            `json:"description"`
+	Tools       []MCPTool         `json:"tools"`
+	Enabled     bool              `json:"enabled"`
+	AllowUsers  bool              `json:"allowUsers"`
 }
 
 type MCPTool struct {

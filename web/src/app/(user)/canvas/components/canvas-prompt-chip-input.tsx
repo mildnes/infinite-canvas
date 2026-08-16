@@ -4,14 +4,17 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { Image } from "antd";
-import { FileText, Image as ImageIcon, Music2, Video } from "lucide-react";
+import { FileText, Image as ImageIcon, Music2, Sparkles, Video } from "lucide-react";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
+import type { CanvasAgentSkillReference } from "../types";
 import type { CanvasResourceReference } from "../utils/canvas-resource-references";
 
 type CanvasPromptChipInputProps = {
     value: string;
     references?: CanvasResourceReference[];
+    skills?: CanvasAgentSkillReference[];
+    onSelectSkill?: (skill: CanvasAgentSkillReference) => void;
     onChange: (value: string) => void;
     onSubmit?: () => void;
     onPasteImage?: (file: File) => void;
@@ -25,16 +28,15 @@ type MentionState = {
     rect: DOMRect | null;
 };
 
-type PromptToken =
-    | { type: "text"; value: string }
-    | { type: "reference"; label: string };
+type PromptToken = { type: "text"; value: string } | { type: "reference"; label: string };
 
-export function CanvasPromptChipInput({ value, references = [], onChange, onSubmit, onPasteImage, className, style, placeholder }: CanvasPromptChipInputProps) {
+export function CanvasPromptChipInput({ value, references = [], skills = [], onSelectSkill, onChange, onSubmit, onPasteImage, className, style, placeholder }: CanvasPromptChipInputProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const editorRef = useRef<HTMLDivElement>(null);
     const composingRef = useRef(false);
     const lastEmittedRef = useRef(value);
     const [mention, setMention] = useState<MentionState | null>(null);
+    const [skillMention, setSkillMention] = useState<MentionState | null>(null);
     const [activeIndex, setActiveIndex] = useState(0);
     const [imagePreview, setImagePreview] = useState<string | null>(null);
     const activeReferences = useMemo(() => references.filter((reference) => reference.active), [references]);
@@ -47,6 +49,12 @@ export function CanvasPromptChipInput({ value, references = [], onChange, onSubm
         if (!query) return activeReferences;
         return activeReferences.filter((reference) => `${reference.label} ${reference.title} ${reference.kind} ${reference.text || ""}`.toLowerCase().includes(query));
     }, [activeReferences, mention]);
+    const skillCandidates = useMemo(() => {
+        if (!skillMention) return [];
+        const query = skillMention.query.trim().toLowerCase();
+        if (!query) return skills;
+        return skills.filter((skill) => `${skill.name} ${skill.description || ""}`.toLowerCase().includes(query));
+    }, [skillMention, skills]);
 
     useEffect(() => {
         const editor = editorRef.current;
@@ -75,6 +83,11 @@ export function CanvasPromptChipInput({ value, references = [], onChange, onSubm
         setActiveIndex(0);
     };
 
+    const closeSkillMention = () => {
+        setSkillMention(null);
+        setActiveIndex(0);
+    };
+
     const syncMention = () => {
         const text = textBeforeCaret();
         const match = /@([^\s@]*)$/.exec(text);
@@ -89,11 +102,23 @@ export function CanvasPromptChipInput({ value, references = [], onChange, onSubm
         setActiveIndex(0);
     };
 
+    const syncSkillMention = () => {
+        const text = textBeforeCaret();
+        const match = /\/([^\s/]*)$/.exec(text);
+        if (!match || !skills.length) {
+            closeSkillMention();
+            return;
+        }
+        setSkillMention({ query: match[1] || "", rect: getCaretRect() });
+        setActiveIndex(0);
+    };
+
     const syncFromEditor = () => {
         const editor = editorRef.current;
         if (!editor) return;
         emitChange(serializePromptEditor(editor));
         syncMention();
+        syncSkillMention();
     };
 
     const insertReference = (reference: CanvasResourceReference) => {
@@ -119,6 +144,13 @@ export function CanvasPromptChipInput({ value, references = [], onChange, onSubm
         }
         closeMention();
         emitChange(serializePromptEditor(editor));
+    };
+
+    const insertSkill = (skill: CanvasAgentSkillReference) => {
+        removeActiveSkillMention();
+        closeSkillMention();
+        emitChange(serializePromptEditor(editorRef.current!));
+        onSelectSkill?.(skill);
     };
 
     const showPlaceholder = !value.trim();
@@ -184,6 +216,29 @@ export function CanvasPromptChipInput({ value, references = [], onChange, onSubm
                     const isComposing = composingRef.current || nativeEvent.isComposing || nativeEvent.keyCode === 229;
                     if (isComposing) return;
 
+                    if (skillMention && skillCandidates.length) {
+                        if (event.key === "ArrowDown") {
+                            event.preventDefault();
+                            setActiveIndex((index) => (index + 1) % skillCandidates.length);
+                            return;
+                        }
+                        if (event.key === "ArrowUp") {
+                            event.preventDefault();
+                            setActiveIndex((index) => (index - 1 + skillCandidates.length) % skillCandidates.length);
+                            return;
+                        }
+                        if (event.key === "Enter") {
+                            event.preventDefault();
+                            insertSkill(skillCandidates[Math.min(activeIndex, skillCandidates.length - 1)]);
+                            return;
+                        }
+                        if (event.key === "Escape") {
+                            event.preventDefault();
+                            closeSkillMention();
+                            return;
+                        }
+                    }
+
                     if (mention && candidates.length) {
                         if (event.key === "ArrowDown") {
                             event.preventDefault();
@@ -222,25 +277,27 @@ export function CanvasPromptChipInput({ value, references = [], onChange, onSubm
                         return;
                     }
 
-                    requestAnimationFrame(syncMention);
+                    requestAnimationFrame(() => {
+                        syncMention();
+                        syncSkillMention();
+                    });
                 }}
                 onPointerUp={() => {
-                    requestAnimationFrame(syncMention);
+                    requestAnimationFrame(() => {
+                        syncMention();
+                        syncSkillMention();
+                    });
                 }}
                 onBlur={() => {
-                    window.setTimeout(closeMention, 120);
+                    window.setTimeout(() => {
+                        closeMention();
+                        closeSkillMention();
+                    }, 120);
                 }}
             />
 
-            {mention && candidates.length ? (
-                <MentionMenu
-                    rect={mention.rect}
-                    references={candidates}
-                    activeIndex={Math.min(activeIndex, candidates.length - 1)}
-                    theme={theme}
-                    onSelect={insertReference}
-                />
-            ) : null}
+            {mention && candidates.length ? <MentionMenu rect={mention.rect} references={candidates} activeIndex={Math.min(activeIndex, candidates.length - 1)} theme={theme} onSelect={insertReference} /> : null}
+            {skillMention && skillCandidates.length ? <SkillMenu rect={skillMention.rect} skills={skillCandidates} activeIndex={Math.min(activeIndex, skillCandidates.length - 1)} theme={theme} onSelect={insertSkill} /> : null}
 
             {imagePreview ? (
                 <Image
@@ -363,11 +420,7 @@ function ReferencePreview({ reference }: { reference: CanvasResourceReference })
     );
 }
 
-function createReferenceChip(
-    reference: CanvasResourceReference,
-    theme: (typeof canvasThemes)[keyof typeof canvasThemes],
-    onImagePreview: (url: string) => void,
-) {
+function createReferenceChip(reference: CanvasResourceReference, theme: (typeof canvasThemes)[keyof typeof canvasThemes], onImagePreview: (url: string) => void) {
     const wrapper = document.createElement("span");
     wrapper.contentEditable = "false";
     wrapper.dataset.refLabel = reference.label;
@@ -437,6 +490,79 @@ function removeActiveMention() {
     if (!match) return;
     range.setStart(range.startContainer, Math.max(0, range.startOffset - (match[1] || "").length - 1));
     range.deleteContents();
+}
+
+function removeActiveSkillMention() {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount) return;
+    const range = selection.getRangeAt(0);
+    const text = textBeforeCaret();
+    const match = /\/([^\s/]*)$/.exec(text);
+    if (!match) return;
+    range.setStart(range.startContainer, Math.max(0, range.startOffset - (match[1] || "").length - 1));
+    range.deleteContents();
+}
+
+function SkillMenu({
+    rect,
+    skills,
+    activeIndex,
+    theme,
+    onSelect,
+}: {
+    rect: DOMRect | null;
+    skills: CanvasAgentSkillReference[];
+    activeIndex: number;
+    theme: (typeof canvasThemes)[keyof typeof canvasThemes];
+    onSelect: (skill: CanvasAgentSkillReference) => void;
+}) {
+    const activeItemRef = useRef<HTMLButtonElement | null>(null);
+    useEffect(() => {
+        activeItemRef.current?.scrollIntoView({ block: "nearest" });
+    }, [activeIndex, skills]);
+    const menuWidth = 280;
+    const menuHeight = Math.min(260, skills.length * 48 + 8);
+    const anchor = rect || new DOMRect(16, 16, 0, 0);
+    const left = clamp(anchor.left, 8, window.innerWidth - menuWidth - 8);
+    const top = clamp(anchor.bottom + 6, 8, window.innerHeight - menuHeight - 8);
+    return createPortal(
+        <div
+            data-canvas-skill-menu="true"
+            className="fixed z-[120] max-h-64 w-[280px] overflow-y-auto rounded-xl border p-1 shadow-2xl backdrop-blur-md"
+            style={{ left, top, background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+        >
+            {skills.map((skill, index) => (
+                <button
+                    key={skill.id}
+                    ref={index === activeIndex ? activeItemRef : undefined}
+                    type="button"
+                    className="flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition"
+                    style={{ background: index === activeIndex ? theme.toolbar.activeBg : "transparent", color: index === activeIndex ? theme.toolbar.activeText : theme.node.text }}
+                    onPointerDown={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onSelect(skill);
+                    }}
+                    onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                    }}
+                >
+                    <span className="grid size-9 shrink-0 place-items-center rounded-md bg-black/10">
+                        <Sparkles className="size-4" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                        <span className="block font-medium">{skill.name}</span>
+                        <span className="block truncate opacity-65">{skill.description || (skill.source === "builtin" ? "内置画布 Skill" : "后台配置 Skill")}</span>
+                    </span>
+                </button>
+            ))}
+        </div>,
+        document.body,
+    );
 }
 
 function deleteAdjacentReference(key: string) {

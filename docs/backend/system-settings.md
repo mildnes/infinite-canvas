@@ -89,7 +89,8 @@ description: settings 表中 public 和 private 配置结构说明
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `skills[].id/name/description/prompt/enabled` | string/string/string/string/boolean | Skill 标识、名称、说明、追加到 Agent 的工作流提示词和启用状态 |
-| `mcpServers[].id/name/endpoint/apiKey/description/tools/enabled` | mixed | MCP 服务私有配置；`apiKey` 仅后端使用，`tools` 是允许暴露给 Agent 的工具白名单 |
+| `mcpServers[].id/name/transport/endpoint/apiKey/description/tools/enabled` | mixed | MCP 服务私有配置；`transport` 支持 `streamable_http`、`stdio`；`apiKey` 仅后端使用，`tools` 是允许暴露给 Agent 的工具白名单 |
+| `mcpServers[].command/args/env/workingDirectory` | string/string[]/object/string | `stdio` MCP 的进程命令、参数、环境变量和工作目录；不会通过公开接口返回 |
 | `mcpServers[].allowUsers` | boolean | 是否允许普通登录用户调用该全局 MCP；管理员始终可调用 |
 | `mcpServers[].tools[].name/description/inputSchema` | string/string/object | MCP 工具名称、说明和 OpenAI function calling 参数 Schema |
 

@@ -1,6 +1,6 @@
 import { apiGet, apiPost } from "./request";
 
-export type AgentSkill = { id: string; name: string; description: string; prompt: string; enabled: boolean };
+export type AgentSkill = { id: string; name: string; description: string; prompt: string; enabled: boolean; source?: "admin" };
 export type AgentMCPTool = { name: string; description: string; inputSchema?: Record<string, unknown> };
 export type AgentMCPServer = { id: string; name: string; description: string; tools: AgentMCPTool[] };
 export type AgentSettings = { skills: AgentSkill[]; mcpServers: AgentMCPServer[] };

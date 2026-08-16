@@ -1,17 +1,7 @@
 "use client";
 
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
-import {
-    History,
-    Bot,
-    PanelRightClose,
-    Plus,
-    RotateCcw,
-    Sparkles,
-    Trash2,
-    Video,
-    X,
-} from "lucide-react";
+import { History, Bot, PanelRightClose, Plus, RotateCcw, Sparkles, Trash2, Video, X } from "lucide-react";
 import { Button, Modal, Tooltip } from "antd";
 import { motion } from "motion/react";
 import { nanoid } from "nanoid";
@@ -21,23 +11,17 @@ import remarkGfm from "remark-gfm";
 import { ImageGenerationPending } from "@/components/image-generation-pending";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { cn } from "@/lib/utils";
+import { fetchAgentSettings } from "@/services/api/agent";
 import { imageToDataUrl } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
+import { BUILTIN_CANVAS_AGENT_SKILLS } from "../agent/canvas-agent-skills";
 import { createCanvasAgentState, runCanvasAgent } from "../agent/canvas-agent-runtime";
 import { useUserStore } from "@/stores/use-user-store";
 import type { CanvasAgentContext } from "../agent/canvas-agent-context";
 import type { CanvasAgentAction, CanvasAgentToolResult } from "../agent/canvas-agent-tools";
-import {
-    CanvasNodeType,
-    type CanvasAgentConfig,
-    type CanvasAgentState,
-    type CanvasAssistantMessage,
-    type CanvasAssistantReference,
-    type CanvasAssistantSession,
-    type CanvasNodeData,
-} from "../types";
+import { CanvasNodeType, type CanvasAgentConfig, type CanvasAgentSkillReference, type CanvasAgentState, type CanvasAssistantMessage, type CanvasAssistantReference, type CanvasAssistantSession, type CanvasNodeData } from "../types";
 import { isCanvasImageNodeType } from "../utils/canvas-panorama";
 import { buildAgentResourceReferences } from "../utils/canvas-resource-references";
 import { AssistantReferenceChip, CanvasAssistantComposer } from "./canvas-assistant-composer";
@@ -104,6 +88,8 @@ export function CanvasAssistantPanel({
     const messageListRef = useRef<HTMLDivElement>(null);
     const [view, setView] = useState<"chat" | "history">("chat");
     const [prompt, setPrompt] = useState("");
+    const [selectedSkills, setSelectedSkills] = useState<CanvasAgentSkillReference[]>([]);
+    const [adminSkills, setAdminSkills] = useState<CanvasAgentSkillReference[]>([]);
     const [isRunning, setIsRunning] = useState(false);
     const [checkedChatIds, setCheckedChatIds] = useState<string[]>([]);
     const [deleteChatIds, setDeleteChatIds] = useState<string[]>([]);
@@ -122,11 +108,14 @@ export function CanvasAssistantPanel({
         activeSessionIdRef.current = resolvedActiveSessionId;
     }, [resolvedActiveSessionId, sessions]);
 
-    useEffect(() => () => {
-        abortRef.current?.abort();
-        pendingDeleteRef.current?.resolve(false);
-        pendingDeleteRef.current = null;
-    }, []);
+    useEffect(
+        () => () => {
+            abortRef.current?.abort();
+            pendingDeleteRef.current?.resolve(false);
+            pendingDeleteRef.current = null;
+        },
+        [],
+    );
 
     const activeSession = safeSessions.find((session) => session.id === resolvedActiveSessionId) || safeSessions[0] || null;
     const historySessions = safeSessions.filter((session) => session.messages.length > 0);
@@ -142,9 +131,28 @@ export function CanvasAssistantPanel({
         });
         return () => window.cancelAnimationFrame(frame);
     }, [messages, view]);
+    useEffect(() => {
+        let cancelled = false;
+        if (!authToken) {
+            setAdminSkills([]);
+            return;
+        }
+        void fetchAgentSettings(authToken)
+            .then((settings) => {
+                if (cancelled) return;
+                setAdminSkills(settings.skills.filter((skill) => skill.enabled).map((skill) => ({ id: skill.id, name: skill.name, description: skill.description, source: "admin" as const })));
+            })
+            .catch(() => {
+                if (!cancelled) setAdminSkills([]);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [authToken]);
     const allSelectedReferences = useMemo(() => buildAssistantReferences(nodes, selectedNodeIds), [nodes, selectedNodeIds]);
     const selectedReferences = useMemo(() => allSelectedReferences.filter((item) => !removedReferenceIds.has(item.id)), [allSelectedReferences, removedReferenceIds]);
     const mentionReferences = useMemo(() => buildAgentResourceReferences(nodes), [nodes]);
+    const skillOptions = useMemo<CanvasAgentSkillReference[]>(() => [...BUILTIN_CANVAS_AGENT_SKILLS, ...adminSkills].map(({ prompt: _prompt, ...skill }) => skill), [adminSkills]);
     const iconButtonStyle = { color: theme.node.muted };
     const settleDeleteConfirmation = (confirmed: boolean) => {
         const pending = pendingDeleteRef.current;
@@ -214,7 +222,7 @@ export function CanvasAssistantPanel({
         cleanupImages({ sessions: [session] });
     };
 
-    const sendMessage = async (text: string, savedReferences?: CanvasAssistantReference[]) => {
+    const sendMessage = async (text: string, savedReferences?: CanvasAssistantReference[], savedSkills?: CanvasAgentSkillReference[]) => {
         const session = activeSession || createSession();
         if (!activeSession) {
             commitSessions([session], session.id);
@@ -222,17 +230,15 @@ export function CanvasAssistantPanel({
 
         // @ 提及优先：输入里有 @/芯片引用时，不再自动附带画布当前选中节点（避免总带上“第一张图”）。
         const mentionedReferences = savedReferences ? [] : collectMentionedAssistantReferences(text, nodes, mentionReferences);
-        const references = savedReferences
-            ? savedReferences
-            : mentionedReferences.length
-                ? mentionedReferences
-                : selectedReferences;
+        const references = savedReferences ? savedReferences : mentionedReferences.length ? mentionedReferences : selectedReferences;
+        const skills = savedSkills || selectedSkills;
         const messageReferenceNodeIds = references.map((reference) => reference.id);
-        const userMessage: CanvasAssistantMessage = { id: nanoid(), role: "user", text, references, status: "success" };
+        const userMessage: CanvasAssistantMessage = { id: nanoid(), role: "user", text, references, skills, status: "success" };
         const assistantId = nanoid();
         appendMessage(session.id, userMessage);
         appendMessage(session.id, { id: assistantId, role: "assistant", text: "", status: "thinking", activity: "正在理解画布和创作目标" });
         setPrompt("");
+        setSelectedSkills([]);
 
         const requestConfig = {
             ...effectiveConfig,
@@ -269,6 +275,7 @@ export function CanvasAssistantPanel({
                 protocolMessages: session.protocolMessages,
                 userText: text,
                 references: modelReferences,
+                skillReferences: skills,
                 getContext: getAgentContext,
                 executeAction: async (action) => {
                     if (action.name !== "delete_node") return onExecuteAction(action, messageReferenceNodeIds);
@@ -296,9 +303,7 @@ export function CanvasAssistantPanel({
                 ...current,
                 agentState: result.state,
                 protocolMessages: result.protocolMessages,
-                messages: current.messages.map((message) =>
-                    message.id === assistantId ? { ...message, text: result.reply, status: "success", activity: undefined } : message,
-                ),
+                messages: current.messages.map((message) => (message.id === assistantId ? { ...message, text: result.reply, status: "success", activity: undefined } : message)),
                 updatedAt: new Date().toISOString(),
             }));
         } catch (error) {
@@ -330,7 +335,7 @@ export function CanvasAssistantPanel({
     const retryMessage = (message: CanvasAssistantMessage) => {
         const index = messages.findIndex((item) => item.id === message.id);
         const user = messages.slice(0, index).findLast((item) => item.role === "user");
-        if (user) void sendMessage(user.text, user.references);
+        if (user) void sendMessage(user.text, user.references, user.skills);
     };
 
     const startResize = () => {
@@ -383,7 +388,15 @@ export function CanvasAssistantPanel({
                                     <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" style={iconButtonStyle} icon={<Trash2 className="size-4" />} disabled={!checkedChatIds.length} onClick={() => setDeleteChatIds(checkedChatIds)} />
                                 </Tooltip>
                                 <Tooltip title="删除全部">
-                                    <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" style={iconButtonStyle} icon={<X className="size-4" />} disabled={!historySessions.length} onClick={() => setDeleteChatIds(historySessions.map((session) => session.id))} />
+                                    <Button
+                                        type="text"
+                                        shape="circle"
+                                        className="!h-8 !w-8 !min-w-8"
+                                        style={iconButtonStyle}
+                                        icon={<X className="size-4" />}
+                                        disabled={!historySessions.length}
+                                        onClick={() => setDeleteChatIds(historySessions.map((session) => session.id))}
+                                    />
                                 </Tooltip>
                             </>
                         ) : null}
@@ -445,8 +458,12 @@ export function CanvasAssistantPanel({
                                     <div className="mt-0.5 text-xs opacity-55">相关连线和任务记录将按现有逻辑清理</div>
                                 </div>
                                 <div className="grid grid-cols-2 border-t" style={{ borderColor: theme.node.stroke }}>
-                                    <button type="button" className="h-9 cursor-pointer border-0 bg-transparent text-sm" style={{ color: theme.node.text }} onClick={() => settleDeleteConfirmation(false)}>取消</button>
-                                    <button type="button" className="h-9 cursor-pointer border-0 border-l bg-transparent text-sm font-medium" style={{ borderColor: theme.node.stroke, color: "#ef4444" }} onClick={() => settleDeleteConfirmation(true)}>确认删除</button>
+                                    <button type="button" className="h-9 cursor-pointer border-0 bg-transparent text-sm" style={{ color: theme.node.text }} onClick={() => settleDeleteConfirmation(false)}>
+                                        取消
+                                    </button>
+                                    <button type="button" className="h-9 cursor-pointer border-0 border-l bg-transparent text-sm font-medium" style={{ borderColor: theme.node.stroke, color: "#ef4444" }} onClick={() => settleDeleteConfirmation(true)}>
+                                        确认删除
+                                    </button>
                                 </div>
                             </div>
                         ) : null}
@@ -455,6 +472,10 @@ export function CanvasAssistantPanel({
                             isRunning={isRunning}
                             references={composerAttachmentReferences(prompt, selectedReferences, mentionReferences, nodes)}
                             mentionReferences={mentionReferences}
+                            skills={skillOptions}
+                            selectedSkills={selectedSkills}
+                            onSelectSkill={(skill) => setSelectedSkills((current) => (current.some((item) => item.id === skill.id) ? current : [...current, skill]))}
+                            onRemoveSkill={(id) => setSelectedSkills((current) => current.filter((skill) => skill.id !== id))}
                             agentConfig={agentConfig}
                             onAgentConfigChange={onAgentConfigChange}
                             onPromptChange={setPrompt}
@@ -556,8 +577,8 @@ function AssistantMessages({ messages, onRetry }: { messages: CanvasAssistantMes
                                     message.role === "user"
                                         ? { background: theme.toolbar.activeBg, color: theme.toolbar.activeText }
                                         : message.status === "error"
-                                            ? { background: theme.node.fill, color: theme.node.text }
-                                            : { background: theme.node.fill, color: theme.node.text }
+                                          ? { background: theme.node.fill, color: theme.node.text }
+                                          : { background: theme.node.fill, color: theme.node.text }
                                 }
                             >
                                 {message.role === "assistant" ? (
@@ -617,7 +638,9 @@ function AssistantHistory({
 function MessageReferences({ message }: { message: CanvasAssistantMessage }) {
     return (
         <div className={cn("flex max-w-[88%] flex-wrap gap-2", message.role === "user" ? "justify-end" : "justify-start")}>
-            {message.references?.map((item) => <AssistantReferenceChip key={item.id} item={item} />)}
+            {message.references?.map((item) => (
+                <AssistantReferenceChip key={item.id} item={item} />
+            ))}
         </div>
     );
 }
@@ -649,13 +672,7 @@ function nodeToReference(node: CanvasNodeData): CanvasAssistantReference | null 
     return null;
 }
 
-
-function composerAttachmentReferences(
-    prompt: string,
-    selectedReferences: CanvasAssistantReference[],
-    mentionReferences: ReturnType<typeof buildAgentResourceReferences>,
-    nodes: CanvasNodeData[],
-) {
+function composerAttachmentReferences(prompt: string, selectedReferences: CanvasAssistantReference[], mentionReferences: ReturnType<typeof buildAgentResourceReferences>, nodes: CanvasNodeData[]) {
     const mentioned = collectMentionedAssistantReferences(prompt, nodes, mentionReferences);
     // 输入已有 @ 引用时，顶部附件区不再显示画布选中节点，避免“默认第一张图”。
     return mentioned.length ? [] : selectedReferences;

@@ -25,3 +25,5 @@ description: 当前版本已实现但仍需人工验证的变更项
 - 后台私有设置新增画布 Agent 扩展：可新增/启停/编辑 Skill，新增/启停 MCP 服务，读取工具列表；保存后 API Key 脱敏并可沿用。
 - 画布 Agent 会话应自动加载启用 Skill 与 MCP 工具，模型可调用 `mcp__<服务>__<工具>` 工具，后端转发 JSON-RPC `tools/call` 并把真实结果回传模型继续执行。
 - 用可生成视频的 MCP 工具走 Agent 生成视频并落回画布，确认工具参数传递、媒体 URL/文件结果能被模型识别，并通过 `create_media_node` 创建视频节点。
+- 后台 MCP 分别配置 `Streamable HTTP` 和 `stdio`；HTTP 服务验证初始化/会话头，stdio 服务验证进程复用、异常重启和工具调用。
+- Agent 输入 `/` 应能筛选并引用内置 Skill、后台 Skill；Skill 芯片只作用本轮，重试历史消息时仍能带回对应 Skill。

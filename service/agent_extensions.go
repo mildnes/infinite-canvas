@@ -1,15 +1,11 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
-	"time"
 
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/repository"
@@ -68,33 +64,9 @@ func CallMCPTool(ctx context.Context, request MCPToolCallRequest) (map[string]an
 	if !allowed {
 		return nil, errors.New("MCP 工具未在后台配置的工具清单中")
 	}
-	body, _ := json.Marshal(map[string]any{
-		"jsonrpc": "2.0",
-		"id":      time.Now().UnixNano(),
-		"method":  "tools/call",
-		"params":  map[string]any{"name": request.ToolName, "arguments": request.Arguments},
-	})
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, server.Endpoint, bytes.NewReader(body))
+	result, err := callMCPServer(ctx, *server, "tools/call", map[string]any{"name": request.ToolName, "arguments": request.Arguments})
 	if err != nil {
 		return nil, err
-	}
-	httpRequest.Header.Set("Content-Type", "application/json")
-	if strings.TrimSpace(server.APIKey) != "" {
-		httpRequest.Header.Set("Authorization", "Bearer "+server.APIKey)
-	}
-	httpRequest.Header.Set("Accept", "application/json, text/event-stream")
-	response, err := (&http.Client{Timeout: 120 * time.Second}).Do(httpRequest)
-	if err != nil {
-		return nil, err
-	}
-	defer response.Body.Close()
-	responseBody, _ := io.ReadAll(io.LimitReader(response.Body, 8<<20))
-	if response.StatusCode >= 400 {
-		return nil, readChannelError(string(responseBody), "MCP 工具调用失败")
-	}
-	var result map[string]any
-	if err := decodeMCPJSON(responseBody, &result); err != nil {
-		return nil, errors.New("MCP 返回不是有效 JSON")
 	}
 	if rpcError, ok := result["error"].(map[string]any); ok {
 		if message, ok := rpcError["message"].(string); ok && message != "" {
@@ -124,28 +96,9 @@ func ListMCPTools(ctx context.Context, request MCPDiscoveryRequest) ([]model.MCP
 			}
 		}
 	}
-	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": time.Now().UnixNano(), "method": "tools/list", "params": map[string]any{}})
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, server.Endpoint, bytes.NewReader(body))
+	payload, err := callMCPServer(ctx, server, "tools/list", map[string]any{})
 	if err != nil {
 		return nil, err
-	}
-	httpRequest.Header.Set("Content-Type", "application/json")
-	httpRequest.Header.Set("Accept", "application/json, text/event-stream")
-	if strings.TrimSpace(server.APIKey) != "" {
-		httpRequest.Header.Set("Authorization", "Bearer "+server.APIKey)
-	}
-	response, err := (&http.Client{Timeout: 30 * time.Second}).Do(httpRequest)
-	if err != nil {
-		return nil, err
-	}
-	defer response.Body.Close()
-	responseBody, _ := io.ReadAll(io.LimitReader(response.Body, 8<<20))
-	if response.StatusCode >= 400 {
-		return nil, readChannelError(string(responseBody), "读取 MCP 工具失败")
-	}
-	var payload map[string]any
-	if err := decodeMCPJSON(responseBody, &payload); err != nil {
-		return nil, errors.New("MCP 返回不是有效 JSON")
 	}
 	if rpcError, ok := payload["error"].(map[string]any); ok {
 		if message, ok := rpcError["message"].(string); ok && message != "" {
@@ -183,12 +136,21 @@ func publicAgentSettingForUser(setting model.PrivateAgentSetting, admin bool) mo
 		}
 	}
 	for _, server := range setting.MCPServers {
-		if !server.Enabled || strings.TrimSpace(server.Endpoint) == "" || (!admin && !server.AllowUsers) {
+		if !server.Enabled || !mcpServerConfigured(server) || (!admin && !server.AllowUsers) {
 			continue
 		}
 		result.MCPServers = append(result.MCPServers, model.PublicMCPServer{ID: server.ID, Name: server.Name, Description: server.Description, Tools: server.Tools})
 	}
 	return result
+}
+
+func mcpServerConfigured(server model.MCPServer) bool {
+	switch strings.ToLower(strings.TrimSpace(server.Transport)) {
+	case mcpTransportStdio:
+		return strings.TrimSpace(server.Command) != ""
+	default:
+		return strings.TrimSpace(server.Endpoint) != ""
+	}
 }
 
 func decodeMCPJSON(body []byte, target *map[string]any) error {

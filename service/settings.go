@@ -227,8 +227,17 @@ func normalizePrivateSetting(setting model.PrivateSetting) model.PrivateSetting 
 		}
 	}
 	for i := range setting.Agent.MCPServers {
+		if setting.Agent.MCPServers[i].Transport == "" {
+			setting.Agent.MCPServers[i].Transport = "streamable_http"
+		}
 		if setting.Agent.MCPServers[i].ID == "" {
-			setting.Agent.MCPServers[i].ID = stableAgentID(setting.Agent.MCPServers[i].Name+"|"+setting.Agent.MCPServers[i].Endpoint, i)
+			setting.Agent.MCPServers[i].ID = stableAgentID(setting.Agent.MCPServers[i].Name+"|"+setting.Agent.MCPServers[i].Transport+"|"+setting.Agent.MCPServers[i].Endpoint+"|"+setting.Agent.MCPServers[i].Command, i)
+		}
+		if setting.Agent.MCPServers[i].Args == nil {
+			setting.Agent.MCPServers[i].Args = []string{}
+		}
+		if setting.Agent.MCPServers[i].Env == nil {
+			setting.Agent.MCPServers[i].Env = map[string]string{}
 		}
 		if setting.Agent.MCPServers[i].Tools == nil {
 			setting.Agent.MCPServers[i].Tools = []model.MCPTool{}
@@ -301,7 +310,7 @@ func keepPrivateAgentSecrets(settings *model.Settings, saved model.Settings) {
 			continue
 		}
 		for _, old := range saved.Private.Agent.MCPServers {
-			if (old.ID != "" && old.ID == settings.Private.Agent.MCPServers[i].ID && old.Endpoint == settings.Private.Agent.MCPServers[i].Endpoint) || (old.Name == settings.Private.Agent.MCPServers[i].Name && old.Endpoint == settings.Private.Agent.MCPServers[i].Endpoint) {
+			if (old.ID != "" && old.ID == settings.Private.Agent.MCPServers[i].ID && old.Transport == settings.Private.Agent.MCPServers[i].Transport && old.Endpoint == settings.Private.Agent.MCPServers[i].Endpoint && old.Command == settings.Private.Agent.MCPServers[i].Command) || (old.Name == settings.Private.Agent.MCPServers[i].Name && old.Transport == settings.Private.Agent.MCPServers[i].Transport && old.Endpoint == settings.Private.Agent.MCPServers[i].Endpoint && old.Command == settings.Private.Agent.MCPServers[i].Command) {
 				settings.Private.Agent.MCPServers[i].APIKey = old.APIKey
 				break
 			}

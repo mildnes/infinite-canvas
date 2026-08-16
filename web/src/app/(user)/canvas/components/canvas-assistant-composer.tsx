@@ -1,13 +1,13 @@
 "use client";
 
 import { useMemo } from "react";
-import { ArrowUp, Bot, FileText, FolderOpen, ImageIcon, Menu, Music2, Square, Upload, Video, X } from "lucide-react";
+import { ArrowUp, Bot, FileText, FolderOpen, ImageIcon, Menu, Music2, Sparkles, Square, Upload, Video, X } from "lucide-react";
 import { Button, Dropdown } from "antd";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useEffectiveConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
-import { CanvasNodeType, type CanvasAgentConfig, type CanvasAssistantReference } from "../types";
+import { CanvasNodeType, type CanvasAgentConfig, type CanvasAgentSkillReference, type CanvasAssistantReference } from "../types";
 import type { CanvasResourceReference } from "../utils/canvas-resource-references";
 import { isCanvasImageNodeType } from "../utils/canvas-panorama";
 import { CanvasImageSettingsPopover } from "./canvas-image-settings-popover";
@@ -20,6 +20,10 @@ export type CanvasAssistantComposerProps = {
     references: CanvasAssistantReference[];
     /** 首页等无画布上下文场景可省略，默认空列表 */
     mentionReferences?: CanvasResourceReference[];
+    skills?: CanvasAgentSkillReference[];
+    selectedSkills?: CanvasAgentSkillReference[];
+    onSelectSkill?: (skill: CanvasAgentSkillReference) => void;
+    onRemoveSkill?: (id: string) => void;
     agentConfig: CanvasAgentConfig;
     onAgentConfigChange: (patch: Partial<CanvasAgentConfig>) => void;
     onPromptChange: (prompt: string) => void;
@@ -36,6 +40,10 @@ export function CanvasAssistantComposer({
     isRunning,
     references,
     mentionReferences = [],
+    skills = [],
+    selectedSkills = [],
+    onSelectSkill,
+    onRemoveSkill,
     agentConfig,
     onAgentConfigChange,
     onPromptChange,
@@ -60,16 +68,35 @@ export function CanvasAssistantComposer({
                     ))}
                 </div>
             ) : null}
+            {selectedSkills.length ? (
+                <div className="thin-scrollbar mb-1.5 flex max-w-full gap-1.5 overflow-x-auto px-1 pb-1">
+                    {selectedSkills.map((skill) => (
+                        <div
+                            key={skill.id}
+                            className="group/skill inline-flex h-8 max-w-[190px] shrink-0 items-center gap-1.5 rounded-lg border px-2 text-xs"
+                            style={{ color: theme.node.text, background: theme.toolbar.panel, borderColor: theme.node.stroke }}
+                        >
+                            <Sparkles className="size-3.5 shrink-0" />
+                            <span className="truncate">{skill.name}</span>
+                            <button type="button" className="grid size-4 shrink-0 place-items-center rounded-full opacity-60 hover:opacity-100" onClick={() => onRemoveSkill?.(skill.id)} aria-label={`移除技能 ${skill.name}`}>
+                                <X className="size-3" />
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            ) : null}
             <div className="rounded-2xl border px-3 pb-3 pt-3" style={{ background: theme.toolbar.panel, borderColor: theme.node.stroke }}>
                 <CanvasPromptChipInput
                     value={prompt}
                     references={mentionReferences}
+                    skills={skills}
+                    onSelectSkill={onSelectSkill}
                     onChange={onPromptChange}
                     onSubmit={() => void onSubmit()}
                     onPasteImage={onPasteImage}
                     className="thin-scrollbar h-20 w-full resize-none border-0 bg-transparent px-1 py-1 text-sm leading-5"
                     style={{ color: theme.node.text }}
-                    placeholder={mentionReferences.length ? "描述创作目标，输入 @ 选择画布图片/视频/音频" : "描述创作目标，或让我继续操作画布"}
+                    placeholder="输入 / 使用技能，@ 引用画布素材"
                 />
                 <div className="mt-2 flex items-center justify-between gap-2">
                     <div className="flex min-w-0 flex-1 items-center gap-1">

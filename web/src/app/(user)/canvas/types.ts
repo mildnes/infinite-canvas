@@ -149,6 +149,13 @@ export type CanvasAssistantReference = {
     text?: string;
 };
 
+export type CanvasAgentSkillReference = {
+    id: string;
+    name: string;
+    description?: string;
+    source: "builtin" | "admin";
+};
+
 export type InsertAssetPayload =
     | { kind: "text"; content: string; title: string; assetId?: string; source?: "asset" | "library" }
     | { kind: "image"; dataUrl: string; title: string; storageKey?: string; assetId?: string; width?: number; height?: number; bytes?: number; mimeType?: string; source?: "asset" | "library" }
@@ -174,17 +181,7 @@ export type CanvasAssistantImage = {
     source?: "asset" | "library";
 };
 
-export type CanvasAgentPhase =
-    | "intake"
-    | "concept"
-    | "script"
-    | "breakdown"
-    | "references"
-    | "storyboard"
-    | "video"
-    | "audio"
-    | "review"
-    | "complete";
+export type CanvasAgentPhase = "intake" | "concept" | "script" | "breakdown" | "references" | "storyboard" | "video" | "audio" | "review" | "complete";
 
 export type CanvasAgentConfig = {
     imageQuality: string;
@@ -204,12 +201,7 @@ export type CanvasAgentState = {
     completedTaskIds: string[];
 };
 
-export type CanvasAgentContent =
-    | string
-    | Array<
-        | { type: "text"; text: string }
-        | { type: "image_url"; image_url: { url: string } }
-    >;
+export type CanvasAgentContent = string | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }>;
 
 export type CanvasAgentToolCall = {
     id: string;
@@ -231,6 +223,7 @@ export type CanvasAssistantMessage = {
     status?: CanvasAssistantMessageStatus;
     activity?: string;
     references?: CanvasAssistantReference[];
+    skills?: CanvasAgentSkillReference[];
     images?: CanvasAssistantImage[];
 };
 
@@ -260,14 +253,14 @@ export type SelectionBox = {
 
 export type ContextMenuState =
     | {
-        type: "node";
-        x: number;
-        y: number;
-        nodeId: string;
-    }
+          type: "node";
+          x: number;
+          y: number;
+          nodeId: string;
+      }
     | {
-        type: "connection";
-        x: number;
-        y: number;
-        connectionId: string;
-    };
+          type: "connection";
+          x: number;
+          y: number;
+          connectionId: string;
+      };

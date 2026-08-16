@@ -231,7 +231,20 @@ export type AdminPublicSettings = {
 export type AdminAgentSkill = { id: string; name: string; description: string; prompt: string; enabled: boolean };
 export type AdminMCPTool = { name: string; description: string; inputSchema: Record<string, unknown> };
 export type AdminPublicMCPServer = { id: string; name: string; description: string; tools: AdminMCPTool[] };
-export type AdminMCPServer = AdminPublicMCPServer & { endpoint: string; apiKey: string; enabled: boolean; allowUsers: boolean; toolsJson?: string };
+export type AdminMCPServer = AdminPublicMCPServer & {
+    endpoint: string;
+    apiKey: string;
+    transport: "streamable_http" | "stdio";
+    command: string;
+    args: string[];
+    env: Record<string, string>;
+    workingDirectory: string;
+    enabled: boolean;
+    allowUsers: boolean;
+    toolsJson?: string;
+    argsText?: string;
+    envJson?: string;
+};
 
 export type AdminStorageProvider = {
     id: string;

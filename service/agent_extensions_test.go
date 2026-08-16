@@ -1,6 +1,9 @@
 package service
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/tigerowo/infinite-canvas/model"
@@ -38,5 +41,64 @@ func TestPublicAgentSettingForUserFiltersMCPAccess(t *testing.T) {
 	admin := publicAgentSettingForUser(setting, true)
 	if len(admin.MCPServers) != 2 {
 		t.Fatalf("admin MCP count = %d, want 2", len(admin.MCPServers))
+	}
+}
+
+func TestStreamableHTTPMCPInitializeListAndCall(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		switch payload["method"] {
+		case "initialize":
+			writer.Header().Set("Mcp-Session-Id", "session-1")
+			_, _ = writer.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"}}`))
+		case "notifications/initialized":
+			writer.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			writer.Header().Set("Content-Type", "text/event-stream")
+			_, _ = writer.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[{\"name\":\"generate_video\",\"inputSchema\":{\"type\":\"object\"}}]}}\n\n"))
+		case "tools/call":
+			_, _ = writer.Write([]byte(`{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"ok"}]}}`))
+		default:
+			http.Error(writer, "unknown method", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+
+	config := model.MCPServer{ID: "http-test", Transport: "streamable_http", Endpoint: server.URL}
+	list, err := callMCPServer(t.Context(), config, "tools/list", map[string]any{})
+	if err != nil {
+		t.Fatalf("tools/list error = %v", err)
+	}
+	if result, ok := list["result"].(map[string]any); !ok || result["tools"] == nil {
+		t.Fatalf("tools/list result = %#v", list)
+	}
+	call, err := callMCPServer(t.Context(), config, "tools/call", map[string]any{"name": "generate_video"})
+	if err != nil {
+		t.Fatalf("tools/call error = %v", err)
+	}
+	if call["result"] == nil {
+		t.Fatalf("tools/call result = %#v", call)
+	}
+}
+
+func TestStdioMCPProcessCanReuseClient(t *testing.T) {
+	client, err := startStdioMCPClient(model.MCPServer{ID: "stdio-test", Transport: "stdio", Command: "cat"})
+	if err != nil {
+		t.Fatalf("start stdio MCP = %v", err)
+	}
+	defer client.close()
+	first, err := client.call(t.Context(), "tools/list", map[string]any{})
+	if err != nil {
+		t.Fatalf("first stdio call = %v", err)
+	}
+	second, err := client.call(t.Context(), "tools/call", map[string]any{})
+	if err != nil {
+		t.Fatalf("second stdio call = %v", err)
+	}
+	if first["id"] == nil || second["id"] == nil {
+		t.Fatalf("stdio responses missing ids: %#v %#v", first, second)
 	}
 }
