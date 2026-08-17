@@ -234,7 +234,7 @@ async function executeActions(actions: CanvasAgentAction[], initialState: Canvas
 }
 
 function buildUserContent(text: string, references: CanvasAssistantReference[], modelName: string): CanvasAgentContent {
-    const referenceText = references.length ? "\n\n" + formatAssistantReferenceBlocks(references) : "";
+    const referenceText = references.length ? "\n\n本次明确引用的真实节点：" + references.map((item) => item.id + "（" + item.title + "）").join("、") : "";
     const images = supportsCanvasAgentImageInput(modelName)
         ? references.flatMap((item) => {
               const url = item.dataUrl;
@@ -243,37 +243,6 @@ function buildUserContent(text: string, references: CanvasAssistantReference[], 
         : [];
     if (!images.length) return text + referenceText;
     return [{ type: "text", text: text + referenceText }, ...images];
-}
-
-function formatAssistantReferenceBlocks(references: CanvasAssistantReference[]) {
-    const counts = { image: 0, video: 0, audio: 0, text: 0 };
-    const blocks = references.map((item) => {
-        const kind = assistantReferenceKind(item);
-        const index = ++counts[kind];
-        const label = kind === "image" ? `图片${index}` : kind === "video" ? `视频${index}` : kind === "audio" ? `音频${index}` : `文本${index}`;
-        const title = item.title?.trim() || label;
-        const header = `- ${label}｜类型=${kind}｜nodeId=${item.id}｜标题=${title}`;
-        if (kind === "text") {
-            const body = String(item.text || "").trim();
-            return body ? `${header}\n正文：\n${body}` : header;
-        }
-        return header;
-    });
-    return [
-        "本次明确引用的真实节点如下。编号按类型分别计数：文本N 不是图片，不能写成图片N；只有类型=image 的节点才是图片参考。",
-        ...blocks,
-    ].join("\n");
-}
-
-function assistantReferenceKind(item: CanvasAssistantReference): "image" | "video" | "audio" | "text" {
-    const type = String(item.type || "").toLowerCase();
-    if (type === "video") return "video";
-    if (type === "audio") return "audio";
-    if (type === "text") return "text";
-    if (type === "image" || type === "panorama") return "image";
-    if (item.text && !item.dataUrl && !item.url) return "text";
-    if (item.url && !item.dataUrl) return "video";
-    return "image";
 }
 
 function supportsCanvasAgentImageInput(modelName: string) {

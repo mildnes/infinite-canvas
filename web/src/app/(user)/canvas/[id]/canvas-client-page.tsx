@@ -3341,10 +3341,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         return { ok: false, code: "model_not_configured", message: "请先在全局配置中完成" + (mode === "video" ? "视频" : mode === "audio" ? "音频" : "图片") + "模型配置" };
                     }
 
-                    const prompt = buildAgentGenerationPrompt(stringValue("prompt"), sourceNodes);
+                    const prompt = stringValue("prompt");
                     const metadata: CanvasNodeMetadata = {
                         prompt,
-                        // Agent already inlined labeled text sources into prompt; avoid double-appending upstream text.
                         excludeUpstreamText: true,
                         status: "idle",
                         model: generationConfig.model,
@@ -4570,20 +4569,6 @@ function withCanvasVideoAdvancedConfig(config: AiConfig, context: Pick<NodeGener
         videoMultiPrompt: context.videoMultiPrompt.length ? context.videoMultiPrompt : config.videoMultiPrompt,
         videoElementList: context.videoElementList.length ? context.videoElementList : config.videoElementList,
     };
-}
-
-function buildAgentGenerationPrompt(prompt: string, sourceNodes: CanvasNodeData[]) {
-    const textSources = sourceNodes.filter((node) => node.type === CanvasNodeType.Text);
-    const labeled: string[] = [];
-    textSources.forEach((node) => {
-        const body = String(node.metadata?.content || node.metadata?.prompt || "").trim();
-        if (!body) return;
-        const index = labeled.length + 1;
-        const title = node.title?.trim() || `文本${index}`;
-        labeled.push(`【文本${index}｜nodeId=${node.id}｜${title}】\n${body}`);
-    });
-    if (!labeled.length) return prompt;
-    return `${prompt.trim()}\n\n以下为本次引用的文本来源（文本N，不是图片；生图时请把它们当设计说明/提示词正文使用，不要写成“图片N”）：\n${labeled.join("\n\n")}`;
 }
 
 function generationReferenceUrls(context: { referenceImages: ReferenceImage[]; firstFrame?: ReferenceImage | null; lastFrame?: ReferenceImage | null; referenceVideos: Array<{ storageKey?: string; url?: string }>; referenceAudios?: Array<{ storageKey?: string; url?: string }> }) {
