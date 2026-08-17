@@ -6,7 +6,7 @@ import { Settings2 } from "lucide-react";
 import { Button } from "antd";
 
 import { AudioSettingsPanel, type AudioSettingKey } from "@/components/audio-settings-panel";
-import { audioFormatLabel, audioSpeedLabel, audioVoiceLabelFor } from "@/lib/audio-generation";
+import { audioFormatLabel, audioSpeedLabel, audioVoiceLabelFor, glmTtsVoiceLabel, isGlmTtsModel, normalizeGlmTtsFormat, normalizeGlmTtsSpeed } from "@/lib/audio-generation";
 import { channelInfoForModel } from "@/stores/use-config-store";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { isMimoPresetTtsModel, isMimoTtsModel, isMimoVoiceCloneModel, isMimoVoiceDesignModel, mimoTtsVoiceLabel, normalizeMimoTtsFormat } from "@/lib/mimo-tts";
@@ -123,6 +123,7 @@ function validCloneAudioNodeId(value: string | undefined, options: CanvasVideoRe
 
 function audioSettingsSummary(config: AiConfig, cloneAudioNodeId: string, audioOptions: CanvasVideoResourceOption[]) {
     const model = config.model || config.audioModel || "";
+    if (isGlmTtsModel(model)) return `${glmTtsVoiceLabel(config.glmTtsVoice)} · ${normalizeGlmTtsFormat(config.glmTtsFormat).toUpperCase()} · ${normalizeGlmTtsSpeed(config.glmTtsSpeed)}x`;
     if (!isMimoTtsModel(model)) {
         const channel = channelInfoForModel(config, model);
         return `${audioVoiceLabelFor(model, config.audioVoice, channel)} · ${audioFormatLabel(config.audioFormat)} · ${audioSpeedLabel(config.audioSpeed)}`;

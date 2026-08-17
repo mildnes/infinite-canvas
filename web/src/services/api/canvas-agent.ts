@@ -117,8 +117,9 @@ async function requestCompletion(config: AiConfig, systemPrompt: string, message
     }
     const message = payload.choices?.[0]?.message || payload.data?.choices?.[0]?.message;
     if (!message) throw new CanvasAgentRequestError(readError(payload, response.status) || "文本模型没有返回内容", response.status);
-    const isMimoTextModel = mimoTextModels.some((model) => model === config.model.trim().toLowerCase());
-    const reasoningContent = isMimoTextModel && typeof message.reasoning_content === "string" ? message.reasoning_content : undefined;
+    const normalizedModel = config.model.trim().toLowerCase();
+    const preservesReasoningContent = normalizedModel.startsWith("glm-") || mimoTextModels.some((model) => model === normalizedModel);
+    const reasoningContent = preservesReasoningContent && typeof message.reasoning_content === "string" ? message.reasoning_content : undefined;
 
     refreshRemoteUser(config);
     return {

@@ -34,6 +34,9 @@ export type AiConfig = {
     audioFormat: string;
     audioSpeed: string;
     audioInstructions: string;
+    glmTtsVoice: string;
+    glmTtsFormat: string;
+    glmTtsSpeed: string;
     mimoTtsVoice: string;
     mimoTtsFormat: string;
     mimoVoiceDesignPrompt: string;
@@ -99,6 +102,9 @@ export const defaultConfig: AiConfig = {
     audioFormat: "mp3",
     audioSpeed: "1",
     audioInstructions: "",
+    glmTtsVoice: "tongtong",
+    glmTtsFormat: "wav",
+    glmTtsSpeed: "1",
     mimoTtsVoice: "冰糖",
     mimoTtsFormat: "wav",
     mimoVoiceDesignPrompt: "",
@@ -258,6 +264,7 @@ function isImageModelName(model: string) {
         value.includes("nano-banana") ||
         value.includes("seedream") ||
         value.includes("gpt-image") ||
+        value.includes("cogview") ||
         value.includes("dall-e") ||
         value.includes("dalle") ||
         value.includes("imagen") ||
@@ -379,6 +386,9 @@ export const useConfigStore = create<ConfigStore>()(
                         audioVoice: config.audioVoice || defaultConfig.audioVoice,
                         audioFormat: config.audioFormat || defaultConfig.audioFormat,
                         audioSpeed: config.audioSpeed || defaultConfig.audioSpeed,
+                        glmTtsVoice: config.glmTtsVoice || defaultConfig.glmTtsVoice,
+                        glmTtsFormat: config.glmTtsFormat || defaultConfig.glmTtsFormat,
+                        glmTtsSpeed: config.glmTtsSpeed || defaultConfig.glmTtsSpeed,
                         systemPrompts: config.systemPrompts?.image ? config.systemPrompts : defaultConfig.systemPrompts,
                         audioInstructions: config.audioInstructions || "",
                         videoSeconds: config.videoSeconds || "6",
@@ -419,25 +429,28 @@ export function useEffectiveConfig() {
 
 export function buildApiUrl(baseUrl: string, path: string) {
     let normalizedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
-    normalizedBaseUrl = normalizeArkPlanBaseUrl(normalizedBaseUrl);
+    normalizedBaseUrl = normalizeVersionedBaseUrl(normalizedBaseUrl);
     const lowerBaseUrl = normalizedBaseUrl.toLowerCase();
-    const apiBaseUrl = lowerBaseUrl.endsWith("/v1") || lowerBaseUrl.endsWith("/api/v3") || lowerBaseUrl.endsWith("/api/plan/v3") ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`;
+    const apiBaseUrl = lowerBaseUrl.endsWith("/v1") || lowerBaseUrl.endsWith("/api/v3") || lowerBaseUrl.endsWith("/api/plan/v3") || lowerBaseUrl.endsWith("/api/paas/v4") ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`;
     return `${apiBaseUrl}${path}`;
 }
 
-function normalizeArkPlanBaseUrl(baseUrl: string) {
+function normalizeVersionedBaseUrl(baseUrl: string) {
     try {
         const url = new URL(baseUrl);
         const path = url.pathname.replace(/\/+$/, "");
         const lowerPath = path.toLowerCase();
-        const arkPlanIndex = lowerPath.indexOf("/api/plan/v3");
-        if (arkPlanIndex < 0) return baseUrl;
-        const end = arkPlanIndex + "/api/plan/v3".length;
-        if (lowerPath.length !== end && lowerPath[end] !== "/") return baseUrl;
-        url.pathname = path.slice(0, end);
-        url.search = "";
-        url.hash = "";
-        return url.toString().replace(/\/+$/, "");
+        for (const versionPath of ["/api/plan/v3", "/api/paas/v4"]) {
+            const versionIndex = lowerPath.indexOf(versionPath);
+            if (versionIndex < 0) continue;
+            const end = versionIndex + versionPath.length;
+            if (lowerPath.length !== end && lowerPath[end] !== "/") continue;
+            url.pathname = path.slice(0, end);
+            url.search = "";
+            url.hash = "";
+            return url.toString().replace(/\/+$/, "");
+        }
+        return baseUrl;
     } catch {
         return baseUrl;
     }

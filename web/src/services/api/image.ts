@@ -149,7 +149,9 @@ function resolveRequestSize(quality: string | undefined, size: string) {
 }
 
 function createImageRequestParams(config: AiConfig): ImageRequestParams {
-    const quality = normalizeQuality(config.quality);
+    const normalizedQuality = normalizeQuality(config.quality);
+    const zhipu = isZhipuImageModel(config.model);
+    const quality = zhipu ? normalizeZhipuImageQuality(config.model, normalizedQuality) : normalizedQuality;
     return {
         n: normalizeBoundedInteger(config.count, 1, 1, 15),
         quality,
@@ -249,8 +251,26 @@ function snapGrokImageAspectRatio(ratio: number) {
     return best;
 }
 
+function isZhipuImageModel(model: string) {
+    const value = model.trim().toLowerCase();
+    return value === "glm-image" || value.startsWith("cogview-");
+}
+
+function normalizeZhipuImageQuality(model: string, quality: string) {
+    if (model.trim().toLowerCase() === "glm-image") return "hd";
+    if (quality === "auto") return quality;
+    return quality === "high" || quality === "hd" ? "hd" : "standard";
+}
+
 function applyImageGenerationParams(body: Record<string, unknown>, config: AiConfig, params: ImageRequestParams, operation: "generation" | "edit" = "generation") {
     const model = config.model.trim().toLowerCase();
+    const zhipu = isZhipuImageModel(model);
+    if (zhipu) {
+        if (params.size) body.size = params.size;
+        if (params.quality !== "auto") body.quality = params.quality;
+        return;
+    }
+
     const grok = isGrokImageModel(model) && (operation === "edit" || !model.includes("edit"));
     if (grok) {
         // Prefer original UI size (e.g. 1152x2048 / 9:16-2k). params.size may already be
@@ -268,6 +288,20 @@ function applyImageGenerationParams(body: Record<string, unknown>, config: AiCon
 
     if (params.size) body.size = params.size;
     if (params.quality && !config.codexCli) body.quality = params.quality;
+}
+
+function applyImageGenerationOptions(body: Record<string, unknown>, config: AiConfig, params: ImageRequestParams) {
+    if (isZhipuImageModel(config.model)) return;
+    if (params.n > 1) body.n = params.n;
+    if (config.responseFormatB64Json) body.response_format = "b64_json";
+    if (config.streamImages) {
+        body.stream = true;
+        body.partial_images = params.streamPartialImages;
+    }
+}
+
+function assertImageReferencesSupported(model: string, references: ReferenceImage[]) {
+    if (references.length && isZhipuImageModel(model)) throw new ImageRequestError("智谱 GLM-Image 和 CogView 仅支持文生图");
 }
 
 function normalizeBase64Image(value: string, fallbackMime: string) {
@@ -724,13 +758,8 @@ async function requestImageGenerationSingle(config: AiConfig & { seedIndex?: num
         model: config.model,
         prompt: finalizeImagePrompt(config, prompt),
     };
-    if (params.n > 1) body.n = params.n;
     applyImageGenerationParams(body, config, params);
-    if (config.responseFormatB64Json) body.response_format = "b64_json";
-    if (config.streamImages) {
-        body.stream = true;
-        body.partial_images = params.streamPartialImages;
-    }
+    applyImageGenerationOptions(body, config, params);
 
     const directProvider = !usesAccountProxy(config) ? directAIProviderForConfig(config) : null;
     if (directProvider) {
@@ -951,9 +980,10 @@ async function requestAndParseImages(config: AiConfig, endpoint: string, request
 }
 
 async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[]): Promise<GeneratedImage[]> {
+    assertImageReferencesSupported(config.model, references);
     const params = createImageRequestParams(config);
     const inputImageDataUrls = references.length ? await Promise.all(references.map((image) => imageToDataUrl(image))) : [];
-    const useConcurrentSingleRequests = config.apiMode === "responses" || config.codexCli || config.streamImages;
+    const useConcurrentSingleRequests = config.apiMode === "responses" || config.codexCli || config.streamImages || isZhipuImageModel(config.model);
     if (params.n > 1 && useConcurrentSingleRequests) {
         const results = await Promise.allSettled(Array.from({ length: params.n }, () => requestImages({ ...config, count: "1" }, prompt, references)));
         const images = results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
@@ -964,7 +994,7 @@ async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?
     if (references.length && isAgnesImageModel(config.model)) {
         return requestAgnesImageEdit(config, prompt, references, params);
     }
-    if (config.apiMode === "responses") return requestResponsesSingle(config, prompt, inputImageDataUrls, params);
+    if (config.apiMode === "responses" && !isZhipuImageModel(config.model)) return requestResponsesSingle(config, prompt, inputImageDataUrls, params);
     return references.length ? requestImageEditSingle(config, prompt, references, params) : requestImageGenerationSingle(config, prompt, params);
 }
 
@@ -1037,6 +1067,7 @@ export async function pollCanvasImageTaskStatus(taskId: string): Promise<CanvasI
 }
 
 async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[], params: ImageRequestParams, options: CanvasImageTaskOptions): Promise<RequestInit> {
+    assertImageReferencesSupported(config.model, references);
     const taskChannelId = channelIdForActiveModel(config);
     const taskChannelHeader: Record<string, string> = config.channelMode === "remote" && taskChannelId ? { "X-Model-Channel-ID": taskChannelId } : {};
     const tokenHeaders = { ...aiHeaders(config), ...taskChannelHeader };
@@ -1065,7 +1096,7 @@ async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: num
             body: JSON.stringify({ endpoint: "/images/generations", ...meta, request: body }),
         };
     }
-    if (config.apiMode === "responses") {
+    if (config.apiMode === "responses" && !isZhipuImageModel(config.model)) {
         const inputImageDataUrls = references.length ? await Promise.all(references.map((image) => imageToDataUrl(image))) : [];
         const body: Record<string, unknown> = {
             model: config.model,
@@ -1128,11 +1159,7 @@ async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: num
         prompt: finalizeImagePrompt(config, prompt),
     };
     applyImageGenerationParams(body, config, params);
-    if (config.responseFormatB64Json) body.response_format = "b64_json";
-    if (config.streamImages) {
-        body.stream = true;
-        body.partial_images = params.streamPartialImages;
-    }
+    applyImageGenerationOptions(body, config, params);
     return {
         method: "POST",
         headers: jsonHeaders,

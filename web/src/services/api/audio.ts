@@ -1,7 +1,7 @@
 import axios from "axios";
 import { nanoid } from "nanoid";
 
-import { audioMimeType, normalizeAudioFormatValue, normalizeAudioSpeedValue, normalizeAudioVoiceValueFor, shouldUseGrokVoiceOptions } from "@/lib/audio-generation";
+import { audioMimeType, isGlmTtsModel, normalizeAudioFormatValue, normalizeAudioSpeedValue, normalizeAudioVoiceValueFor, normalizeGlmTtsFormat, normalizeGlmTtsSpeed, normalizeGlmTtsVoice, shouldUseGrokVoiceOptions } from "@/lib/audio-generation";
 import { isMimoPresetTtsModel, isMimoTtsModel, isMimoVoiceCloneModel, isMimoVoiceDesignModel, normalizeMimoTtsFormat, normalizeMimoTtsVoice } from "@/lib/mimo-tts";
 import { resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { buildApiUrl, channelIdForActiveModel, channelInfoForModel, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
@@ -78,7 +78,7 @@ export async function requestAudioGeneration(config: AiConfig, prompt: string, r
             return decodeMiMoAudio(response.data, format);
         }
 
-        const format = isMimoTtsModel(model) ? normalizeMimoTtsFormat(config.mimoTtsFormat) : normalizeAudioFormatValue(config.audioFormat);
+        const format = audioResponseFormat(config, model);
         const body = await buildAudioSpeechRequest(config, model, prompt, referenceAudio);
         const response = await axios.post<Blob>(aiApiUrl(config, "/audio/speech"), body, { headers: aiHeaders(config), responseType: "blob" });
         await assertAudioBlob(response.data);
@@ -100,7 +100,7 @@ export async function createCanvasAudioTask(config: AiConfig, prompt: string, op
 
     if (!usesAccountProxy(config)) {
         const blob = await requestAudioGeneration(config, prompt, referenceAudio);
-        const format = isMimoTtsModel(model) ? normalizeMimoTtsFormat(config.mimoTtsFormat) : normalizeAudioFormatValue(config.audioFormat);
+        const format = audioResponseFormat(config, model);
         const stored = await storeGeneratedAudio(blob, format);
         const now = new Date().toISOString();
         return {
@@ -152,6 +152,16 @@ export async function pollCanvasAudioTaskStatus(taskId: string): Promise<CanvasA
 }
 
 async function buildAudioSpeechRequest(config: AiConfig, model: string, prompt: string, referenceAudio?: ReferenceAudio) {
+    if (isGlmTtsModel(model)) {
+        if (prompt.length > 1024) throw new Error("GLM-TTS 文本不能超过 1024 个字符");
+        return {
+            model,
+            input: prompt,
+            voice: normalizeGlmTtsVoice(config.glmTtsVoice),
+            response_format: normalizeGlmTtsFormat(config.glmTtsFormat),
+            speed: Number(normalizeGlmTtsSpeed(config.glmTtsSpeed)),
+        };
+    }
     if (isMimoTtsModel(model)) {
         const instructions = config.audioInstructions.trim();
         return {
@@ -205,6 +215,12 @@ export async function fetchTTSVoices(config: AiConfig, modelName?: string): Prom
             return { value, label };
         })
         .filter((item: TTSVoiceOption | null): item is TTSVoiceOption => Boolean(item));
+}
+
+function audioResponseFormat(config: AiConfig, model: string) {
+    if (isGlmTtsModel(model)) return normalizeGlmTtsFormat(config.glmTtsFormat);
+    if (isMimoTtsModel(model)) return normalizeMimoTtsFormat(config.mimoTtsFormat);
+    return normalizeAudioFormatValue(config.audioFormat);
 }
 
 async function buildMiMoNativeRequest(config: AiConfig, model: string, prompt: string, referenceAudio?: ReferenceAudio) {

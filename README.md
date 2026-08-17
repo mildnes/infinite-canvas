@@ -16,6 +16,9 @@
 无限画布是一款面向图片，视频，音频，全能创作的开源工作台。它把画布编排、AI 图片、视频、音频生成、参考图编辑、对话助手、提示词库和素材沉淀放在同一个界面里，适合用来探索视觉方案并连续迭代图片结果
 
 <p align="center">
+  <img src="https://raw.githubusercontent.com/tigerowo/cdn-tdeh/v0.5/img/infinite-canvas/3ddirectortl.webp" alt="3D 导演台时间轴" />
+</p>
+<p align="center">
   <img src="https://raw.githubusercontent.com/tigerowo/cdn-tdeh/v0.4/img/infinite-canvas/3ddirector.webp" alt="3D 导演台" />
 </p>
 <p align="center">

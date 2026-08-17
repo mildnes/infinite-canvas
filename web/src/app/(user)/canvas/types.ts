@@ -59,6 +59,9 @@ export type CanvasNodeMetadata = {
     audioFormat?: string;
     audioSpeed?: string;
     audioInstructions?: string;
+    glmTtsVoice?: string;
+    glmTtsFormat?: string;
+    glmTtsSpeed?: string;
     mimoTtsVoice?: string;
     mimoTtsFormat?: string;
     mimoVoiceDesignPrompt?: string;

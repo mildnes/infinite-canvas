@@ -376,7 +376,7 @@ func HTTPClientForChannel(channel model.ModelChannel) *http.Client {
 func BuildModelChannelURL(channel model.ModelChannel, path string) string {
 	baseURL := normalizeModelChannelBaseURL(channel.BaseURL)
 	lowerBaseURL := strings.ToLower(baseURL)
-	if !strings.HasSuffix(lowerBaseURL, "/v1") && !strings.HasSuffix(lowerBaseURL, "/api/v3") && !strings.HasSuffix(lowerBaseURL, "/api/plan/v3") {
+	if !strings.HasSuffix(lowerBaseURL, "/v1") && !strings.HasSuffix(lowerBaseURL, "/api/v3") && !strings.HasSuffix(lowerBaseURL, "/api/plan/v3") && !strings.HasSuffix(lowerBaseURL, "/api/paas/v4") {
 		baseURL += "/v1"
 	}
 	return baseURL + path
@@ -388,14 +388,16 @@ func normalizeModelChannelBaseURL(baseURL string) string {
 	if err == nil && parsed.Scheme != "" && parsed.Host != "" {
 		path := strings.TrimRight(parsed.Path, "/")
 		lowerPath := strings.ToLower(path)
-		if index := strings.Index(lowerPath, "/api/plan/v3"); index >= 0 {
-			end := index + len("/api/plan/v3")
-			if len(lowerPath) == end || lowerPath[end] == '/' {
-				parsed.Path = path[:end]
-				parsed.RawPath = ""
-				parsed.RawQuery = ""
-				parsed.Fragment = ""
-				return strings.TrimRight(parsed.String(), "/")
+		for _, versionPath := range []string{"/api/plan/v3", "/api/paas/v4"} {
+			if index := strings.Index(lowerPath, versionPath); index >= 0 {
+				end := index + len(versionPath)
+				if len(lowerPath) == end || lowerPath[end] == '/' {
+					parsed.Path = path[:end]
+					parsed.RawPath = ""
+					parsed.RawQuery = ""
+					parsed.Fragment = ""
+					return strings.TrimRight(parsed.String(), "/")
+				}
 			}
 		}
 	}
@@ -674,6 +676,7 @@ func kieMarketModels() []string {
 		"flux-2/pro-text-to-image",
 		"flux-2/flex-image-to-image",
 		"flux-2/flex-text-to-image",
+		"grok-imagine-image-2-0/text-to-image",
 		"grok-imagine/text-to-image",
 		"grok-imagine/image-to-image",
 		"gpt-image/1.5-text-to-image",
@@ -717,6 +720,10 @@ func kieMarketModels() []string {
 		"kling-2.6/motion-control",
 		"kling-3.0/motion-control",
 		"kling-3.0/video",
+		"kling-3.0-omni/text-to-video",
+		"kling-3.0-omni/image-to-video",
+		"kling-3.0-omni/reference-to-video",
+		"kling-3.0-omni/transformation",
 		"kling/v3-turbo-text-to-video",
 		"kling/v3-turbo-image-to-video",
 		"bytedance/seedance-2",
@@ -770,6 +777,9 @@ func testAdminChannelModel(channel model.ModelChannel, modelName string) (string
 	if strings.TrimSpace(modelName) == "" {
 		return "", errors.New("缺少模型名称")
 	}
+	if strings.EqualFold(strings.TrimSpace(modelName), "glm-tts") {
+		return testGLMTTSChannelModel(channel, modelName)
+	}
 	if IsMiMoTTSModelName(modelName) {
 		return testMiMoTTSChannelModel(channel, modelName)
 	}
@@ -805,6 +815,35 @@ func testAdminChannelModel(channel model.ModelChannel, modelName string) (string
 	_ = json.Unmarshal(responseBody, &payload)
 	if len(payload.Choices) > 0 && strings.TrimSpace(payload.Choices[0].Message.Content) != "" {
 		return payload.Choices[0].Message.Content, nil
+	}
+	return "ok", nil
+}
+
+func testGLMTTSChannelModel(channel model.ModelChannel, modelName string) (string, error) {
+	body, _ := json.Marshal(map[string]any{
+		"model":           modelName,
+		"input":           "你好，这是语音模型测试。",
+		"voice":           "tongtong",
+		"response_format": "wav",
+		"speed":           1,
+	})
+	request, err := http.NewRequest(http.MethodPost, BuildModelChannelURL(channel, "/audio/speech"), strings.NewReader(string(body)))
+	if err != nil {
+		return "", err
+	}
+	request.Header.Set("Authorization", "Bearer "+channel.APIKey)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := adminModelHTTPClient.Do(request)
+	if err != nil {
+		return "", safeMessageError{message: "测试失败：上游接口无响应或网络不可达"}
+	}
+	defer response.Body.Close()
+	responseBody, _ := io.ReadAll(response.Body)
+	if response.StatusCode >= http.StatusBadRequest {
+		return "", readAdminChannelError(responseBody, response.StatusCode, "测试失败")
+	}
+	if len(responseBody) == 0 {
+		return "", safeMessageError{message: "测试失败：GLM-TTS 未返回音频数据"}
 	}
 	return "ok", nil
 }
