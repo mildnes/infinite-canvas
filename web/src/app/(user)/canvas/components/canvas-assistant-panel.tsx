@@ -58,7 +58,7 @@ type PendingDeleteConfirmation = {
 
 export function CanvasAssistantPanel({
     nodes,
-    selectedNodeIds,
+    selectedNodeIds: _selectedNodeIds,
     sessions,
     activeSessionId,
     agentConfig,
@@ -95,7 +95,6 @@ export function CanvasAssistantPanel({
     const [deleteChatIds, setDeleteChatIds] = useState<string[]>([]);
     const [closing, setClosing] = useState(false);
     const [resizing, setResizing] = useState(false);
-    const [removedReferenceIds, setRemovedReferenceIds] = useState<Set<string>>(new Set());
     const [pendingDelete, setPendingDelete] = useState<PendingDeleteConfirmation | null>(null);
     const [initialSession] = useState(createSession);
     const safeSessions = sessions.length ? sessions : [initialSession];
@@ -121,8 +120,6 @@ export function CanvasAssistantPanel({
     const historySessions = safeSessions.filter((session) => session.messages.length > 0);
     const messages = activeSession?.messages || [];
     const hasMessages = messages.length > 0;
-    const selectedNodeKey = useMemo(() => Array.from(selectedNodeIds).sort().join(","), [selectedNodeIds]);
-
     useEffect(() => {
         if (view !== "chat") return;
         const frame = window.requestAnimationFrame(() => {
@@ -149,8 +146,6 @@ export function CanvasAssistantPanel({
             cancelled = true;
         };
     }, [authToken]);
-    const allSelectedReferences = useMemo(() => buildAssistantReferences(nodes, selectedNodeIds), [nodes, selectedNodeIds]);
-    const selectedReferences = useMemo(() => allSelectedReferences.filter((item) => !removedReferenceIds.has(item.id)), [allSelectedReferences, removedReferenceIds]);
     const mentionReferences = useMemo(() => buildAgentResourceReferences(nodes), [nodes]);
     const skillOptions = useMemo<CanvasAgentSkillReference[]>(() => [...BUILTIN_CANVAS_AGENT_SKILLS, ...adminSkills].map(({ prompt: _prompt, ...skill }) => skill), [adminSkills]);
     const iconButtonStyle = { color: theme.node.muted };
@@ -161,10 +156,6 @@ export function CanvasAssistantPanel({
         setPendingDelete(null);
         pending.resolve(confirmed);
     };
-
-    useEffect(() => {
-        setRemovedReferenceIds(new Set());
-    }, [selectedNodeKey]);
 
     const commitSessions = (nextSessions: CanvasAssistantSession[], nextActiveSessionId = activeSessionIdRef.current) => {
         sessionsRef.current = nextSessions;
@@ -228,9 +219,9 @@ export function CanvasAssistantPanel({
             commitSessions([session], session.id);
         }
 
-        // @ 提及优先：输入里有 @/芯片引用时，不再自动附带画布当前选中节点（避免总带上“第一张图”）。
+        // 仅使用本轮明确 @ 引用或历史/初始请求中的 references；画布选中节点不再自动带入。
         const mentionedReferences = savedReferences ? [] : collectMentionedAssistantReferences(text, nodes, mentionReferences);
-        const references = savedReferences ? savedReferences : mentionedReferences.length ? mentionedReferences : selectedReferences;
+        const references = savedReferences ? savedReferences : mentionedReferences;
         const skills = savedSkills || selectedSkills;
         const messageReferenceNodeIds = references.map((reference) => reference.id);
         const userMessage: CanvasAssistantMessage = { id: nanoid(), role: "user", text, references, skills, status: "success" };
@@ -470,7 +461,7 @@ export function CanvasAssistantPanel({
                         <CanvasAssistantComposer
                             prompt={prompt}
                             isRunning={isRunning}
-                            references={composerAttachmentReferences(prompt, selectedReferences, mentionReferences, nodes)}
+                            references={[]}
                             mentionReferences={mentionReferences}
                             skills={skillOptions}
                             selectedSkills={selectedSkills}
@@ -486,10 +477,7 @@ export function CanvasAssistantPanel({
                             }}
                             onOpenUpload={onOpenUpload}
                             onOpenAssets={onOpenAssets}
-                            onRemoveReference={(id) => {
-                                setRemovedReferenceIds((previous) => new Set(previous).add(id));
-                                if (selectedNodeIds.has(id)) onSelectNodeIds(new Set(Array.from(selectedNodeIds).filter((nodeId) => nodeId !== id)));
-                            }}
+                            onRemoveReference={() => {}}
                             onPasteImage={onPasteImage}
                         />
                     </>
@@ -672,11 +660,6 @@ function nodeToReference(node: CanvasNodeData): CanvasAssistantReference | null 
     return null;
 }
 
-function composerAttachmentReferences(prompt: string, selectedReferences: CanvasAssistantReference[], mentionReferences: ReturnType<typeof buildAgentResourceReferences>, nodes: CanvasNodeData[]) {
-    const mentioned = collectMentionedAssistantReferences(prompt, nodes, mentionReferences);
-    // 输入已有 @ 引用时，顶部附件区不再显示画布选中节点，避免“默认第一张图”。
-    return mentioned.length ? [] : selectedReferences;
-}
 
 function collectMentionedAssistantReferences(text: string, nodes: CanvasNodeData[], mentionReferences: ReturnType<typeof buildAgentResourceReferences>) {
     if (!text.trim() || !mentionReferences.length) return [] as CanvasAssistantReference[];
@@ -702,14 +685,6 @@ function textMentionsLabel(text: string, label: string) {
     return new RegExp(`(?:^|[\\s，,。.!！？?:：;；、])@?${escaped}(?=$|[\\s，,。.!！？?:：;；、])`).test(text);
 }
 
-function buildAssistantReferences(nodes: CanvasNodeData[], selectedNodeIds: Set<string>) {
-    const nodeById = new Map(nodes.map((node) => [node.id, node]));
-    return Array.from(selectedNodeIds)
-        .map((id) => nodeById.get(id))
-        .filter((node): node is CanvasNodeData => Boolean(node))
-        .map(nodeToReference)
-        .filter((item): item is CanvasAssistantReference => Boolean(item));
-}
 
 function createSession(): CanvasAssistantSession {
     const now = new Date().toISOString();
