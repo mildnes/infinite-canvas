@@ -1550,7 +1550,10 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const createImageFileNode = useCallback(async (file: File, position: Position, choosePanoramaImport = false) => {
         const hideLoading = message.loading("正在上传图片...", 0);
         try {
+            const fallbackNotice = listenStorageUploadFallback();
             const image = await uploadImage(file);
+            const notice = fallbackNotice();
+            if (notice) message.warning(`云端存储失败，已保存到本地：${notice}`);
             if (choosePanoramaImport && image.width === image.height * 2) {
                 setPendingPanoramaImport({ image, title: file.name, position });
                 return;
@@ -1558,7 +1561,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             appendImportedImageNode(image, file.name, position, CanvasNodeType.Image);
         } catch (error) {
             console.error("Upload image node failed:", error);
-            message.error("图片上传失败");
+            message.error(error instanceof Error && error.message ? error.message : "图片上传失败");
         } finally {
             hideLoading();
         }
@@ -4529,6 +4532,23 @@ function withCanvasVideoAdvancedConfig(config: AiConfig, context: Pick<NodeGener
         videoShotType: kieKlingV3 && !kieKlingOmni ? "intelligence" : config.videoShotType,
         videoMultiPrompt: context.videoMultiPrompt.length ? context.videoMultiPrompt : config.videoMultiPrompt,
         videoElementList: context.videoElementList.length ? context.videoElementList : config.videoElementList,
+    };
+}
+
+function listenStorageUploadFallback() {
+    let messageText = "";
+    const onFallback = (event: Event) => {
+        const detail = (event as CustomEvent<{ message?: string }>).detail;
+        messageText = String(detail?.message || "").trim();
+    };
+    if (typeof window !== "undefined") {
+        window.addEventListener("infinite-canvas:storage-upload-fallback", onFallback);
+    }
+    return () => {
+        if (typeof window !== "undefined") {
+            window.removeEventListener("infinite-canvas:storage-upload-fallback", onFallback);
+        }
+        return messageText;
     };
 }
 
