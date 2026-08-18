@@ -37,6 +37,12 @@ func New() *gin.Engine {
 		handler.FileContent(c.Writer, c.Request, c.Param("id"))
 	})
 	api.POST("/ai/direct-request", gin.WrapF(handler.PrepareDirectAIRequest))
+	anonymousFiles := api.Group("/anonymous/files", middleware.AnonymousStorage)
+	anonymousFiles.POST("/session", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	anonymousFiles.POST("", gin.WrapF(handler.UploadFile))
+	anonymousFiles.DELETE("/:id", func(c *gin.Context) {
+		handler.DeleteFile(c.Writer, c.Request, c.Param("id"))
+	})
 	v1 := api.Group("/v1", middleware.UserAuth)
 	v1.POST("/images/generations", gin.WrapF(handler.AIImagesGenerations))
 	v1.POST("/images/edits", gin.WrapF(handler.AIImagesEdits))

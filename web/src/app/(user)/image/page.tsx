@@ -737,7 +737,25 @@ export default function ImagePage() {
         });
     };
 
+    const persistLoggedOutLogImages = async (log: GenerationLog): Promise<GenerationLog> => {
+        const images = log.images || [];
+        if (!images.some((image) => !image.storageKey && image.dataUrl?.startsWith("data:image/"))) return log;
+        const persistedImages = await Promise.all(
+            images.map(async (image) => {
+                if (image.storageKey || !image.dataUrl?.startsWith("data:image/")) return image;
+                try {
+                    const stored = await uploadImage(image.dataUrl);
+                    return { ...image, dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width || image.width, height: stored.height || image.height, bytes: stored.bytes || image.bytes, mimeType: stored.mimeType || image.mimeType };
+                } catch {
+                    return image;
+                }
+            }),
+        );
+        return { ...log, images: persistedImages };
+    };
+
     const saveLog = async (log: GenerationLog) => {
+        const persistedLog = token ? log : await persistLoggedOutLogImages(log);
         const prevChain = saveLogChainRef.current;
         const nextChain = (async () => {
             try {
@@ -748,10 +766,10 @@ export default function ImagePage() {
             const storedLogs = await readStoredLogs();
             const keys = new Set(imageLogIdentityKeys(log));
             const duplicateLogs = storedLogs.filter((item) => item.id !== log.id && imageLogIdentityKeys(item).some((key) => keys.has(key)));
-            const nextLogs = dedupeGenerationLogs([log, ...storedLogs.filter((item) => item.id !== log.id)]);
+            const nextLogs = dedupeGenerationLogs([persistedLog, ...storedLogs.filter((item) => item.id !== log.id)]);
             setLogs(nextLogs);
             await Promise.all(duplicateLogs.map((item) => logStore.removeItem(item.id)));
-            await logStore.setItem(log.id, serializeLog(log));
+            await logStore.setItem(log.id, serializeLog(persistedLog));
             await persistImageHistory(nextLogs, categories);
         })();
         saveLogChainRef.current = nextChain;

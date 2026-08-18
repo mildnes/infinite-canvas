@@ -3,6 +3,7 @@
 import localforage from "localforage";
 import { nanoid } from "nanoid";
 
+import { deleteAnonymousStorageFile, uploadAnonymousStorageFile } from "@/services/anonymous-storage";
 import { apiGet } from "@/services/api/request";
 import { canUseGlobalStorage, getProxyUrl, loadUserStorageProvider, toProviderPayload, type StorageConfig } from "@/services/image-storage";
 import { useUserStore } from "@/stores/use-user-store";
@@ -60,7 +61,11 @@ async function uploadMediaBlobToServer(blob: Blob, filename: string): Promise<Up
     const userProvider = config?.allowUserProvider ? loadUserStorageProvider() : null;
     if (!config || (!canUseGlobalStorage(config) && !userProvider)) throw new Error("服务端对象存储未启用");
     const token = useUserStore.getState().token;
-    if (!token) throw new Error("请先登录后再同步媒体");
+    if (!token) {
+        if (!userProvider) throw new Error("请先登录后再同步媒体");
+        const uploaded = await uploadAnonymousStorageFile<UploadedFile>(blob, filename, toProviderPayload(userProvider));
+        return cacheAnonymousMedia(uploaded, blob);
+    }
     const formData = new FormData();
     formData.append("file", blob, filename);
     if (userProvider) formData.append("provider", JSON.stringify(toProviderPayload(userProvider)));
@@ -86,6 +91,14 @@ async function uploadMediaBlobToServer(blob: Blob, filename: string): Promise<Up
         mimeType: payload.data.mimeType || blob.type || "application/octet-stream",
         ...meta,
     };
+}
+
+async function cacheAnonymousMedia(uploaded: UploadedFile, blob: Blob) {
+    await store.setItem(uploaded.storageKey, blob);
+    const url = URL.createObjectURL(blob);
+    objectUrls.set(uploaded.storageKey, url);
+    const meta = blob.type.startsWith("video/") ? await readVideoMeta(url) : {};
+    return { ...uploaded, url, bytes: uploaded.bytes || blob.size, mimeType: uploaded.mimeType || blob.type || "application/octet-stream", ...meta };
 }
 
 async function loadStorageConfig() {
@@ -135,8 +148,16 @@ async function deleteServerMedia(storageKey: string) {
     const id = storageKey.slice("server:".length);
     if (!id) return;
     const token = useUserStore.getState().token;
-    if (!token) return;
     const provider = loadUserStorageProvider();
+    if (!token) {
+        if (!provider) return;
+        await deleteAnonymousStorageFile(id, toProviderPayload(provider));
+        const url = objectUrls.get(storageKey);
+        if (url) URL.revokeObjectURL(url);
+        objectUrls.delete(storageKey);
+        await store.removeItem(storageKey);
+        return;
+    }
     const response = await fetch(`/api/v1/files/${encodeURIComponent(id)}`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },

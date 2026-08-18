@@ -95,7 +95,7 @@ export function AppConfigModal() {
     const effectiveMode = canUseRemoteChannel ? (allowCustomChannel ? config.channelMode : "remote") : "local";
     const localModelConfig: AiConfig = effectiveMode === "local" && config.channelMode !== "local" ? { ...config, channelMode: "local" } : config;
     const modelConfig = effectiveMode === "remote" ? effectiveConfig : localModelConfig;
-    const canUseUserStorageProvider = isLoggedIn && allowUserStorageProvider;
+    const canUseUserStorageProvider = allowUserStorageProvider;
     const glmTts = isGlmTtsModel(config.audioModel);
 
     useEffect(() => {

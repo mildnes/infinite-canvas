@@ -4,6 +4,7 @@ import localforage from "localforage";
 
 import { nanoid } from "nanoid";
 import { readImageMeta } from "@/lib/image-utils";
+import { deleteAnonymousStorageFile, uploadAnonymousStorageFile } from "@/services/anonymous-storage";
 import { apiGet } from "@/services/api/request";
 import { useUserStore } from "@/stores/use-user-store";
 
@@ -148,66 +149,31 @@ export async function uploadImage(input: string | Blob, options: UploadImageOpti
     return { url: urlObj, storageKey, width: meta.width, height: meta.height, bytes: blob.size, mimeType: blob.type || meta.mimeType };
 }
 
-function browserSafeFileUrl(storageKey?: string, fallbackUrl = "") {
-    const key = String(storageKey || "").trim();
-    if (key.startsWith("server:")) {
-        const id = key.slice("server:".length);
-        if (id) return `/api/files/${encodeURIComponent(id)}/content`;
-    }
-    const url = String(fallbackUrl || "").trim();
-    // Prefer same-origin API content for display. Private WebDAV/S3 publicBaseUrl often 401 in <img>.
-    if (url.startsWith("/api/files/") && url.includes("/content")) return url;
-    if (key.startsWith("server:")) {
-        const id = key.slice("server:".length);
-        if (id) return `/api/files/${encodeURIComponent(id)}/content`;
-    }
-    return url;
-}
-
-async function finalizeUploadedImage(data: UploadedImage, blob: Blob): Promise<UploadedImage> {
-    const storageKey = data.storageKey || "";
-    const stableUrl = browserSafeFileUrl(storageKey, data.url);
-    let preview = stableUrl;
-    if (storageKey.startsWith("server:")) {
-        serverUrls.set(storageKey.slice("server:".length), stableUrl);
-        // Keep a local cache so the node can render immediately even if remote fetch fails.
-        preview = await setImageBlob(storageKey, blob).catch(() => stableUrl);
-    }
-    const meta = await readImageMeta(preview.startsWith("blob:") || preview.startsWith("data:") ? preview : await blobToDataUrl(blob));
-    return {
-        ...data,
-        // Prefer local blob preview after upload; hydrate will still resolve server content later.
-        url: preview || stableUrl,
-        storageKey,
-        width: data.width || meta.width,
-        height: data.height || meta.height,
-        mimeType: data.mimeType || blob.type || meta.mimeType || "image/png",
-        bytes: data.bytes || blob.size,
-    };
-}
-
 export async function uploadRemoteImageToServer(url: string, filename: string): Promise<UploadedImage> {
-    const source = String(url || "").trim();
-    if (!source) throw new Error("图片地址为空");
-    const response = await fetch(source.startsWith("blob:") || source.startsWith("data:") ? source : getProxyUrl(source));
+    const response = await fetch(getProxyUrl(url));
     if (!response.ok) {
         const payload = await response.json().catch(() => null) as { msg?: string } | null;
         throw new Error(payload?.msg || "代理图片拉取失败：" + response.status);
     }
     const blob = await response.blob();
-    if (!blob || blob.size <= 0) throw new Error("读取图片失败：文件为空");
     const config = await loadStorageConfig();
     const userProvider = config.allowUserProvider ? loadUserStorageProvider() : null;
     if (!canUseGlobalStorage(config) && !userProvider) throw new Error("服务端对象存储未启用");
     const token = useUserStore.getState().token;
-    if (!token) throw new Error("服务端存储需要先登录");
+    if (!token) {
+        if (!userProvider) throw new Error("服务端存储需要先登录");
+        const uploaded = await uploadAnonymousStorageFile<UploadedImage>(blob, filename || "image-" + nanoid() + "." + imageExtension(blob.type), toProviderPayload(userProvider));
+        return cacheAnonymousImage(uploaded, blob);
+    }
     const formData = new FormData();
     formData.append("file", blob, filename || "image-" + nanoid() + "." + imageExtension(blob.type));
     if (userProvider) formData.append("provider", JSON.stringify(toProviderPayload(userProvider)));
     const uploadResponse = await fetch("/api/v1/files", { method: "POST", headers: { Authorization: "Bearer " + token }, body: formData });
     const payload = (await uploadResponse.json().catch(() => null)) as { code?: number; msg?: string; data?: UploadedImage } | null;
     if (!uploadResponse.ok || payload?.code !== 0 || !payload.data) throw new Error(payload?.msg || "服务端图片上传失败");
-    return finalizeUploadedImage(payload.data, blob);
+    const meta = await readImageMeta(payload.data.url);
+    if (payload.data.storageKey?.startsWith("server:")) serverUrls.set(payload.data.storageKey.slice("server:".length), payload.data.url);
+    return { ...payload.data, width: payload.data.width || meta.width, height: payload.data.height || meta.height, mimeType: payload.data.mimeType || blob.type || "image/png", bytes: payload.data.bytes || blob.size };
 }
 
 export function clearStorageConfigCache() {
@@ -218,27 +184,25 @@ export async function resolveImageUrl(storageKey?: string, fallback = "") {
     if (!storageKey) return fallback;
     if (storageKey.startsWith("server:")) {
         const id = storageKey.slice("server:".length);
-        const sameOrigin = `/api/files/${encodeURIComponent(id)}/content`;
-        // Local blob cache first for instant paint after upload.
-        const cached = objectUrls.get(storageKey);
-        if (cached) return cached;
-        const blob = await store.getItem<Blob>(storageKey).catch(() => null);
-        if (blob) {
-            const url = URL.createObjectURL(blob);
-            objectUrls.set(storageKey, url);
-            return url;
-        }
-        // Prefer same-origin content API. Private WebDAV publicBaseUrl often cannot be used by <img>.
-        if (fallback && fallback.startsWith("/api/files/") && fallback.includes("/content")) return fallback;
+        if (fallback && !fallback.startsWith("blob:")) return fallback;
+        const localUrl = await resolveLocalImageUrl(storageKey).catch(() => "");
+        if (localUrl) return localUrl;
         const cachedUrl = serverUrls.get(id);
-        if (cachedUrl && cachedUrl.startsWith("/api/files/")) return cachedUrl;
-        serverUrls.set(id, sameOrigin);
-        return sameOrigin;
+        if (cachedUrl) return cachedUrl;
+        const info = await apiGet<{ publicUrl?: string }>(`/api/files/${encodeURIComponent(id)}`).catch(() => null);
+        if (!info) return fallback;
+        const url = info?.publicUrl || `/api/files/${encodeURIComponent(id)}/content`;
+        serverUrls.set(id, url);
+        return url;
     }
+    return await resolveLocalImageUrl(storageKey) || fallback;
+}
+
+async function resolveLocalImageUrl(storageKey: string) {
     const cached = objectUrls.get(storageKey);
     if (cached) return cached;
     const blob = await store.getItem<Blob>(storageKey);
-    if (!blob) return fallback;
+    if (!blob) return "";
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
     return url;
@@ -252,34 +216,38 @@ async function maybeUploadImageToServer(blob: Blob): Promise<UploadedImage | nul
     if (!config || !useServerStorage) return null;
     const token = useUserStore.getState().token;
     if (!token) {
-        // Keep canvas usable offline/local when cloud storage needs login.
-        if (canUseGlobalProvider) console.warn("服务端存储需要先登录，已改为本地保存");
-        return null;
+        if (!userProvider) {
+            if (canUseGlobalProvider) throw new Error("服务端存储需要先登录");
+            return null;
+        }
+        try {
+            const uploaded = await uploadAnonymousStorageFile<UploadedImage>(blob, `image-${nanoid()}.${imageExtension(blob.type)}`, toProviderPayload(userProvider));
+            return cacheAnonymousImage(uploaded, blob);
+        } catch {
+            return null;
+        }
     }
     const formData = new FormData();
     formData.append("file", blob, `image-${nanoid()}.${imageExtension(blob.type)}`);
     if (userProvider) formData.append("provider", JSON.stringify(toProviderPayload(userProvider)));
-    try {
-        const response = await fetch("/api/v1/files", { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: formData });
-        const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string; data?: UploadedImage } | null;
-        if (!response.ok || payload?.code !== 0 || !payload.data) {
-            const detail = payload?.msg || `服务端图片上传失败（${response.status}）`;
-            // Cloud failure should not block canvas upload; fall back to local IndexedDB.
-            console.warn("cloud image upload failed, fallback to local:", detail);
-            if (typeof window !== "undefined") {
-                window.dispatchEvent(new CustomEvent("infinite-canvas:storage-upload-fallback", { detail: { message: detail } }));
-            }
-            return null;
-        }
-        return finalizeUploadedImage(payload.data, blob);
-    } catch (error) {
-        const detail = error instanceof Error ? error.message : "服务端图片上传失败";
-        console.warn("cloud image upload failed, fallback to local:", detail);
-        if (typeof window !== "undefined") {
-            window.dispatchEvent(new CustomEvent("infinite-canvas:storage-upload-fallback", { detail: { message: detail } }));
-        }
-        return null;
+    const response = await fetch("/api/v1/files", { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: formData });
+    const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string; data?: UploadedImage } | null;
+    if (!response.ok || payload?.code !== 0 || !payload.data) {
+        if (!canUseGlobalProvider) return null;
+        throw new Error(payload?.msg || "服务端图片上传失败");
     }
+    const meta = await readImageMeta(payload.data.url);
+    if (payload.data.storageKey?.startsWith("server:")) serverUrls.set(payload.data.storageKey.slice("server:".length), payload.data.url);
+    return { ...payload.data, width: payload.data.width || meta.width, height: payload.data.height || meta.height, mimeType: payload.data.mimeType || blob.type || "image/png", bytes: payload.data.bytes || blob.size };
+}
+
+async function cacheAnonymousImage(uploaded: UploadedImage, blob: Blob) {
+    await store.setItem(uploaded.storageKey, blob);
+    const url = URL.createObjectURL(blob);
+    objectUrls.set(uploaded.storageKey, url);
+    if (uploaded.storageKey.startsWith("server:")) serverUrls.set(uploaded.storageKey.slice("server:".length), uploaded.url);
+    const meta = await readImageMeta(url);
+    return { ...uploaded, url, width: uploaded.width || meta.width, height: uploaded.height || meta.height, mimeType: uploaded.mimeType || blob.type || meta.mimeType, bytes: uploaded.bytes || blob.size };
 }
 
 export async function loadStorageConfig() {
@@ -306,9 +274,14 @@ export async function setImageBlob(storageKey: string, blob: Blob) {
 
 export async function imageToDataUrl(image: { url?: string; dataUrl?: string; storageKey?: string }) {
     const serverObjectId = image.storageKey?.startsWith("server:") ? image.storageKey.slice("server:".length) : "";
+    const hasPersistedUrl = [image.dataUrl, image.url].some((url) => Boolean(url && !url.startsWith("blob:")));
+    const localUrl = !useUserStore.getState().token && serverObjectId && image.storageKey && !hasPersistedUrl
+        ? await resolveLocalImageUrl(image.storageKey).catch(() => "")
+        : "";
     const urls = [
         image.dataUrl && !image.dataUrl.startsWith("blob:") ? image.dataUrl : "",
         image.url && !image.url.startsWith("blob:") ? image.url : "",
+        localUrl,
         serverObjectId ? `/api/files/${encodeURIComponent(serverObjectId)}/content` : "",
         !serverObjectId ? await resolveImageUrl(image.storageKey, image.url || image.dataUrl || "") : "",
     ].filter((url, index, list): url is string => Boolean(url) && list.indexOf(url) === index);
@@ -476,8 +449,16 @@ async function deleteServerImage(storageKey: string) {
     if (!id) return;
     const token = useUserStore.getState().token;
     serverUrls.delete(id);
-    if (!token) return;
     const provider = loadUserStorageProvider();
+    if (!token) {
+        if (!provider) return;
+        await deleteAnonymousStorageFile(id, toProviderPayload(provider));
+        const url = objectUrls.get(storageKey);
+        if (url) URL.revokeObjectURL(url);
+        objectUrls.delete(storageKey);
+        await store.removeItem(storageKey);
+        return;
+    }
     const response = await fetch(`/api/v1/files/${encodeURIComponent(id)}`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
