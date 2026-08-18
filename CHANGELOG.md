@@ -2,6 +2,7 @@
 
 ## Unreleased
 
++ [修复] 画板上传图片在对象存储失败时回退本地，并透出 WebDAV/S3 真实错误
 + [优化] Agent 不再因画布选中节点自动显示附件图，仅 @ 明确引用时带入
 + [新增] 画布 Agent 支持后台 Skill 与 MCP 工具：Skill 追加工作流提示，MCP 通过后端 JSON-RPC 代理调用，管理端可配置服务与工具白名单
 + [新增] 管理后台新增画布 Agent 扩展配置：Skill 工作流列表、MCP 服务/API Key/工具定义，支持读取 MCP tools/list

@@ -252,19 +252,34 @@ async function maybeUploadImageToServer(blob: Blob): Promise<UploadedImage | nul
     if (!config || !useServerStorage) return null;
     const token = useUserStore.getState().token;
     if (!token) {
-        if (canUseGlobalProvider) throw new Error("服务端存储需要先登录");
+        // Keep canvas usable offline/local when cloud storage needs login.
+        if (canUseGlobalProvider) console.warn("服务端存储需要先登录，已改为本地保存");
         return null;
     }
     const formData = new FormData();
     formData.append("file", blob, `image-${nanoid()}.${imageExtension(blob.type)}`);
     if (userProvider) formData.append("provider", JSON.stringify(toProviderPayload(userProvider)));
-    const response = await fetch("/api/v1/files", { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: formData });
-    const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string; data?: UploadedImage } | null;
-    if (!response.ok || payload?.code !== 0 || !payload.data) {
-        if (!canUseGlobalProvider) return null;
-        throw new Error(payload?.msg || "服务端图片上传失败");
+    try {
+        const response = await fetch("/api/v1/files", { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: formData });
+        const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string; data?: UploadedImage } | null;
+        if (!response.ok || payload?.code !== 0 || !payload.data) {
+            const detail = payload?.msg || `服务端图片上传失败（${response.status}）`;
+            // Cloud failure should not block canvas upload; fall back to local IndexedDB.
+            console.warn("cloud image upload failed, fallback to local:", detail);
+            if (typeof window !== "undefined") {
+                window.dispatchEvent(new CustomEvent("infinite-canvas:storage-upload-fallback", { detail: { message: detail } }));
+            }
+            return null;
+        }
+        return finalizeUploadedImage(payload.data, blob);
+    } catch (error) {
+        const detail = error instanceof Error ? error.message : "服务端图片上传失败";
+        console.warn("cloud image upload failed, fallback to local:", detail);
+        if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent("infinite-canvas:storage-upload-fallback", { detail: { message: detail } }));
+        }
+        return null;
     }
-    return finalizeUploadedImage(payload.data, blob);
 }
 
 export async function loadStorageConfig() {

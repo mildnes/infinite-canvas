@@ -210,7 +210,7 @@ func UploadStorageObjectWithProvider(ctx context.Context, filename string, conte
 	objectKey := strings.Trim(strings.Trim(provider.PathPrefix, "/")+"/"+userID+"/"+nowTime.Format("2006/01/02")+"/"+objectID+ext, "/")
 	sum := sha256.Sum256(data)
 	if err := putStorageObject(provider, objectKey, contentType, data); err != nil {
-		return UploadedStorageObject{}, err
+		return UploadedStorageObject{}, storageUploadError(provider, err)
 	}
 	publicURL := objectURL(provider, objectKey)
 	object := model.StorageObject{
@@ -218,7 +218,7 @@ func UploadStorageObjectWithProvider(ctx context.Context, filename string, conte
 		MimeType: contentType, Bytes: int64(len(data)), SHA256: hex.EncodeToString(sum[:]), CreatedBy: userID, CreatedAt: now(),
 	}
 	if _, err := repository.SaveStorageObject(object); err != nil {
-		return UploadedStorageObject{}, err
+		return UploadedStorageObject{}, safeMessageError{message: "保存上传记录失败，请检查数据库"}
 	}
 	// Always expose same-origin content URL to browsers. PublicBaseURL may point at
 	// private WebDAV/S3 endpoints that <img>/<video> cannot authenticate against.
@@ -506,6 +506,31 @@ func storageProviderConfigured(provider model.StorageProvider) bool {
 		return provider.Username != "" && provider.Password != ""
 	default:
 		return false
+	}
+}
+
+func storageUploadError(provider model.StorageProvider, err error) error {
+	if err == nil {
+		return nil
+	}
+	if safe, ok := err.(interface{ SafeMessage() string }); ok {
+		return safeMessageError{message: safe.SafeMessage()}
+	}
+	name := strings.TrimSpace(provider.Name)
+	if name == "" {
+		name = provider.Type
+	}
+	msg := strings.TrimSpace(err.Error())
+	if msg == "" {
+		msg = "未知错误"
+	}
+	switch provider.Type {
+	case model.StorageProviderTypeWebDAV:
+		return safeMessageError{message: "WebDAV 上传失败（" + name + "）：" + msg}
+	case model.StorageProviderTypeS3:
+		return safeMessageError{message: "对象存储上传失败（" + name + "）：" + msg}
+	default:
+		return safeMessageError{message: "文件上传失败（" + name + "）：" + msg}
 	}
 }
 
