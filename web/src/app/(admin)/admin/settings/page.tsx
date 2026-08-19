@@ -1,29 +1,14 @@
 "use client";
 
-import { CheckCircleOutlined, DeleteOutlined, FormatPainterOutlined, GithubOutlined, LoadingOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
+import { CheckCircleOutlined, DeleteOutlined, FormatPainterOutlined, LoadingOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import { json } from "@codemirror/lang-json";
 import { App, Button, Card, Checkbox, Col, Drawer, Flex, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from "antd";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { EditorView } from "@uiw/react-codemirror";
 
-import {
-    fetchAdminSettings,
-    fetchChannelModels,
-    fetchMCPServerTools,
-    installRemoteAgentSkill,
-    measureAdminStorageProvider,
-    saveAdminSettings,
-    testChannelModel,
-    type AdminAgentSkill,
-    type AdminMCPServer,
-    type AdminMCPTool,
-    type AdminModelChannel,
-    type AdminModelCost,
-    type AdminPrivateSettings,
-    type AdminSettings,
-    type AdminStorageProvider,
-} from "@/services/api/admin";
+import { modelChannelDefaultBaseUrls } from "@/lib/model-channel";
+import { fetchAdminSettings, fetchChannelModels, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider } from "@/services/api/admin";
 import { useUserStore } from "@/stores/use-user-store";
 
 const CodeMirror = dynamic(() => import("@uiw/react-codemirror"), { ssr: false });
@@ -57,41 +42,12 @@ const emptySettings: AdminSettings = {
         },
         auth: { allowRegister: true, linuxDo: { enabled: false } },
         storage: { mode: "local_indexeddb", allowUserProvider: false },
-        agent: { skills: [], mcpServers: [] },
     },
-    private: {
-        channels: [],
-        agent: { skills: [], mcpServers: [] },
-        promptSync: { enabled: true, cron: "0 0 * * *" },
-        aiLog: { localDirectReportEnabled: false, cleanup: { enabled: false, retentionDays: 14, cron: "0 3 * * *" } },
-        auth: { linuxDo: { clientId: "", clientSecret: "" } },
-        storage: { mode: "local_indexeddb", allowUserProvider: false, allowUserGlobalProvider: true, providers: [], roundRobinCursor: 0, capacityCheck: { enabled: false, cron: "0 */6 * * *" }, capacityLimitBytes: 9 * 1024 * 1024 * 1024 },
-    },
+    private: { channels: [], promptSync: { enabled: true, cron: "0 0 * * *" }, aiLog: { localDirectReportEnabled: false, cleanup: { enabled: false, retentionDays: 14, cron: "0 3 * * *" } }, auth: { linuxDo: { clientId: "", clientSecret: "" } }, storage: { mode: "local_indexeddb", allowUserProvider: false, allowUserGlobalProvider: true, providers: [], roundRobinCursor: 0, capacityCheck: { enabled: false, cron: "0 */6 * * *" }, capacityLimitBytes: 9 * 1024 * 1024 * 1024 } },
 };
-const emptyChannel: AdminModelChannel = { id: "", protocol: "openai", name: "", baseUrl: "", apiKey: "", models: [], weight: 1, timeout: 600, enabled: true, remark: "" };
-const emptyS3StorageProvider: AdminStorageProvider = {
-    id: "",
-    name: "",
-    type: "s3",
-    endpoint: "",
-    region: "auto",
-    bucket: "",
-    accessKeyId: "",
-    secretAccessKey: "",
-    publicBaseUrl: "",
-    pathPrefix: "canvas",
-    username: "",
-    password: "",
-    weight: 1,
-    enabled: true,
-    ownerUserId: "",
-    capacityBytes: 0,
-    capacityCheckedAt: "",
-    capacityExceeded: false,
-};
+const emptyChannel: AdminModelChannel = { id: "", protocol: "openai", name: "", baseUrl: modelChannelDefaultBaseUrls.openai, apiKey: "", models: [], weight: 1, timeout: 600, enabled: true, remark: "" };
+const emptyS3StorageProvider: AdminStorageProvider = { id: "", name: "", type: "s3", endpoint: "", region: "auto", bucket: "", accessKeyId: "", secretAccessKey: "", publicBaseUrl: "", pathPrefix: "canvas", username: "", password: "", weight: 1, enabled: true, ownerUserId: "", capacityBytes: 0, capacityCheckedAt: "", capacityExceeded: false };
 const emptyWebDAVStorageProvider: AdminStorageProvider = { ...emptyS3StorageProvider, name: "", type: "webdav", region: "" };
-const emptyAgentSkill: AdminAgentSkill = { id: "", name: "", description: "", prompt: "", enabled: true, source: "admin" };
-const emptyMCPServer: AdminMCPServer = { id: "", name: "", endpoint: "", apiKey: "", transport: "streamable_http", command: "", args: [], env: {}, workingDirectory: "", description: "", tools: [], enabled: true, allowUsers: true };
 
 type SettingsTabKey = "public" | "private";
 type EditorMode = "visual" | "json";
@@ -123,17 +79,11 @@ export default function AdminSettingsPage() {
     const [isFetchingChannelModels, setIsFetchingChannelModels] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
-    const [fetchingMCPToolsIndex, setFetchingMCPToolsIndex] = useState<number | null>(null);
-    const [isSkillInstallOpen, setIsSkillInstallOpen] = useState(false);
-    const [isInstallingSkill, setIsInstallingSkill] = useState(false);
-    const [skillInstallForm] = Form.useForm<{ repository: string; ref?: string; path?: string; name?: string }>();
     const [measuringProviderIndex, setMeasuringProviderIndex] = useState<number | null>(null);
     const [modelCosts, setModelCosts] = useState<AdminModelCost[]>([]);
     const [knownModels, setKnownModels] = useState<string[]>([]);
     const publicModels = Form.useWatch(["public", "modelChannel", "availableModels"], form) || [];
     const storageProviders = Form.useWatch(["private", "storage", "providers"], form) || [];
-    const agentSkills = Form.useWatch(["private", "agent", "skills"], form) || [];
-    const agentMCPServers = Form.useWatch(["private", "agent", "mcpServers"], form) || [];
     const channelModels = useMemo(() => collectChannelModels(channels), [channels]);
     const channelTableData = useMemo(() => channels.map((channel, index) => ({ ...channel, _index: index, _rowKey: `${index}-${channel.name}-${channel.baseUrl}` })), [channels]);
     const activeMode = editorMode[activeTab];
@@ -151,7 +101,7 @@ export default function AdminSettingsPage() {
         setIsLoading(true);
         try {
             const data = normalizeSettings(await fetchAdminSettings(token));
-            form.setFieldsValue(withAgentVisualSettings(data));
+            form.setFieldsValue(data);
             setChannels(data.private.channels);
             setModelCosts(data.public.modelChannel.modelCosts);
             setKnownModels(collectKnownModels(data));
@@ -184,7 +134,7 @@ export default function AdminSettingsPage() {
         try {
             const saved = normalizeSettings(await saveAdminSettings(token, values));
             const merged = mergeChannelApiKeys(values.private.channels, saved);
-            form.setFieldsValue(withAgentVisualSettings(merged));
+            form.setFieldsValue(merged);
             setChannels(merged.private.channels);
             setModelCosts(merged.public.modelChannel.modelCosts);
             rememberKnownModels(merged);
@@ -214,12 +164,8 @@ export default function AdminSettingsPage() {
             message.error("JSON 格式不正确");
             return;
         }
-        if (tab === "private") {
-            form.setFieldsValue({ private: withAgentVisualPrivate(parsed as AdminSettings["private"]) } as Partial<AdminSettings>);
-            setChannels((parsed as AdminSettings["private"]).channels);
-        } else {
-            form.setFieldsValue({ [tab]: parsed } as Partial<AdminSettings>);
-        }
+        form.setFieldsValue({ [tab]: parsed } as Partial<AdminSettings>);
+        if (tab === "private") setChannels((parsed as AdminSettings["private"]).channels);
         if (tab === "public") setModelCosts((parsed as AdminSettings["public"]).modelChannel.modelCosts);
         rememberKnownModels({ ...normalizeSettings(form.getFieldsValue(true) as AdminSettings), [tab]: parsed });
         setEditorMode((current) => ({ ...current, [tab]: nextMode }));
@@ -412,54 +358,12 @@ export default function AdminSettingsPage() {
         setChannels(merged.private.channels);
         setModelCosts(merged.public.modelChannel.modelCosts);
         rememberKnownModels(merged);
-        form.setFieldsValue(withAgentVisualSettings(merged));
+        form.setFieldsValue(merged);
         setJsonText({
             public: JSON.stringify(merged.public, null, 2),
             private: JSON.stringify(merged.private, null, 2),
         });
         message.success("已保存");
-    }
-
-    async function loadMCPToolsAt(index: number) {
-        if (!token) return;
-        const server = form.getFieldValue(["private", "agent", "mcpServers", index]) as AdminMCPServer | undefined;
-        if (!server?.endpoint?.trim()) {
-            message.warning("请先填写 MCP 服务地址");
-            return;
-        }
-        setFetchingMCPToolsIndex(index);
-        try {
-            const tools = await fetchMCPServerTools(token, { server });
-            form.setFieldValue(["private", "agent", "mcpServers", index, "tools"], tools);
-            form.setFieldValue(["private", "agent", "mcpServers", index, "toolsJson"], JSON.stringify(tools, null, 2));
-            message.success(`已读取 ${tools.length} 个 MCP 工具`);
-        } catch (error) {
-            message.error(error instanceof Error ? error.message : "读取 MCP 工具失败");
-        } finally {
-            setFetchingMCPToolsIndex(null);
-        }
-    }
-
-    async function installSkillFromGitHub() {
-        if (!token) return;
-        const values = await skillInstallForm.validateFields();
-        setIsInstallingSkill(true);
-        try {
-            await installRemoteAgentSkill(token, values);
-            const next = normalizeSettings(await fetchAdminSettings(token));
-            form.setFieldsValue(withAgentVisualSettings(next));
-            setChannels(next.private.channels);
-            setModelCosts(next.public.modelChannel.modelCosts);
-            rememberKnownModels(next);
-            setJsonText({ public: JSON.stringify(next.public, null, 2), private: JSON.stringify(next.private, null, 2) });
-            skillInstallForm.resetFields();
-            setIsSkillInstallOpen(false);
-            message.success("GitHub Skill 已安装");
-        } catch (error) {
-            message.error(error instanceof Error ? error.message : "安装 GitHub Skill 失败");
-        } finally {
-            setIsInstallingSkill(false);
-        }
     }
 
     async function measureStorageProviderAt(index: number) {
@@ -469,7 +373,7 @@ export default function AdminSettingsPage() {
         try {
             const result = await measureAdminStorageProvider(token, { index, provider });
             const next = normalizeSettings(await fetchAdminSettings(token));
-            form.setFieldsValue(withAgentVisualSettings(next));
+            form.setFieldsValue(next);
             setJsonText({ public: JSON.stringify(next.public, null, 2), private: JSON.stringify(next.private, null, 2) });
             message.success(`容量统计完成：${formatStorageBytes(result.bytes)}${result.overLimit ? "，已达到上限并禁用" : ""}`);
         } catch (error) {
@@ -724,183 +628,6 @@ export default function AdminSettingsPage() {
                                         </Col>
                                     </Row>
                                 </Card>
-                                <Card size="small" title="画布 Agent 扩展">
-                                    <Flex vertical gap={16}>
-                                        <Typography.Text type="secondary">启用的 Skill 会追加到画布 Agent 的工作流提示词；MCP 工具由后端代理调用，API Key 不会下发给前端。</Typography.Text>
-                                        <Form.List name={["private", "agent", "skills"]}>
-                                            {(fields, { add, remove }) => (
-                                                <Flex vertical gap={10}>
-                                                    <Flex justify="space-between" align="center">
-                                                        <Typography.Title level={5} style={{ margin: 0 }}>
-                                                            Skill 工作流
-                                                        </Typography.Title>
-                                                        <Button icon={<PlusOutlined />} onClick={() => add(emptyAgentSkill)}>
-                                                            新增 Skill
-                                                        </Button>
-                                                        <Button icon={<GithubOutlined />} onClick={() => setIsSkillInstallOpen(true)}>
-                                                            从 GitHub 安装
-                                                        </Button>
-                                                    </Flex>
-                                                    {fields.map((field) => (
-                                                        <Card key={field.key} size="small" title={`Skill ${field.name + 1}`} extra={<Button danger size="small" icon={<DeleteOutlined />} onClick={() => remove(field.name)} />}>
-                                                            <Form.Item name={[field.name, "id"]} hidden>
-                                                                <Input />
-                                                            </Form.Item>
-                                                            <Form.Item name={[field.name, "source"]} hidden>
-                                                                <Input />
-                                                            </Form.Item>
-                                                            <Form.Item name={[field.name, "repository"]} hidden>
-                                                                <Input />
-                                                            </Form.Item>
-                                                            <Form.Item name={[field.name, "ref"]} hidden>
-                                                                <Input />
-                                                            </Form.Item>
-                                                            <Form.Item name={[field.name, "path"]} hidden>
-                                                                <Input />
-                                                            </Form.Item>
-                                                            <Form.Item name={[field.name, "installedAt"]} hidden>
-                                                                <Input />
-                                                            </Form.Item>
-                                                            <Row gutter={12}>
-                                                                <Col xs={24} md={8}>
-                                                                    <Form.Item name={[field.name, "name"]} label="名称">
-                                                                        <Input placeholder="例如：短视频分镜工作流" />
-                                                                    </Form.Item>
-                                                                </Col>
-                                                                <Col xs={24} md={12}>
-                                                                    <Form.Item name={[field.name, "description"]} label="说明">
-                                                                        <Input />
-                                                                    </Form.Item>
-                                                                </Col>
-                                                                <Col xs={24} md={4}>
-                                                                    <Form.Item name={[field.name, "enabled"]} label="启用" valuePropName="checked">
-                                                                        <Switch />
-                                                                    </Form.Item>
-                                                                </Col>
-                                                                <Col span={24}>
-                                                                    <Form.Item name={[field.name, "prompt"]} label="工作流提示词">
-                                                                        <Input.TextArea rows={5} placeholder="写入 Agent 必须遵循的工作流步骤和约束" />
-                                                                    </Form.Item>
-                                                                </Col>
-                                                                <Col span={24}>
-                                                                    <Typography.Text type="secondary">
-                                                                        来源：
-                                                                        {agentSkills[field.name]?.source === "github"
-                                                                            ? `${agentSkills[field.name]?.repository || "GitHub"}${agentSkills[field.name]?.path ? `/${agentSkills[field.name]?.path}` : ""}`
-                                                                            : "后台手动配置"}
-                                                                    </Typography.Text>
-                                                                </Col>
-                                                            </Row>
-                                                        </Card>
-                                                    ))}
-                                                </Flex>
-                                            )}
-                                        </Form.List>
-                                        <Form.List name={["private", "agent", "mcpServers"]}>
-                                            {(fields, { add, remove }) => (
-                                                <Flex vertical gap={10}>
-                                                    <Flex justify="space-between" align="center">
-                                                        <Typography.Title level={5} style={{ margin: 0 }}>
-                                                            MCP 服务
-                                                        </Typography.Title>
-                                                        <Button icon={<PlusOutlined />} onClick={() => add(emptyMCPServer)}>
-                                                            新增 MCP 服务
-                                                        </Button>
-                                                    </Flex>
-                                                    {fields.map((field) => (
-                                                        <Card key={field.key} size="small" title={`MCP ${field.name + 1}`} extra={<Button danger size="small" icon={<DeleteOutlined />} onClick={() => remove(field.name)} />}>
-                                                            <Form.Item name={[field.name, "id"]} hidden>
-                                                                <Input />
-                                                            </Form.Item>
-                                                            <Row gutter={12}>
-                                                                <Col xs={24} md={6}>
-                                                                    <Form.Item name={[field.name, "name"]} label="名称">
-                                                                        <Input placeholder="视频生成 MCP" />
-                                                                    </Form.Item>
-                                                                </Col>
-                                                                <Col xs={24} md={5}>
-                                                                    <Form.Item name={[field.name, "transport"]} label="传输方式">
-                                                                        <Select
-                                                                            options={[
-                                                                                { label: "Streamable HTTP", value: "streamable_http" },
-                                                                                { label: "stdio 本地进程", value: "stdio" },
-                                                                            ]}
-                                                                        />
-                                                                    </Form.Item>
-                                                                </Col>
-                                                                <Col xs={24} md={4}>
-                                                                    <Form.Item name={[field.name, "enabled"]} label="启用" valuePropName="checked">
-                                                                        <Switch />
-                                                                    </Form.Item>
-                                                                </Col>
-                                                                <Col xs={24} md={4}>
-                                                                    <Form.Item name={[field.name, "allowUsers"]} label="允许普通用户" valuePropName="checked">
-                                                                        <Switch />
-                                                                    </Form.Item>
-                                                                </Col>
-                                                                <Col xs={24} md={4}>
-                                                                    <Form.Item label="工具数">
-                                                                        <Typography.Text>{Array.isArray(agentMCPServers[field.name]?.tools) ? agentMCPServers[field.name]?.tools?.length : 0}</Typography.Text>
-                                                                    </Form.Item>
-                                                                </Col>
-                                                                {agentMCPServers[field.name]?.transport === "stdio" ? (
-                                                                    <>
-                                                                        <Col xs={24} md={12}>
-                                                                            <Form.Item name={[field.name, "command"]} label="Command">
-                                                                                <Input placeholder="例如：video-mcp" />
-                                                                            </Form.Item>
-                                                                        </Col>
-                                                                        <Col xs={24} md={12}>
-                                                                            <Form.Item name={[field.name, "workingDirectory"]} label="工作目录">
-                                                                                <Input placeholder="可选，默认后端工作目录" />
-                                                                            </Form.Item>
-                                                                        </Col>
-                                                                        <Col span={24}>
-                                                                            <Form.Item name={[field.name, "argsText"]} label="Args" extra="每行一个参数">
-                                                                                <Input.TextArea rows={3} placeholder={"--port\n3000"} />
-                                                                            </Form.Item>
-                                                                        </Col>
-                                                                        <Col span={24}>
-                                                                            <Form.Item name={[field.name, "envJson"]} label="Env JSON" extra='例如：{"API_KEY":"..."}'>
-                                                                                <Input.TextArea rows={3} placeholder='{"API_KEY":"..."}' />
-                                                                            </Form.Item>
-                                                                        </Col>
-                                                                    </>
-                                                                ) : (
-                                                                    <>
-                                                                        <Col xs={24} md={12}>
-                                                                            <Form.Item name={[field.name, "endpoint"]} label="HTTP Endpoint">
-                                                                                <Input placeholder="https://example.com/mcp" />
-                                                                            </Form.Item>
-                                                                        </Col>
-                                                                        <Col xs={24} md={12}>
-                                                                            <Form.Item name={[field.name, "apiKey"]} label="API Key" extra="留空表示沿用已保存的 Key">
-                                                                                <Input.Password placeholder="留空沿用已保存的 Key" />
-                                                                            </Form.Item>
-                                                                        </Col>
-                                                                    </>
-                                                                )}
-                                                                <Col span={24}>
-                                                                    <Form.Item name={[field.name, "description"]} label="说明">
-                                                                        <Input />
-                                                                    </Form.Item>
-                                                                </Col>
-                                                                <Col span={24}>
-                                                                    <Form.Item name={[field.name, "toolsJson"]} label="工具定义 JSON" extra="标准 MCP tools/list 返回的 tools 数组；也可以点击按钮自动读取">
-                                                                        <Input.TextArea rows={6} placeholder='[{"name":"generate_video","description":"生成视频","inputSchema":{"type":"object","properties":{}}}]' />
-                                                                    </Form.Item>
-                                                                    <Button loading={fetchingMCPToolsIndex === field.name} onClick={() => void loadMCPToolsAt(field.name)}>
-                                                                        读取工具列表
-                                                                    </Button>
-                                                                </Col>
-                                                            </Row>
-                                                        </Card>
-                                                    ))}
-                                                </Flex>
-                                            )}
-                                        </Form.List>
-                                    </Flex>
-                                </Card>
                                 <Card size="small" title="数据存储">
                                     <Row gutter={16}>
                                         <Col xs={24} md={8}>
@@ -1145,43 +872,6 @@ export default function AdminSettingsPage() {
                         </div>
                     )}
                 </Card>
-                <Modal
-                    title="从 GitHub 安装 Skill"
-                    open={isSkillInstallOpen}
-                    onCancel={() => {
-                        if (!isInstallingSkill) {
-                            skillInstallForm.resetFields();
-                            setIsSkillInstallOpen(false);
-                        }
-                    }}
-                    onOk={() => void installSkillFromGitHub()}
-                    okText="安装"
-                    cancelText="取消"
-                    confirmLoading={isInstallingSkill}
-                    destroyOnHidden
-                >
-                    <Form form={skillInstallForm} layout="vertical" requiredMark={false}>
-                        <Form.Item name="repository" label="GitHub 仓库或 SKILL.md 地址" rules={[{ required: true, message: "请输入 GitHub 地址" }]}>
-                            <Input placeholder="https://github.com/owner/repo 或 .../blob/main/SKILL.md" />
-                        </Form.Item>
-                        <Row gutter={12}>
-                            <Col span={12}>
-                                <Form.Item name="ref" label="分支/版本">
-                                    <Input placeholder="默认 main" />
-                                </Form.Item>
-                            </Col>
-                            <Col span={12}>
-                                <Form.Item name="path" label="Skill 文件路径">
-                                    <Input placeholder="默认 SKILL.md" />
-                                </Form.Item>
-                            </Col>
-                        </Row>
-                        <Form.Item name="name" label="显示名称" extra="留空时读取 SKILL.md front matter 的 name">
-                            <Input placeholder="可选" />
-                        </Form.Item>
-                        <Typography.Text type="secondary">只读取并保存 SKILL.md 文本，不执行 GitHub 仓库中的代码。</Typography.Text>
-                    </Form>
-                </Modal>
                 <Drawer
                     title={editingChannelIndex === null ? "新增渠道" : "编辑渠道"}
                     open={isChannelDrawerOpen}
@@ -1209,11 +899,14 @@ export default function AdminSettingsPage() {
                                     <Select
                                         options={[
                                             { label: "OpenAI", value: "openai" },
+                                            { label: "Grok2API", value: "grok2api" },
+                                            { label: "APIMart", value: "apimart" },
                                             { label: "KIE", value: "kie" },
                                             { label: "MiMo", value: "mimo" },
-                                            { label: "Grok2API", value: "grok2api" },
-                                            { label: "xAI", value: "xai" },
                                         ]}
+                                        onChange={(protocol: AdminModelChannel["protocol"]) => {
+                                            channelForm.setFieldValue("baseUrl", modelChannelDefaultBaseUrls[protocol]);
+                                        }}
                                     />
                                 </Form.Item>
                             </Col>
@@ -1441,10 +1134,6 @@ function normalizePublicSetting(setting: Partial<AdminSettings["public"]> = {}):
             mode: setting.storage?.mode || "local_indexeddb",
             allowUserProvider: setting.storage?.allowUserProvider === true,
         },
-        agent: {
-            skills: (setting.agent?.skills || []).map(normalizeAgentSkill),
-            mcpServers: (setting.agent?.mcpServers || []).map(normalizeMCPServer),
-        },
     };
 }
 
@@ -1455,10 +1144,6 @@ function normalizeModelCosts(items: Partial<AdminSettings["public"]["modelChanne
 function normalizePrivateSetting(setting: Partial<AdminSettings["private"]> = {}): AdminSettings["private"] {
     return {
         channels: (setting.channels || []).map(normalizeChannel),
-        agent: {
-            skills: (setting.agent?.skills || []).map(normalizeAgentSkill),
-            mcpServers: (setting.agent?.mcpServers || []).map(normalizeMCPServer),
-        },
         promptSync: {
             enabled: setting.promptSync?.enabled !== false,
             cron: setting.promptSync?.cron || "0 0 * * *",
@@ -1488,97 +1173,6 @@ function normalizePrivateSetting(setting: Partial<AdminSettings["private"]> = {}
                 cron: setting.storage?.capacityCheck?.cron || "0 */6 * * *",
             },
             capacityLimitBytes: Number(setting.storage?.capacityLimitBytes) || 9 * 1024 * 1024 * 1024,
-        },
-    };
-}
-
-function normalizeAgentSkill(item: Partial<AdminAgentSkill> = {}): AdminAgentSkill {
-    return {
-        ...emptyAgentSkill,
-        ...item,
-        id: item.id || "",
-        name: item.name || "",
-        description: item.description || "",
-        prompt: item.prompt || "",
-        enabled: item.enabled !== false,
-        source: item.source === "github" ? "github" : "admin",
-        repository: item.repository || "",
-        ref: item.ref || "",
-        path: item.path || "",
-        installedAt: item.installedAt || "",
-    };
-}
-
-function normalizeMCPServer(item: Partial<AdminMCPServer> = {}): AdminMCPServer {
-    const tools = typeof item.toolsJson === "string" && item.toolsJson.trim() ? parseMCPTools(item.toolsJson, item.tools || []) : (item.tools || []).map(normalizeMCPTool);
-    const args =
-        typeof item.argsText === "string"
-            ? item.argsText
-                  .split(/\r?\n/)
-                  .map((value) => value.trim())
-                  .filter(Boolean)
-            : item.args || [];
-    const env = typeof item.envJson === "string" && item.envJson.trim() ? parseMCPEnv(item.envJson, item.env || {}) : item.env || {};
-    const { toolsJson: _toolsJson, argsText: _argsText, envJson: _envJson, ...serverFields } = item;
-    return {
-        ...emptyMCPServer,
-        ...serverFields,
-        id: item.id || "",
-        name: item.name || "",
-        endpoint: item.endpoint || "",
-        apiKey: item.apiKey || "",
-        description: item.description || "",
-        tools,
-        transport: item.transport === "stdio" ? "stdio" : "streamable_http",
-        args,
-        env,
-        enabled: item.enabled !== false,
-        allowUsers: item.allowUsers !== false,
-    };
-}
-
-function parseMCPTools(value: string, fallback: Partial<AdminMCPTool>[] = []): AdminMCPTool[] {
-    try {
-        const parsed = JSON.parse(value);
-        return Array.isArray(parsed) ? parsed.map(normalizeMCPTool).filter((item) => item.name) : [];
-    } catch {
-        return fallback.map(normalizeMCPTool);
-    }
-}
-
-function parseMCPEnv(value: string, fallback: Record<string, string> = {}) {
-    try {
-        const parsed = JSON.parse(value);
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return fallback;
-        return Object.fromEntries(Object.entries(parsed).filter(([, item]) => typeof item === "string")) as Record<string, string>;
-    } catch {
-        return fallback;
-    }
-}
-
-function normalizeMCPTool(item: Partial<AdminMCPTool> = {}): AdminMCPTool {
-    return {
-        name: item.name || "",
-        description: item.description || "",
-        inputSchema: item.inputSchema && typeof item.inputSchema === "object" ? item.inputSchema : {},
-    };
-}
-
-function withAgentVisualSettings(settings: AdminSettings): AdminSettings {
-    return { ...settings, private: withAgentVisualPrivate(settings.private) };
-}
-
-function withAgentVisualPrivate(privateSetting: AdminPrivateSettings): AdminPrivateSettings {
-    return {
-        ...privateSetting,
-        agent: {
-            ...privateSetting.agent,
-            mcpServers: privateSetting.agent.mcpServers.map((server) => ({
-                ...server,
-                argsText: (server.args || []).join("\n"),
-                envJson: JSON.stringify(server.env || {}, null, 2),
-                toolsJson: JSON.stringify(server.tools || [], null, 2),
-            })),
         },
     };
 }

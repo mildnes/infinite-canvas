@@ -744,7 +744,7 @@ export default function ImagePage() {
             images.map(async (image) => {
                 if (image.storageKey || !image.dataUrl?.startsWith("data:image/")) return image;
                 try {
-                    const stored = await uploadImage(image.dataUrl);
+                    const stored = await uploadImage(image.dataUrl, { localOnly: true });
                     return { ...image, dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width || image.width, height: stored.height || image.height, bytes: stored.bytes || image.bytes, mimeType: stored.mimeType || image.mimeType };
                 } catch {
                     return image;

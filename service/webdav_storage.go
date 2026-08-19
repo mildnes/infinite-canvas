@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
 	"path"
 	"strings"
@@ -53,16 +54,29 @@ func putWebDAVObject(provider model.StorageProvider, objectKey string, data []by
 	return client.Write(remotePath, data, 0o644)
 }
 
-func getWebDAVObject(provider model.StorageProvider, objectKey string) ([]byte, error) {
+func getWebDAVObjectStream(provider model.StorageProvider, objectKey string, size int64, rangeHeader string) (storageObjectStream, error) {
 	client, err := newWebDAVClient(provider)
 	if err != nil {
-		return nil, err
+		return storageObjectStream{}, err
 	}
 	remotePath, err := cleanStoragePath(objectKey)
 	if err != nil {
-		return nil, err
+		return storageObjectStream{}, err
 	}
-	return client.Read(remotePath)
+	if byteRange, ok := parseStorageByteRange(rangeHeader, size); ok {
+		stream, rangeErr := client.ReadStreamRange(remotePath, byteRange.offset, byteRange.length)
+		if rangeErr == nil {
+			return storageObjectStream{
+				Body: stream, StatusCode: 206, ContentLength: byteRange.length,
+				ContentRange: fmt.Sprintf("bytes %d-%d/%d", byteRange.offset, byteRange.offset+byteRange.length-1, size), AcceptRanges: true,
+			}, nil
+		}
+	}
+	stream, err := client.ReadStream(remotePath)
+	if err != nil {
+		return storageObjectStream{}, err
+	}
+	return storageObjectStream{Body: stream, StatusCode: 200, ContentLength: size, AcceptRanges: true}, nil
 }
 
 func deleteWebDAVObject(provider model.StorageProvider, objectKey string) error {

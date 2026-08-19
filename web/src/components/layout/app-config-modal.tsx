@@ -8,10 +8,10 @@ import { fetchImageModels } from "@/services/api/image";
 import { fetchUserConfig, measureUserStorageProvider, syncUserModelConfig, syncUserStorageProvider } from "@/services/api/user-config";
 import { clearStorageConfigCache as clearFileStorageCache } from "@/services/file-storage";
 import { clearStorageConfigCache as clearImageStorageCache, defaultUserStorageProvider, defaultUserWebDAVStorageProvider, loadStorageConfig, loadUserS3StorageProvider, loadUserWebDAVStorageProvider, saveUserStorageProvider, saveUserWebDAVStorageProvider, type UserStorageProvider } from "@/services/image-storage";
-import { audioFormatOptions, audioVoiceOptionsFor, glmTtsFormatOptions, glmTtsVoiceOptions, isGlmTtsModel, normalizeAudioSpeedValue, normalizeAudioVoiceValueFor, normalizeGlmTtsFormat, normalizeGlmTtsSpeed, normalizeGlmTtsVoice, shouldUseGrokVoiceOptions } from "@/lib/audio-generation";
+import { audioFormatOptions, audioVoiceOptions, glmTtsFormatOptions, glmTtsVoiceOptions, isGlmTtsModel, normalizeAudioSpeedValue, normalizeGlmTtsFormat, normalizeGlmTtsSpeed, normalizeGlmTtsVoice } from "@/lib/audio-generation";
 import { isMimoPresetTtsModel, isMimoTtsModel, isMimoVoiceCloneModel, isMimoVoiceDesignModel, mimoTtsFormatOptions, mimoTtsVoiceOptions } from "@/lib/mimo-tts";
-import { channelInfoForModel, filterModelsByCapability, normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig, type LocalModelChannel, type ModelCapability } from "@/stores/use-config-store";
-import { fetchTTSVoices } from "@/services/api/audio";
+import { modelChannelDefaultBaseUrls } from "@/lib/model-channel";
+import { filterModelsByCapability, normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig, type LocalModelChannel, type ModelCapability } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
 type ModelGroup = {
@@ -42,8 +42,6 @@ export function AppConfigModal() {
     const [measuringStorageType, setMeasuringStorageType] = useState<"s3" | "webdav" | null>(null);
     const [storageUsageText, setStorageUsageText] = useState("");
     const [webDAVStorageUsageText, setWebDAVStorageUsageText] = useState("");
-    const [grokVoiceOptions, setGrokVoiceOptions] = useState(() => audioVoiceOptionsFor("grok-voice-latest"));
-    const [loadingGrokVoices, setLoadingGrokVoices] = useState(false);
     const config = useConfigStore((state) => state.config);
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const isConfigOpen = useConfigStore((state) => state.isConfigOpen);
@@ -51,40 +49,6 @@ export function AppConfigModal() {
     const setConfigDialogOpen = useConfigStore((state) => state.setConfigDialogOpen);
     const clearPromptContinue = useConfigStore((state) => state.clearPromptContinue);
     const publicSettings = useConfigStore((state) => state.publicSettings);
-    const audioChannel = channelInfoForModel(config, config.audioModel);
-    const useGrokVoices = shouldUseGrokVoiceOptions(config.audioModel, audioChannel);
-    const voiceOptions = useGrokVoices ? grokVoiceOptions : audioVoiceOptionsFor(config.audioModel, audioChannel);
-    const selectedAudioVoice = normalizeAudioVoiceValueFor(config.audioModel, config.audioVoice, audioChannel);
-
-    useEffect(() => {
-        if (!useGrokVoices) return;
-        let cancelled = false;
-        setLoadingGrokVoices(true);
-        fetchTTSVoices({ ...config, model: config.audioModel }, config.audioModel)
-            .then((voices) => {
-                if (cancelled || !voices.length) return;
-                setGrokVoiceOptions(voices);
-                if (!voices.some((item) => item.value === selectedAudioVoice)) {
-                    updateConfig("audioVoice", voices[0].value);
-                }
-            })
-            .catch(() => {
-                if (cancelled) return;
-                setGrokVoiceOptions(audioVoiceOptionsFor(config.audioModel, audioChannel));
-            })
-            .finally(() => {
-                if (!cancelled) setLoadingGrokVoices(false);
-            });
-        return () => {
-            cancelled = true;
-        };
-    }, [useGrokVoices, config.audioModel, config.audioChannelId, config.channelMode, audioChannel?.protocol, audioChannel?.baseUrl]);
-
-    useEffect(() => {
-        if (isMimoTtsModel(config.audioModel) || isGlmTtsModel(config.audioModel)) return;
-        const nextVoice = normalizeAudioVoiceValueFor(config.audioModel, config.audioVoice, audioChannel);
-        if (nextVoice !== config.audioVoice) updateConfig("audioVoice", nextVoice);
-    }, [config.audioModel, config.audioVoice, audioChannel?.protocol, audioChannel?.baseUrl]);
     const token = useUserStore((state) => state.token);
     const user = useUserStore((state) => state.user);
     const effectiveConfig = useEffectiveConfig();
@@ -244,7 +208,7 @@ export function AppConfigModal() {
     };
 
     const addLocalChannel = () => {
-        updateLocalChannels([...normalizeLocalChannels(config), { id: "local-" + Date.now(), protocol: "openai", name: "新渠道", baseUrl: "", apiKey: "", models: [] }]);
+        updateLocalChannels([...normalizeLocalChannels(config), { id: "local-" + Date.now(), protocol: "openai", name: "新渠道", baseUrl: modelChannelDefaultBaseUrls.openai, apiKey: "", models: [] }]);
     };
 
     const removeLocalChannel = (id: string) => {
@@ -355,12 +319,12 @@ export function AppConfigModal() {
                                                 value={channel.protocol}
                                                 options={[
                                                     { label: "OpenAI", value: "openai" },
+                                                    { label: "Grok2API", value: "grok2api" },
+                                                    { label: "APIMart", value: "apimart" },
                                                     { label: "KIE", value: "kie" },
                                                     { label: "MiMo", value: "mimo" },
-                                                    { label: "Grok2API", value: "grok2api" },
-                                                    { label: "xAI", value: "xai" },
                                                 ]}
-                                                onChange={(protocol) => patchLocalChannel(channel.id, { protocol: protocol as LocalModelChannel["protocol"] })}
+                                                onChange={(protocol: LocalModelChannel["protocol"]) => patchLocalChannel(channel.id, { protocol, baseUrl: modelChannelDefaultBaseUrls[protocol] })}
                                             />
                                             <Input value={channel.baseUrl} placeholder="Base URL" onChange={(event) => patchLocalChannel(channel.id, { baseUrl: event.target.value })} />
                                             <Input.Password value={channel.apiKey} placeholder="API Key" onChange={(event) => patchLocalChannel(channel.id, { apiKey: event.target.value })} />
@@ -423,13 +387,7 @@ export function AppConfigModal() {
                             </Form.Item>
                         ) : isMimoTtsModel(config.audioModel) ? null : (
                             <Form.Item label="默认音频声音" className="mb-4">
-                                <Select
-                                    value={glmTts ? normalizeGlmTtsVoice(config.glmTtsVoice) : selectedAudioVoice}
-                                    options={glmTts ? glmTtsVoiceOptions : voiceOptions}
-                                    loading={!glmTts && loadingGrokVoices}
-                                    placeholder={glmTts ? "GLM 音色" : useGrokVoices ? "Grok 音色" : "OpenAI 音色"}
-                                    onChange={(value) => updateConfig(glmTts ? "glmTtsVoice" : "audioVoice", value)}
-                                />
+                                <Select value={glmTts ? normalizeGlmTtsVoice(config.glmTtsVoice) : config.audioVoice} options={glmTts ? glmTtsVoiceOptions : audioVoiceOptions} onChange={(value) => updateConfig(glmTts ? "glmTtsVoice" : "audioVoice", value)} />
                             </Form.Item>
                         )}
                         <Form.Item label="默认音频格式" className="mb-4">

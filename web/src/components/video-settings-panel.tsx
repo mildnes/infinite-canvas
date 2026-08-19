@@ -7,7 +7,7 @@ import { ImageSettingsTheme } from "@/components/image-settings-panel";
 import { boolConfig, isSeedanceFastOrMiniModel, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceDurationOptions, seedancePixelLabel, seedanceRatioOptions, seedanceResolutionOptions } from "@/lib/seedance-video";
 import { type CanvasTheme } from "@/lib/canvas-theme";
 import { COGVIDEOX3_DURATIONS, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
-import { channelIdForActiveModel, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
+import { channelProtocolForConfig, type AiConfig } from "@/stores/use-config-store";
 
 export const videoResolutionOptions = [
     { value: "720", label: "720p" },
@@ -544,9 +544,5 @@ const grokVideoModeOptions = [
 export function isKIEGrokVideoModel(config: AiConfig, modelName: string) {
     const model = (modelName || "").toLowerCase().trim();
     if (model !== "grok-imagine/text-to-video" && model !== "grok-imagine/image-to-video") return false;
-    const scopedConfig = { ...config, model, videoModel: model };
-    const channelId = channelIdForActiveModel(scopedConfig);
-    const channels = config.channelMode === "remote" ? config.publicChannels : [localChannelForActiveModel(scopedConfig)];
-    const channel = channels.find((item) => (item?.id || "") === channelId) || channels[0];
-    return ((channel as { baseUrl?: string } | undefined)?.baseUrl || "").toLowerCase().includes("kie");
+    return channelProtocolForConfig({ ...config, model, videoModel: model }) === "kie";
 }

@@ -109,7 +109,7 @@ func TestPrepareDirectAIRequestAPIMartImageReferences(t *testing.T) {
 		"https://direct-reference.invalid/run/image/1",
 	}
 	plan, err := prepareDirectAIRequest(directAIRequestInput{
-		Channel:  directAIChannelInput{Protocol: "openai", BaseURL: "https://api.apimart.ai"},
+		Channel:  directAIChannelInput{Protocol: "apimart", BaseURL: "https://api.apimart.ai"},
 		Model:    "gpt-image-2-apimart",
 		Endpoint: "/images/edits",
 		Body: map[string]any{

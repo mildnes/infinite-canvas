@@ -43,14 +43,8 @@ type apimartInputConfig struct {
 	audioRefKind        string
 }
 
-func isAPIMartChannel(channel model.ModelChannel, modelName string) bool {
-	protocol := strings.ToLower(strings.TrimSpace(channel.Protocol))
-	baseURL := strings.ToLower(strings.TrimSpace(channel.BaseURL))
-	model := strings.ToLower(strings.TrimSpace(modelName))
-
-	return protocol == "apimart" ||
-		strings.Contains(baseURL, "apimart.ai") ||
-		strings.Contains(model, "apimart")
+func isAPIMartChannel(channel model.ModelChannel, _ string) bool {
+	return strings.EqualFold(strings.TrimSpace(channel.Protocol), "apimart")
 }
 
 func normalizeAPIMartVideoBody(body []byte, contentType string, modelName string, channel model.ModelChannel) ([]byte, string, error) {

@@ -2834,19 +2834,18 @@ function resolveKlingWorkbenchConfig(config: AiConfig, model: string): { provide
 }
 
 function isAPIMartKlingModelConfig(config: AiConfig, model: string, key: string) {
-    return modelKey(model) === key && videoChannelText(config, model).includes("apimart");
+    return modelKey(model) === key && videoChannelProtocol(config, model) === "apimart";
 }
 
 function isKIEKlingModelConfig(config: AiConfig, model: string, key: string) {
-    return modelKey(model) === key && videoChannelText(config, model).includes("kie");
+    return modelKey(model) === key && videoChannelProtocol(config, model) === "kie";
 }
 
-function videoChannelText(config: AiConfig, model: string) {
+function videoChannelProtocol(config: AiConfig, model: string) {
     const channelId = resolveVideoChannelId(config, model, config.videoChannelId, config.activeChannelId);
     const channels = config.channelMode === "remote" ? config.publicChannels : normalizeLocalChannels(config);
     const channel = channels.find((item) => (item.id || "") === channelId && (item.models || []).includes(model)) || channels.find((item) => (item.models || []).includes(model)) || channels.find((item) => (item.id || "") === channelId);
-    const record = channel as { id?: string; name?: string; baseUrl?: string; remark?: string } | undefined;
-    return [record?.id, record?.name, record?.baseUrl, record?.remark].filter(Boolean).join(" ").toLowerCase();
+    return channel?.protocol || "openai";
 }
 
 const characterOrientationOptions = [{ value: "image", label: "图片" }, { value: "video", label: "视频" }];

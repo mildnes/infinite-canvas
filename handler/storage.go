@@ -1,12 +1,11 @@
 package handler
 
 import (
-	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
-	"time"
 
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/service"
@@ -90,6 +89,21 @@ func UploadFile(w http.ResponseWriter, r *http.Request) {
 	OK(w, object)
 }
 
+// RegisterDirectFile 登记浏览器已直传至用户 WebDAV 的文件。
+func RegisterDirectFile(w http.ResponseWriter, r *http.Request) {
+	var request service.DirectStorageObjectInput
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		Fail(w, "文件信息格式错误")
+		return
+	}
+	object, err := service.RegisterDirectStorageObject(r.Context(), request)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, object)
+}
+
 // DeleteFile 删除文件。
 func DeleteFile(w http.ResponseWriter, r *http.Request, id string) {
 	var request struct {
@@ -105,31 +119,38 @@ func DeleteFile(w http.ResponseWriter, r *http.Request, id string) {
 	OK(w, true)
 }
 
+// DeleteDirectFileRecord 删除浏览器已直接删除的 WebDAV 文件索引。
+func DeleteDirectFileRecord(w http.ResponseWriter, r *http.Request, id string) {
+	if err := service.DeleteDirectStorageObjectRecord(r.Context(), id); err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, true)
+}
+
 // FileContent 获取文件内容。
-// 使用 ServeContent 以支持 Safari 视频/音频所需的 Range 请求。
 func FileContent(w http.ResponseWriter, r *http.Request, id string) {
-	download, err := service.DownloadStorageObject(id)
+	download, err := service.DownloadStorageObject(id, r.Header.Get("Range"))
 	if err != nil {
 		FailError(w, err)
 		return
 	}
-	if download.RedirectURL != "" {
-		http.Redirect(w, r, download.RedirectURL, http.StatusTemporaryRedirect)
-		return
-	}
-	contentType := strings.TrimSpace(download.Object.MimeType)
-	if contentType == "" {
-		contentType = http.DetectContentType(download.Data)
-	}
-	w.Header().Set("Content-Type", contentType)
+	defer download.Stream.Close()
+	w.Header().Set("Content-Type", download.Object.MimeType)
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	w.Header().Set("Accept-Ranges", "bytes")
-	modTime := time.Now()
-	if parsed, parseErr := time.Parse(time.RFC3339, strings.TrimSpace(download.Object.CreatedAt)); parseErr == nil {
-		modTime = parsed
+	if download.AcceptRanges {
+		w.Header().Set("Accept-Ranges", "bytes")
 	}
-	// Safari <video>/<audio> requires HTTP 206 partial content for progressive playback.
-	http.ServeContent(w, r, id, modTime, bytes.NewReader(download.Data))
+	if download.ContentRange != "" {
+		w.Header().Set("Content-Range", download.ContentRange)
+	}
+	if download.ContentLength >= 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(download.ContentLength, 10))
+	}
+	if download.StatusCode != 0 {
+		w.WriteHeader(download.StatusCode)
+	}
+	_, _ = io.Copy(w, download.Stream)
 }
 
 // FileInfo 获取文件元数据。

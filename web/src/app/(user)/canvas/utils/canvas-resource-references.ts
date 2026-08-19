@@ -1,6 +1,6 @@
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
 import { seedanceReferenceLabel } from "@/lib/seedance-video";
-import { CanvasNodeType, type CanvasConnection, type CanvasNodeData } from "../types";
+import { CanvasNodeType, type CanvasAssistantReference, type CanvasConnection, type CanvasNodeData } from "../types";
 import { isCanvasImageNodeType } from "./canvas-panorama";
 
 export type CanvasResourceKind = "image" | "video" | "audio" | "text";
@@ -16,9 +16,13 @@ export type CanvasResourceReference = {
     active: boolean;
 };
 
-export function buildAgentResourceReferences(nodes: CanvasNodeData[]) {
-    // Agent can mention any resource currently on the canvas.
-    return labelResourceNodes(nodes.filter(isResourceNode), true);
+export function assistantReferenceContentFromNode(node: CanvasNodeData): Partial<CanvasAssistantReference> | null {
+    const content = node.metadata?.content;
+    if (!content) return null;
+    if (isCanvasImageNodeType(node.type)) return { dataUrl: content, url: undefined, storageKey: node.metadata.storageKey, mimeType: node.metadata.mimeType };
+    if (node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) return { dataUrl: undefined, url: content, storageKey: node.metadata.storageKey, mimeType: node.metadata.mimeType };
+    if (node.type === CanvasNodeType.Text) return { text: content };
+    return null;
 }
 
 export function buildCanvasResourceReferences(nodes: CanvasNodeData[], connections: CanvasConnection[], contextNodeId?: string | null) {
@@ -76,7 +80,7 @@ function labelResourceNodes(nodes: CanvasNodeData[], active: boolean) {
                 kind,
                 label,
                 title: node.title || label,
-                previewUrl: node.metadata?.content || undefined,
+                previewUrl: node.metadata?.content,
                 text: node.type === CanvasNodeType.Text ? node.metadata?.content || node.metadata?.prompt : undefined,
                 active,
             },
@@ -96,11 +100,9 @@ function isResourceNode(node: CanvasNodeData) {
 }
 
 function resourceKind(node: CanvasNodeData): CanvasResourceKind | null {
-    const content = node.metadata?.content;
-    const storageKey = node.metadata?.storageKey;
-    if (isCanvasImageNodeType(node.type) && (content || storageKey)) return "image";
-    if (node.type === CanvasNodeType.Video && (content || storageKey)) return "video";
-    if (node.type === CanvasNodeType.Audio && (content || storageKey)) return "audio";
-    if (node.type === CanvasNodeType.Text && (content || node.metadata?.prompt)) return "text";
+    if (isCanvasImageNodeType(node.type) && node.metadata?.content) return "image";
+    if (node.type === CanvasNodeType.Video && node.metadata?.content) return "video";
+    if (node.type === CanvasNodeType.Audio && node.metadata?.content) return "audio";
+    if (node.type === CanvasNodeType.Text && (node.metadata?.content || node.metadata?.prompt)) return "text";
     return null;
 }

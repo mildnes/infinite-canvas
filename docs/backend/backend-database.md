@@ -93,6 +93,7 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `width` | number | 预留字段，当前上传链路未写入，默认 `0` |
 | `height` | number | 预留字段，当前上传链路未写入，默认 `0` |
 | `sha256` | string | 文件内容摘要 |
+| `direct` | boolean | 是否由登录用户的浏览器直接上传至 WebDAV |
 | `created_by` | string | 创建用户 ID |
 | `created_at` | string | 创建时间 |
 | `deleted_at` | string | 预留字段；当前删除链路直接删除索引记录 |
@@ -335,9 +336,9 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `protocol` | string | 协议，当前支持 `openai`、`kie`、`mimo`、`grok2api`、`xai` |
+| `protocol` | string | 协议，支持 `openai`、`grok2api`、`apimart`、`kie`、`mimo` |
 | `name` | string | 渠道名称 |
-| `baseUrl` | string | 渠道接口地址；`grok2api`/`xai` 按 Grok/xAI 媒体资源 API 调用 |
+| `baseUrl` | string | 渠道接口地址 |
 | `apiKey` | string | 渠道密钥 |
 | `models` | string[] | 渠道可用模型列表 |
 | `weight` | number | 渠道权重，同一模型命中多个渠道时按权重随机 |

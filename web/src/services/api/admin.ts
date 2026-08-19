@@ -163,7 +163,7 @@ export async function deleteAdminAsset(token: string, id: string) {
 
 export type AdminModelChannel = {
     id: string;
-    protocol: "openai" | "kie" | "mimo" | "grok2api" | "xai";
+    protocol: "openai" | "grok2api" | "apimart" | "kie" | "mimo";
     name: string;
     baseUrl: string;
     apiKey: string;
@@ -201,6 +201,7 @@ export type AdminModelCost = {
 
 export type AdminPublicModelChannelInfo = {
     id: string;
+    protocol: AdminModelChannel["protocol"];
     name: string;
     baseUrl: string;
     models: string[];
@@ -222,39 +223,6 @@ export type AdminPublicSettings = {
         mode: string;
         allowUserProvider: boolean;
     };
-    agent: {
-        skills: AdminAgentSkill[];
-        mcpServers: AdminPublicMCPServer[];
-    };
-};
-
-export type AdminAgentSkill = {
-    id: string;
-    name: string;
-    description: string;
-    prompt: string;
-    enabled: boolean;
-    source?: "admin" | "github";
-    repository?: string;
-    ref?: string;
-    path?: string;
-    installedAt?: string;
-};
-export type AdminMCPTool = { name: string; description: string; inputSchema: Record<string, unknown> };
-export type AdminPublicMCPServer = { id: string; name: string; description: string; tools: AdminMCPTool[] };
-export type AdminMCPServer = AdminPublicMCPServer & {
-    endpoint: string;
-    apiKey: string;
-    transport: "streamable_http" | "stdio";
-    command: string;
-    args: string[];
-    env: Record<string, string>;
-    workingDirectory: string;
-    enabled: boolean;
-    allowUsers: boolean;
-    toolsJson?: string;
-    argsText?: string;
-    envJson?: string;
 };
 
 export type AdminStorageProvider = {
@@ -310,10 +278,6 @@ export type AdminPrivateSettings = {
         };
         capacityLimitBytes: number;
     };
-    agent: {
-        skills: AdminAgentSkill[];
-        mcpServers: AdminMCPServer[];
-    };
 };
 
 export type AdminAICallLog = {
@@ -358,14 +322,6 @@ export async function fetchAdminSettings(token: string) {
 
 export async function saveAdminSettings(token: string, settings: AdminSettings) {
     return apiPost<AdminSettings>("/api/admin/settings", settings, token);
-}
-
-export async function fetchMCPServerTools(token: string, payload: { server: Partial<AdminMCPServer> }) {
-    return apiPost<AdminMCPTool[]>("/api/admin/settings/mcp-tools", payload, token);
-}
-
-export async function installRemoteAgentSkill(token: string, payload: { repository: string; ref?: string; path?: string; name?: string }) {
-    return apiPost<AdminAgentSkill>("/api/admin/settings/skills/install", payload, token);
 }
 
 export type AdminChannelActionRequest = {

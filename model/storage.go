@@ -12,6 +12,7 @@ type StorageObject struct {
 	Width      int    `json:"width"`
 	Height     int    `json:"height"`
 	SHA256     string `json:"sha256"`
+	Direct     bool   `json:"direct"`
 	CreatedBy  string `json:"createdBy" gorm:"index"`
 	CreatedAt  string `json:"createdAt"`
 	DeletedAt  string `json:"deletedAt"`
