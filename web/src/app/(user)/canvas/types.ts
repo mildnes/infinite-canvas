@@ -59,6 +59,10 @@ export type CanvasNodeMetadata = {
     audioFormat?: string;
     audioSpeed?: string;
     audioInstructions?: string;
+    grokTtsVoice?: string;
+    grokTtsLanguage?: string;
+    grokTtsFormat?: string;
+    grokTtsSpeed?: string;
     glmTtsVoice?: string;
     glmTtsFormat?: string;
     glmTtsSpeed?: string;

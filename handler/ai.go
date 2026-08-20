@@ -81,6 +81,15 @@ func AIAudioSpeech(w http.ResponseWriter, r *http.Request) {
 	proxyAIRequest(w, r, "/audio/speech")
 }
 
+func AITTSVoices(w http.ResponseWriter, r *http.Request) {
+	modelName := strings.TrimSpace(r.URL.Query().Get("model"))
+	if modelName == "" {
+		Fail(w, "缺少模型名称")
+		return
+	}
+	proxyAIGetRequest(w, r, "/tts/voices?model="+url.QueryEscape(modelName))
+}
+
 func proxyAIGetRequest(w http.ResponseWriter, r *http.Request, path string) {
 	startedAt := time.Now()
 	user, ok := service.UserFromContext(r.Context())
@@ -558,7 +567,7 @@ func resolveAIProxyPath(channel model.ModelChannel, modelName string, path strin
 		}
 		return path
 	}
-	if strings.EqualFold(strings.TrimSpace(channel.Protocol), "grok2api") && strings.EqualFold(strings.TrimSpace(modelName), "grok-imagine-video") && path == "/videos" {
+	if strings.EqualFold(strings.TrimSpace(channel.Protocol), "grok2api") && (strings.EqualFold(strings.TrimSpace(modelName), "grok-imagine-video") || strings.EqualFold(strings.TrimSpace(modelName), "grok-imagine-video-1.5")) && path == "/videos" {
 		return "/videos/generations"
 	}
 	if isArkSeedanceVideo(channel.BaseURL, modelName) {

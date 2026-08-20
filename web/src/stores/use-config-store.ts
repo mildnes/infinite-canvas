@@ -34,6 +34,10 @@ export type AiConfig = {
     audioFormat: string;
     audioSpeed: string;
     audioInstructions: string;
+    grokTtsVoice: string;
+    grokTtsLanguage: string;
+    grokTtsFormat: string;
+    grokTtsSpeed: string;
     glmTtsVoice: string;
     glmTtsFormat: string;
     glmTtsSpeed: string;
@@ -102,6 +106,10 @@ export const defaultConfig: AiConfig = {
     audioFormat: "mp3",
     audioSpeed: "1",
     audioInstructions: "",
+    grokTtsVoice: "eve",
+    grokTtsLanguage: "auto",
+    grokTtsFormat: "mp3",
+    grokTtsSpeed: "1",
     glmTtsVoice: "tongtong",
     glmTtsFormat: "wav",
     glmTtsSpeed: "1",
@@ -386,6 +394,10 @@ export const useConfigStore = create<ConfigStore>()(
                         audioVoice: config.audioVoice || defaultConfig.audioVoice,
                         audioFormat: config.audioFormat || defaultConfig.audioFormat,
                         audioSpeed: config.audioSpeed || defaultConfig.audioSpeed,
+                        grokTtsVoice: config.grokTtsVoice || defaultConfig.grokTtsVoice,
+                        grokTtsLanguage: config.grokTtsLanguage || defaultConfig.grokTtsLanguage,
+                        grokTtsFormat: config.grokTtsFormat || defaultConfig.grokTtsFormat,
+                        grokTtsSpeed: config.grokTtsSpeed || defaultConfig.grokTtsSpeed,
                         glmTtsVoice: config.glmTtsVoice || defaultConfig.glmTtsVoice,
                         glmTtsFormat: config.glmTtsFormat || defaultConfig.glmTtsFormat,
                         glmTtsSpeed: config.glmTtsSpeed || defaultConfig.glmTtsSpeed,

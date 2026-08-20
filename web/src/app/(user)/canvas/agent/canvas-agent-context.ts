@@ -1,4 +1,5 @@
 import { isGlmTtsModel } from "@/lib/audio-generation";
+import { isGrok2APITtsConfig } from "@/lib/grok-tts";
 import { supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
 import type { AiConfig } from "@/stores/use-config-store";
 import { CanvasNodeType, type CanvasAgentState, type CanvasConnection, type CanvasNodeData } from "../types";
@@ -46,7 +47,9 @@ export type CanvasAgentContext = {
         videoGenerateAudio: string;
         videoSupportsAudio: boolean;
         audioVoice: string;
+        audioLanguage: string;
         audioFormat: string;
+        audioSpeed: string;
     };
     tasks: Array<{
         nodeId: string;
@@ -94,6 +97,8 @@ export function buildCanvasAgentContext(input: BuildCanvasAgentContextInput): Ca
     ].slice(0, MAX_CONTEXT_NODES);
     const includedIds = new Set(orderedNodes.map((node) => node.id));
     const videoModel = input.config.videoModel || input.config.model;
+    const audioModel = input.config.audioModel;
+    const grokTts = isGrok2APITtsConfig({ ...input.config, model: audioModel }, audioModel);
 
     return {
         project: {
@@ -110,7 +115,7 @@ export function buildCanvasAgentContext(input: BuildCanvasAgentContextInput): Ca
             textModel: input.config.textModel || input.config.model,
             imageModel: input.config.imageModel || input.config.model,
             videoModel,
-            audioModel: input.config.audioModel,
+            audioModel,
             imageQuality: input.config.quality,
             imageSize: input.config.size,
             videoQuality: input.config.vquality,
@@ -119,8 +124,10 @@ export function buildCanvasAgentContext(input: BuildCanvasAgentContextInput): Ca
             videoSeconds: input.config.videoSeconds,
             videoGenerateAudio: input.config.videoGenerateAudio,
             videoSupportsAudio: supportsVideoAudioGeneration(videoModel),
-            audioVoice: isGlmTtsModel(input.config.audioModel) ? input.config.glmTtsVoice : input.config.audioVoice,
-            audioFormat: isGlmTtsModel(input.config.audioModel) ? input.config.glmTtsFormat : input.config.audioFormat,
+            audioVoice: isGlmTtsModel(audioModel) ? input.config.glmTtsVoice : grokTts ? input.config.grokTtsVoice : input.config.audioVoice,
+            audioLanguage: grokTts ? input.config.grokTtsLanguage : "",
+            audioFormat: isGlmTtsModel(audioModel) ? input.config.glmTtsFormat : grokTts ? input.config.grokTtsFormat : input.config.audioFormat,
+            audioSpeed: isGlmTtsModel(audioModel) ? input.config.glmTtsSpeed : grokTts ? input.config.grokTtsSpeed : input.config.audioSpeed,
         },
         tasks: orderedNodes.flatMap((node) => {
             const taskId = mediaTaskId(node);

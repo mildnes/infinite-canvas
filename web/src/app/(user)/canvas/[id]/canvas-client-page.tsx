@@ -30,6 +30,7 @@ import { App, Button, Dropdown, Modal } from "antd";
 import { isCogVideoX3Model, modelKey, supportsVideoAudioGeneration, supportsVideoFrameReferences } from "@/lib/video-model-capabilities";
 import { isMimoVoiceCloneModel } from "@/lib/mimo-tts";
 import { isGlmTtsModel } from "@/lib/audio-generation";
+import { isGrok2APITtsConfig } from "@/lib/grok-tts";
 import { isKIESeedreamLayerDecompositionModel } from "@/lib/kie-models";
 import { NODE_DEFAULT_SIZE, getNodeSpec } from "../constants";
 import { ActiveConnectionPath, ConnectionPath } from "../components/canvas-connections";
@@ -3075,6 +3076,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
                 if (action.name === "get_generation_config") {
                     const videoModel = agentEffectiveConfig.videoModel || agentEffectiveConfig.model;
+                    const audioModel = agentEffectiveConfig.audioModel;
+                    const grokTts = isGrok2APITtsConfig({ ...agentEffectiveConfig, model: audioModel }, audioModel);
                     return {
                         ok: true,
                         models: {
@@ -3092,8 +3095,10 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         videoGenerateAudio: agentEffectiveConfig.videoGenerateAudio,
                         videoSupportsAudio: supportsVideoAudioGeneration(videoModel),
                         videoDuration: canvasAgentVideoDurationHint(videoModel),
-                        audioVoice: isGlmTtsModel(agentEffectiveConfig.audioModel) ? agentEffectiveConfig.glmTtsVoice : agentEffectiveConfig.audioVoice,
-                        audioFormat: isGlmTtsModel(agentEffectiveConfig.audioModel) ? agentEffectiveConfig.glmTtsFormat : agentEffectiveConfig.audioFormat,
+                        audioVoice: isGlmTtsModel(audioModel) ? agentEffectiveConfig.glmTtsVoice : grokTts ? agentEffectiveConfig.grokTtsVoice : agentEffectiveConfig.audioVoice,
+                        audioLanguage: grokTts ? agentEffectiveConfig.grokTtsLanguage : "",
+                        audioFormat: isGlmTtsModel(audioModel) ? agentEffectiveConfig.glmTtsFormat : grokTts ? agentEffectiveConfig.grokTtsFormat : agentEffectiveConfig.audioFormat,
+                        audioSpeed: isGlmTtsModel(audioModel) ? agentEffectiveConfig.glmTtsSpeed : grokTts ? agentEffectiveConfig.grokTtsSpeed : agentEffectiveConfig.audioSpeed,
                     };
                 }
 
@@ -3321,6 +3326,11 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                             metadata.glmTtsVoice = stringValue("voice") || generationConfig.glmTtsVoice;
                             metadata.glmTtsFormat = generationConfig.glmTtsFormat;
                             metadata.glmTtsSpeed = generationConfig.glmTtsSpeed;
+                        } else if (isGrok2APITtsConfig(generationConfig, generationConfig.model)) {
+                            metadata.grokTtsVoice = stringValue("voice") || generationConfig.grokTtsVoice;
+                            metadata.grokTtsLanguage = generationConfig.grokTtsLanguage;
+                            metadata.grokTtsFormat = generationConfig.grokTtsFormat;
+                            metadata.grokTtsSpeed = generationConfig.grokTtsSpeed;
                         } else {
                             metadata.audioVoice = stringValue("voice") || generationConfig.audioVoice;
                             metadata.audioInstructions = stringValue("instructions") || generationConfig.audioInstructions;
@@ -4475,6 +4485,10 @@ function buildAudioGenerationMetadata(config: AiConfig, sourceMetadata?: CanvasN
         audioFormat: config.audioFormat,
         audioSpeed: config.audioSpeed,
         audioInstructions: config.audioInstructions,
+        grokTtsVoice: config.grokTtsVoice,
+        grokTtsLanguage: config.grokTtsLanguage,
+        grokTtsFormat: config.grokTtsFormat,
+        grokTtsSpeed: config.grokTtsSpeed,
         glmTtsVoice: config.glmTtsVoice,
         glmTtsFormat: config.glmTtsFormat,
         glmTtsSpeed: config.glmTtsSpeed,
@@ -4938,6 +4952,10 @@ function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefine
         audioFormat: node?.metadata?.audioFormat || config.audioFormat || defaultConfig.audioFormat,
         audioSpeed: node?.metadata?.audioSpeed || config.audioSpeed || defaultConfig.audioSpeed,
         audioInstructions: node?.metadata?.audioInstructions || config.audioInstructions || defaultConfig.audioInstructions,
+        grokTtsVoice: node?.metadata?.grokTtsVoice || config.grokTtsVoice || defaultConfig.grokTtsVoice,
+        grokTtsLanguage: node?.metadata?.grokTtsLanguage || config.grokTtsLanguage || defaultConfig.grokTtsLanguage,
+        grokTtsFormat: node?.metadata?.grokTtsFormat || config.grokTtsFormat || defaultConfig.grokTtsFormat,
+        grokTtsSpeed: node?.metadata?.grokTtsSpeed || config.grokTtsSpeed || defaultConfig.grokTtsSpeed,
         glmTtsVoice: node?.metadata?.glmTtsVoice || config.glmTtsVoice || defaultConfig.glmTtsVoice,
         glmTtsFormat: node?.metadata?.glmTtsFormat || config.glmTtsFormat || defaultConfig.glmTtsFormat,
         glmTtsSpeed: node?.metadata?.glmTtsSpeed || config.glmTtsSpeed || defaultConfig.glmTtsSpeed,

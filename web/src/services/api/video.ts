@@ -179,7 +179,8 @@ export async function deleteVideoGenerationTask(config: AiConfig, task?: VideoRe
 }
 
 function isGrok2APIVideoConfig(config: AiConfig, model: string) {
-    return model.trim().toLowerCase() === "grok-imagine-video" && videoChannelProtocol(config, model) === "grok2api";
+    const normalizedModel = model.trim().toLowerCase();
+    return (normalizedModel === "grok-imagine-video" || normalizedModel === "grok-imagine-video-1.5") && videoChannelProtocol(config, model) === "grok2api";
 }
 
 async function cacheProtectedGrokVideo(config: AiConfig, model: string, task: VideoResponse) {
@@ -202,10 +203,9 @@ async function createGrok2APIVideoRequestBody(config: AiConfig, model: string, p
     const aspectRatio = normalizeSeedanceRatio(config.size);
     if (aspectRatio !== "adaptive") body.aspect_ratio = aspectRatio;
 
-    const references = [input.firstFrame, ...input.references, input.lastFrame].filter((reference): reference is ReferenceImage => Boolean(reference));
-    const urls = await Promise.all(references.map((reference) => imageToDataUrl(reference)));
-    if (urls.length) body.image = { url: urls[0] };
-    if (urls.length > 1) body.reference_images = urls.slice(1).map((url) => ({ url }));
+    const urls = await Promise.all(input.references.map((reference) => imageToDataUrl(reference)));
+    if (urls.length === 1) body.image = { url: urls[0] };
+    else if (urls.length > 1) body.reference_images = urls.map((url) => ({ url }));
 
     return body;
 }
