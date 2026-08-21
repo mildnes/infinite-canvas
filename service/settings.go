@@ -79,6 +79,9 @@ func AdminTestChannelModel(index *int, channel model.ModelChannel, modelName str
 	if err != nil {
 		return "", err
 	}
+	if IsMiniMaxChannel(resolved) {
+		return "MiniMax-H3 是异步视频模型，请在视频创作台测试生成。", nil
+	}
 	if isArkAgentPlanChannel(resolved) || isSeedanceModelName(modelName) {
 		return testArkSeedanceChannelModel(resolved, modelName)
 	}
@@ -375,6 +378,9 @@ func HTTPClientForChannel(channel model.ModelChannel) *http.Client {
 
 func BuildModelChannelURL(channel model.ModelChannel, path string) string {
 	baseURL := normalizeModelChannelBaseURL(channel.BaseURL)
+	if IsMiniMaxChannel(channel) {
+		return baseURL + path
+	}
 	lowerBaseURL := strings.ToLower(baseURL)
 	if !strings.HasSuffix(lowerBaseURL, "/v1") && !strings.HasSuffix(lowerBaseURL, "/api/v3") && !strings.HasSuffix(lowerBaseURL, "/api/plan/v3") && !strings.HasSuffix(lowerBaseURL, "/api/paas/v4") {
 		baseURL += "/v1"
@@ -473,7 +479,7 @@ func repairDefaultModel(current string, models []string, preferred func(string) 
 
 func isVideoModelName(modelName string) bool {
 	name := strings.ToLower(strings.TrimSpace(modelName))
-	return strings.Contains(name, "seedance") || strings.Contains(name, "video")
+	return name == "minimax-h3" || strings.Contains(name, "seedance") || strings.Contains(name, "video")
 }
 
 func isImageModelName(modelName string) bool {
@@ -539,6 +545,9 @@ func resolveAdminChannel(index *int, channel model.ModelChannel) (model.ModelCha
 }
 
 func fetchAdminChannelModels(channel model.ModelChannel) ([]string, error) {
+	if IsMiniMaxChannel(channel) {
+		return MiniMaxModels(), nil
+	}
 	if IsMiMoChannel(channel) {
 		result := MiMoModels()
 		sort.Strings(result)

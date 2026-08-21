@@ -401,7 +401,7 @@ func redactLargeImages(value *any) {
 	switch typed := (*value).(type) {
 	case map[string]any:
 		for key, item := range typed {
-			if text, ok := item.(string); ok && (strings.HasPrefix(text, "data:image/") || strings.HasPrefix(text, "data:audio/") || len(text) > 2048 && looksLikeBase64(text)) {
+			if text, ok := item.(string); ok && (strings.HasPrefix(text, "data:image/") || strings.HasPrefix(text, "data:video/") || strings.HasPrefix(text, "data:audio/") || len(text) > 2048 && looksLikeBase64(text)) {
 				typed[key] = fmt.Sprintf("[redacted media/string len=%d]", len(text))
 				continue
 			}
@@ -520,6 +520,18 @@ func agnesVideoQueryID(modelName string, path string) (string, bool) {
 func resolveAIProxyPath(channel model.ModelChannel, modelName string, path string) string {
 	if service.IsMiMoTTSModelName(modelName) && path == "/audio/speech" {
 		return "/chat/completions"
+	}
+	if isMiniMaxH3Channel(channel, modelName) {
+		if path == "/videos" {
+			return "/v2/video_generation"
+		}
+		if strings.HasPrefix(path, "/videos/") && !strings.HasSuffix(path, "/content") {
+			taskID := strings.TrimSpace(strings.TrimPrefix(path, "/videos/"))
+			if taskID != "" && !strings.Contains(taskID, "/") {
+				return "/v2/query/video_generation/" + url.PathEscape(taskID)
+			}
+		}
+		return path
 	}
 	if isCogVideoX3Model(modelName) {
 		if path == "/videos" {

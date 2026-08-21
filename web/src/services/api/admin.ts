@@ -163,7 +163,7 @@ export async function deleteAdminAsset(token: string, id: string) {
 
 export type AdminModelChannel = {
     id: string;
-    protocol: "openai" | "grok2api" | "apimart" | "kie" | "mimo";
+    protocol: "openai" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo";
     name: string;
     baseUrl: string;
     apiKey: string;

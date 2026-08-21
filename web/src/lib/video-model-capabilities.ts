@@ -6,6 +6,10 @@ export function isCogVideoX3Model(modelName: string) {
     return modelKey(modelName) === "cogvideox-3";
 }
 
+export function isAgnesVideoV25Model(modelName: string) {
+    return modelKey(modelName) === "agnes-video-2-5";
+}
+
 export const COGVIDEOX3_DURATIONS = ["5", "10"] as const;
 
 export function normalizeCogVideoX3Duration(value: string) {
@@ -16,6 +20,7 @@ export function normalizeCogVideoX3Duration(value: string) {
 export function supportsVideoFrameReferences(modelName: string) {
     const model = modelKey(modelName);
     return (
+        isAgnesVideoV25Model(model) ||
         isCogVideoX3Model(model) ||
         model === "bytedance-seedance-2" ||
         model === "bytedance-seedance-2-fast" ||

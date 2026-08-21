@@ -323,6 +323,7 @@ export function AppConfigModal() {
                                                 options={[
                                                     { label: "OpenAI", value: "openai" },
                                                     { label: "Grok2API", value: "grok2api" },
+                                                    { label: "MetaSo", value: "metaso" },
                                                     { label: "APIMart", value: "apimart" },
                                                     { label: "KIE", value: "kie" },
                                                     { label: "MiMo", value: "mimo" },

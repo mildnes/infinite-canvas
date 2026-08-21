@@ -336,6 +336,11 @@ func transformVideoCreatePayload(payload []byte, request *http.Request, channel 
 }
 
 func transformVideoStatusPayload(payload []byte, request *http.Request, channel model.ModelChannel, modelName string) []byte {
+	if isMiniMaxH3Channel(channel, modelName) && strings.Contains(request.URL.Path, "/v2/query/video_generation/") {
+		if transformed, ok := transformMiniMaxVideoTaskResponse(payload); ok {
+			return transformed
+		}
+	}
 	if isKIEChannel(channel, modelName) && strings.Contains(request.URL.Path, "/jobs/recordInfo") {
 		if transformed, ok := transformKIETaskResponse(payload, modelName); ok {
 			return transformed

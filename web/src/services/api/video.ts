@@ -1,9 +1,10 @@
 import axios from "axios";
 
-import { dataUrlToFile } from "@/lib/image-utils";
+import { dataUrlToFile, readFileAsDataUrl } from "@/lib/image-utils";
+import { isMiniMaxH3Config, normalizeMiniMaxH3Duration, normalizeMiniMaxH3Ratio, normalizeMiniMaxH3Resolution } from "@/lib/minimax-video";
 import { boolConfig, isSeedanceVideoConfig, normalizeSeedanceRatio } from "@/lib/seedance-video";
 import { isKIEGrokVideoModel, isKIEKlingV3Config, kieKlingOmniVariant } from "@/components/video-settings-panel";
-import { isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
+import { isAgnesVideoV25Model, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
 import { resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
 import { imageToDataUrl, resolveImageUrl } from "@/services/image-storage";
 import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig, type VideoElementReference } from "@/stores/use-config-store";
@@ -42,6 +43,9 @@ function aiApiUrl(config: AiConfig, path: string) {
 }
 
 function aiVideoPollUrl(config: AiConfig, model: string, id: string) {
+    if (!usesAccountProxy(config) && isMiniMaxH3Config(config, model)) {
+        return miniMaxApiUrl(config, `/v2/query/video_generation/${encodeURIComponent(id)}`);
+    }
     if (!usesAccountProxy(config) && isCogVideoX3Model(model)) {
         return aiApiUrl(config, `/async-result/${encodeURIComponent(id)}`);
     }
@@ -54,6 +58,11 @@ function aiVideoPollUrl(config: AiConfig, model: string, id: string) {
     const channel = localChannelForActiveModel(config);
     const baseUrl = agnesBaseUrl(channel?.baseUrl || config.baseUrl);
     return `${baseUrl}/agnesapi?video_id=${encodeURIComponent(id)}&model_name=${encodeURIComponent(model)}`;
+}
+
+function miniMaxApiUrl(config: AiConfig, path: string) {
+    const channel = localChannelForActiveModel(config);
+    return `${(channel?.baseUrl || config.baseUrl).trim().replace(/\/+$/, "")}${path}`;
 }
 
 function agnesBaseUrl(baseUrl: string) {
@@ -99,9 +108,12 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
         const accountProxy = usesAccountProxy(config);
         const headers = { ...aiHeaders(config), ...(accountProxy && createOptions.clientTaskId ? { "X-Client-Video-Task-ID": createOptions.clientTaskId } : {}), ...(accountProxy && createOptions.source ? { "X-Video-Task-Source": createOptions.source } : {}), ...(accountProxy && createOptions.sourceId ? { "X-Video-Task-Source-ID": createOptions.sourceId } : {}) };
         const directProvider = !accountProxy ? directAIProviderForConfig(config) : null;
+        const createUrl = !accountProxy && isMiniMaxH3Config(config, model)
+            ? miniMaxApiUrl(config, "/v2/video_generation")
+            : aiApiUrl(config, !accountProxy && (isGrok2APIVideoConfig(config, model) || isCogVideoX3Model(model)) ? "/videos/generations" : "/videos");
         const created = directProvider
             ? await (await import("@/services/api/direct-ai")).createDirectVideoTask(config, directProvider, body)
-            : unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, !accountProxy && (isGrok2APIVideoConfig(config, model) || isCogVideoX3Model(model)) ? "/videos/generations" : "/videos"), body, { headers })).data);
+            : unwrapVideoResponseForConfig(config, model, (await axios.post<ApiVideoResponse>(createUrl, body, { headers })).data);
         if (!created.id && !created.video_id) throw new Error("视频接口没有返回任务 ID");
         if (typeof created.progress === "number") onProgress?.(created.progress, created);
         return { task: created, pollId: videoPollId(model, created), startedAt, requestBody: body };
@@ -124,7 +136,7 @@ export async function pollCreatedVideoGenerationTask(config: AiConfig, task: Vid
     const directPoll = directProvider ? (await import("@/services/api/direct-ai")).pollDirectVideoTask : null;
     const pollOnce = directProvider && directPoll
         ? () => directPoll(config, directProvider, pollId)
-        : async () => unwrapVideoResponse((await axios.get<ApiVideoResponse>(aiVideoPollUrl(config, model, pollId), { headers: aiHeaders(config), params: usesAccountProxy(config) ? { model } : undefined })).data);
+        : async () => unwrapVideoResponseForConfig(config, model, (await axios.get<ApiVideoResponse>(aiVideoPollUrl(config, model, pollId), { headers: aiHeaders(config), params: usesAccountProxy(config) ? { model } : undefined })).data);
     let completed: VideoResponse | null = null;
     try {
         if (initialDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, initialDelayMs));
@@ -159,7 +171,7 @@ export async function pollVideoGenerationTaskStatus(config: AiConfig, task: Vide
     const directProvider = !usesAccountProxy(config) ? directAIProviderForConfig(config) : null;
     const result = directProvider
         ? await (await import("@/services/api/direct-ai")).pollDirectVideoTask(config, directProvider, pollId)
-        : unwrapVideoResponse((await axios.get<ApiVideoResponse>(aiVideoPollUrl(config, model, pollId), { headers: aiHeaders(config), params: usesAccountProxy(config) ? { model } : undefined })).data);
+        : unwrapVideoResponseForConfig(config, model, (await axios.get<ApiVideoResponse>(aiVideoPollUrl(config, model, pollId), { headers: aiHeaders(config), params: usesAccountProxy(config) ? { model } : undefined })).data);
     return cacheProtectedGrokVideo(config, model, result);
 }
 
@@ -210,10 +222,37 @@ async function createGrok2APIVideoRequestBody(config: AiConfig, model: string, p
     return body;
 }
 
+async function createAgnesVideoV25RequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
+    const hasFrames = Boolean(input.firstFrame || input.lastFrame);
+    const hasReferences = Boolean(input.references.length || input.videoReferences.length || input.audioReferences.length);
+    if (hasFrames && hasReferences) throw new VideoRequestError("Agnes Video 2.5 的首尾帧不能和普通参考素材同时使用");
+
+    const ratio = normalizeSeedanceRatio(config.size);
+    const body: Record<string, unknown> = {
+        model,
+        prompt,
+        mode: hasFrames ? "keyframe" : hasReferences ? "reference" : "text",
+        seconds: String(Math.min(12, Math.max(4, Math.floor(Number(config.videoSeconds) || 5)))),
+        size: "720P",
+        aspect_ratio: ratio === "adaptive" ? "16:9" : ratio,
+    };
+    if (input.firstFrame) body.first_frame = await agnesVideoV25ReferenceUrl(input.firstFrame);
+    if (input.lastFrame) body.last_frame = await agnesVideoV25ReferenceUrl(input.lastFrame);
+    if (input.references.length) body.images = await Promise.all(input.references.map(agnesVideoV25ReferenceUrl));
+    if (input.audioReferences.length) body.audios = await Promise.all(input.audioReferences.map(agnesVideoV25ReferenceUrl));
+    if (input.videoReferences.length) {
+        const urls = await Promise.all(input.videoReferences.map(agnesVideoV25ReferenceUrl));
+        body.videos = urls.map((url) => ({ url }));
+    }
+    return body;
+}
+
 async function createVideoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
     const size = normalizeVideoSize(config.size);
     if (isGrok2APIVideoConfig(config, model)) return createGrok2APIVideoRequestBody(config, model, prompt, input);
+    if (isMiniMaxH3Config(config, model)) return createMiniMaxH3VideoRequestBody(config, model, prompt, input);
     if (isCogVideoX3Model(model)) return createCogVideoX3RequestBody(config, model, prompt, input);
+    if (isAgnesVideoV25Model(model)) return createAgnesVideoV25RequestBody(config, model, prompt, input);
     if (isAgnesVideoModel(model)) {
         const references = input.references;
         const inputReferences = await Promise.all(references.slice(0, 7).map(imageToAgnesReference));
@@ -288,6 +327,48 @@ async function createVideoRequestBody(config: AiConfig, model: string, prompt: s
     const audioFiles = kling ? [] : await Promise.all(input.audioReferences.map(mediaReferenceToFormValue));
     audioFiles.forEach((file) => body.append("audio_reference[]", file));
     return body;
+}
+
+async function createMiniMaxH3VideoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
+    const hasFrames = Boolean(input.firstFrame || input.lastFrame);
+    const hasReferences = Boolean(input.references.length || input.videoReferences.length || input.audioReferences.length);
+    if (hasFrames && hasReferences) throw new VideoRequestError("MiniMax-H3 首尾帧不能与参考图片、视频或音频同时使用");
+    if (input.audioReferences.length && !input.references.length && !input.videoReferences.length) {
+        throw new VideoRequestError("MiniMax-H3 参考音频需要同时提供参考图片或参考视频");
+    }
+
+    const content: Array<Record<string, unknown>> = [{ type: "text", text: prompt }];
+    if (hasFrames) {
+        const frames = [
+            { reference: input.firstFrame, role: "first_frame" },
+            { reference: input.lastFrame, role: "last_frame" },
+        ].filter((item): item is { reference: ReferenceImage; role: string } => Boolean(item.reference));
+        const urls = await Promise.all(frames.map((item) => miniMaxReferenceValue(imageReferenceToFormValue(item.reference))));
+        frames.forEach((item, index) => content.push({ type: "image_url", image_url: { url: urls[index] }, role: item.role }));
+    } else if (hasReferences) {
+        const [images, videos, audios] = await Promise.all([
+            Promise.all(input.references.map((reference) => miniMaxReferenceValue(imageReferenceToFormValue(reference)))),
+            Promise.all(input.videoReferences.map((reference) => miniMaxReferenceValue(mediaReferenceToFormValue(reference)))),
+            Promise.all(input.audioReferences.map((reference) => miniMaxReferenceValue(mediaReferenceToFormValue(reference)))),
+        ]);
+        images.forEach((url) => content.push({ type: "image_url", image_url: { url }, role: "reference_image" }));
+        videos.forEach((url) => content.push({ type: "video_url", video_url: { url }, role: "reference_video" }));
+        audios.forEach((url) => content.push({ type: "audio_url", audio_url: { url }, role: "reference_audio" }));
+    }
+
+    const selectedRatio = normalizeMiniMaxH3Ratio(config.size);
+    return {
+        model,
+        content,
+        resolution: normalizeMiniMaxH3Resolution(config.vquality),
+        duration: normalizeMiniMaxH3Duration(config.videoSeconds),
+        ratio: hasFrames ? "adaptive" : !hasReferences && selectedRatio === "adaptive" ? "16:9" : selectedRatio,
+    };
+}
+
+async function miniMaxReferenceValue(value: Promise<string | File>) {
+    const reference = await value;
+    return typeof reference === "string" ? reference : readFileAsDataUrl(reference);
 }
 
 async function createCogVideoX3RequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
@@ -483,6 +564,15 @@ async function imageToAgnesReference(image: ReferenceImage) {
     return imageToDataUrl(image);
 }
 
+async function agnesVideoV25ReferenceUrl(reference: ReferenceImage | ReferenceVideo | ReferenceAudio) {
+    const resolvedUrl = "dataUrl" in reference
+        ? await resolveImageUrl(reference.storageKey, reference.url || "")
+        : await resolveMediaUrl(reference.storageKey, reference.url);
+    const url = publicHttpUrl(reference.url) || ("dataUrl" in reference ? publicHttpUrl(reference.dataUrl) : "") || publicHttpUrl(resolvedUrl);
+    if (!url) throw new VideoRequestError("Agnes Video 2.5 的参考素材必须具有公网访问地址");
+    return url;
+}
+
 function publicHttpUrl(value?: string) {
     if (!value || value.startsWith("blob:") || value.startsWith("data:")) return "";
     try {
@@ -572,6 +662,24 @@ function unwrapVideoResponse(payload: ApiVideoResponse): VideoResponse {
     return normalizeVideoResponse(payload);
 }
 
+function unwrapVideoResponseForConfig(config: AiConfig, model: string, payload: ApiVideoResponse) {
+    if (isMiniMaxH3Config(config, model)) {
+        const root = payload as unknown as Record<string, unknown>;
+        const task = root.task && typeof root.task === "object" ? root.task as Record<string, unknown> : null;
+        if (task) {
+            const content = task.content && typeof task.content === "object" ? task.content as Record<string, unknown> : {};
+            return normalizeVideoResponse({
+                ...task,
+                task_id: firstString(task.id),
+                video_url: firstString(content.url, task.video_url),
+                seconds: task.duration == null ? undefined : String(task.duration),
+                size: firstString(task.resolution, task.size),
+            });
+        }
+    }
+    return unwrapVideoResponse(payload);
+}
+
 function isVideoEnvelope(payload: ApiVideoResponse): payload is ApiVideoEnvelope {
     return "code" in payload && typeof payload.code === "number";
 }
@@ -655,8 +763,8 @@ function redactLogMedia(value: unknown) {
     const record = value as Record<string, unknown>;
     for (const key of Object.keys(record)) {
         const item = record[key];
-        if (typeof item === "string" && (item.startsWith("data:image/") || item.includes("data:image/") || item.length > 2048 && looksLikeBase64(item))) {
-            record[key] = `[redacted image/string len=${item.length}]`;
+        if (typeof item === "string" && (item.startsWith("data:image/") || item.startsWith("data:video/") || item.startsWith("data:audio/") || item.includes("data:image/") || item.includes("data:video/") || item.includes("data:audio/") || item.length > 2048 && looksLikeBase64(item))) {
+            record[key] = `[redacted media/string len=${item.length}]`;
             continue;
         }
         redactLogMedia(item);

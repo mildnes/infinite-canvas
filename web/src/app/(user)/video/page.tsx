@@ -12,11 +12,12 @@ import { AssetPickerModal, type InsertAssetPayload } from "@/app/(user)/canvas/c
 import { ModelPicker } from "@/components/model-picker";
 import { KlingV26WorkbenchPanel } from "@/app/(user)/video/components/kling-v26-workbench-panel";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
-import { VideoSettingsPanel, isKIEKlingV3Config, kieKlingOmniVariant, normalizeVideoResolutionValue, videoResolutionOptions, videoSizeForResolution, videoSizeOptions } from "@/components/video-settings-panel";
+import { VideoSettingsPanel, isKIEKlingV3Config, kieKlingOmniVariant, normalizeVideoResolutionValue, normalizeVideoSizeValue, videoResolutionOptions, videoSizeForResolution, videoSizeOptions } from "@/components/video-settings-panel";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
+import { isMiniMaxH3Config } from "@/lib/minimax-video";
 import { boolConfig, isSeedanceVideoConfig, normalizeSeedanceRatio, seedanceReferenceLabel, seedanceVideoReferenceError, seedanceVideoReferenceHint, SEEDANCE_REFERENCE_LIMITS } from "@/lib/seedance-video";
-import { COGVIDEOX3_DURATIONS, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration, supportsVideoFrameReferences } from "@/lib/video-model-capabilities";
+import { COGVIDEOX3_DURATIONS, isAgnesVideoV25Model, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration, supportsVideoFrameReferences } from "@/lib/video-model-capabilities";
 import { deleteStoredMedia, downloadRemoteMedia, resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer } from "@/services/file-storage";
 import { deleteStoredImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { deleteVideoGenerationLogs, fetchVideoGenerationLogs, saveVideoGenerationLogs } from "@/services/api/generation-logs";
@@ -617,7 +618,7 @@ export default function VideoPage() {
                 return null;
             }
         }
-        if (!kling) {
+        if (!kling && !isMiniMaxH3Config(configValue, modelValue) && !isAgnesVideoV25Model(modelValue)) {
             const videoReferenceError = seedanceVideoReferenceError(videoReferenceItems);
             if (videoReferenceError) {
                 message.error(`${videoReferenceError}。${seedanceVideoReferenceHint}`);
