@@ -1388,10 +1388,11 @@ function WorkbenchPanel({
                                         size="small"
                                         className="canvas-config-mode !rounded-md !p-0.5 w-full"
                                         value={config.apiMode}
-                                        onChange={(value) => updateConfig("apiMode", value as "images" | "responses")}
+                                        onChange={(value) => updateConfig("apiMode", value as "images" | "responses" | "chat")}
                                         options={[
                                             { value: "images", label: "images" },
                                             { value: "responses", label: "responses" },
+                                            { value: "chat", label: "chat" },
                                         ]}
                                     />
                                 </div>
@@ -1562,7 +1563,7 @@ function settingsSummary(config: AiConfig, model: string) {
         imageSizeLabel(config.size || "auto"),
         imageQualityLabel(config.quality || "auto"),
         `${config.count || "1"} 张`,
-        config.streamImages ? `流式 ${config.streamPartialImages || "1"}` : "非流式",
+        config.apiMode !== "chat" && config.streamImages ? `流式 ${config.streamPartialImages || "1"}` : "非流式",
     ].join(" · ");
 }
 
@@ -1843,10 +1844,11 @@ function GenerationSettings({ config, model, updateConfig, openConfigDialog }: {
                             size="small"
                             className="canvas-config-mode !rounded-md !p-0.5"
                             value={config.apiMode}
-                            onChange={(value) => updateConfig("apiMode", value as "images" | "responses")}
+                            onChange={(value) => updateConfig("apiMode", value as "images" | "responses" | "chat")}
                             options={[
                                 { value: "images", label: "images" },
                                 { value: "responses", label: "responses" },
+                                { value: "chat", label: "chat" },
                             ]}
                         />
                     </div>
@@ -1983,10 +1985,10 @@ function TaskInfo({ result, error, onCopyPrompt }: { result: GenerationResult; e
                 ) : null}
                 <Tag className="m-0">{formatLogTime(result.createdAt)}</Tag>
                 <Tag className="m-0">{result.model}</Tag>
-                <Tag className="m-0">{result.config.apiMode === "responses" ? "Responses" : "Images"}</Tag>
+                <Tag className="m-0">{result.config.apiMode === "chat" ? "Chat" : result.config.apiMode === "responses" ? "Responses" : "Images"}</Tag>
                 <Tag className="m-0">{result.config.size || "auto"}</Tag>
                 <Tag className="m-0">{result.config.quality || "auto"}</Tag>
-                {result.config.streamImages ? <Tag className="m-0">流式 {result.config.streamPartialImages || "1"}</Tag> : null}
+                {result.config.apiMode !== "chat" && result.config.streamImages ? <Tag className="m-0">流式 {result.config.streamPartialImages || "1"}</Tag> : null}
                 {result.durationMs ? <Tag className="m-0">{formatDuration(result.durationMs)}</Tag> : null}
             </div>
             {error ? <div className="rounded-md bg-red-100 px-2 py-1.5 text-red-600 dark:bg-red-950/40 dark:text-red-300">{error}</div> : null}
@@ -2120,10 +2122,10 @@ function HistoryLogCard({
                     ) : null}
                     <Tag className="m-0 text-[10px]">{formatLogTime(log.createdAt)}</Tag>
                     <Tag className="m-0 text-[10px]">{log.model}</Tag>
-                    <Tag className="m-0 text-[10px]">{log.config.apiMode === "responses" ? "Responses" : "Images"}</Tag>
+                    <Tag className="m-0 text-[10px]">{log.config.apiMode === "chat" ? "Chat" : log.config.apiMode === "responses" ? "Responses" : "Images"}</Tag>
                     <Tag className="m-0 text-[10px]">{log.config.size || "auto"}</Tag>
                     <Tag className="m-0 text-[10px]">{log.config.quality || "auto"}</Tag>
-                    {log.config.streamImages ? <Tag className="m-0 text-[10px]">流式 {log.config.streamPartialImages || "1"}</Tag> : null}
+                    {log.config.apiMode !== "chat" && log.config.streamImages ? <Tag className="m-0 text-[10px]">流式 {log.config.streamPartialImages || "1"}</Tag> : null}
                     <Tag className="m-0 text-[10px]">{formatDuration(log.durationMs)}</Tag>
                 </div>
                 {log.errors[0] ? (

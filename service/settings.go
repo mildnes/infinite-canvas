@@ -111,7 +111,7 @@ func DefaultSystemPrompts() model.SystemPromptSetting {
 2. 变量名使用 snake_case，label 使用中文。
 3. promptTemplate 必须使用 {{variable_name}} 引用变量。
 4. 如果用户需要"多张、系列、组图、文章配图、海报组、写真组、方案集"，mode 使用 multi_image_series；否则使用 single_image。
-5. config 只输出必要配置，apiMode 可为 responses 或 images。
+5. config 只输出必要配置，apiMode 可为 responses、images 或 chat。
 6. variables 支持 text、textarea、number、select、boolean。
 7. select 类型的 options 必须是字符串数组。
 8. 多图工作流必须输出 seriesConfig，用于先生成多条图片提示词草稿。

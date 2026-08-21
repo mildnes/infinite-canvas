@@ -272,7 +272,7 @@ func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []
 		return
 	}
 	collectAll := isKIESeedreamLayerDecompositionModel(task.Model)
-	imageURLs, mimeType, bytes, err := imageURLsFromAIResponse(payload, responseContentType, collectAll)
+	imageURLs, mimeType, bytes, err := imageURLsFromAIResponse(payload, responseContentType, collectAll, task.Endpoint == "/chat/completions")
 	if err != nil {
 		saveFailedCanvasImageTask(task, err.Error(), string(payload))
 		return
@@ -534,7 +534,7 @@ func readWrappedTaskError(payload []byte) string {
 }
 
 func imageBytesFromAIResponse(payload []byte) ([]byte, string, error) {
-	candidates, err := imageCandidatesFromAIResponse(payload, "")
+	candidates, err := imageCandidatesFromAIResponse(payload, "", false)
 	if err != nil {
 		return nil, "", err
 	}
@@ -547,8 +547,8 @@ func imageBytesFromAIResponse(payload []byte) ([]byte, string, error) {
 	return nil, "", errors.New("图片接口没有返回图片")
 }
 
-func imageURLsFromAIResponse(payload []byte, contentType string, collectAll bool) ([]string, string, int64, error) {
-	candidates, err := imageCandidatesFromAIResponse(payload, contentType)
+func imageURLsFromAIResponse(payload []byte, contentType string, collectAll bool, includeChatImages bool) ([]string, string, int64, error) {
+	candidates, err := imageCandidatesFromAIResponse(payload, contentType, includeChatImages)
 	if err != nil {
 		return nil, "", 0, err
 	}
@@ -595,13 +595,13 @@ type serverSentJSONEvent struct {
 	data any
 }
 
-func imageCandidatesFromAIResponse(payload []byte, contentType string) ([]string, error) {
+func imageCandidatesFromAIResponse(payload []byte, contentType string, includeChatImages bool) ([]string, error) {
 	if !isServerSentEventResponse(payload, contentType) {
 		var root any
 		if err := json.Unmarshal(payload, &root); err != nil {
 			return nil, err
 		}
-		return collectImageCandidates(root, 0), nil
+		return collectImageCandidates(root, 0, includeChatImages), nil
 	}
 
 	events, err := parseServerSentJSONEvents(payload)
@@ -618,7 +618,7 @@ func imageCandidatesFromAIResponse(payload []byte, contentType string) ([]string
 		if strings.EqualFold(event.name, "error") {
 			return nil, errors.New("图片流式接口返回错误")
 		}
-		candidates = append(candidates, collectImageCandidates(event.data, 0)...)
+		candidates = append(candidates, collectImageCandidates(event.data, 0, includeChatImages)...)
 	}
 	return candidates, nil
 }
@@ -661,7 +661,7 @@ func parseServerSentJSONEvents(payload []byte) ([]serverSentJSONEvent, error) {
 	return events, nil
 }
 
-func collectImageCandidates(value any, depth int) []string {
+func collectImageCandidates(value any, depth int, includeChatImages bool) []string {
 	if depth > 7 || value == nil {
 		return nil
 	}
@@ -674,14 +674,17 @@ func collectImageCandidates(value any, depth int) []string {
 	case []any:
 		var result []string
 		for _, item := range typed {
-			result = append(result, collectImageCandidates(item, depth+1)...)
+			result = append(result, collectImageCandidates(item, depth+1, includeChatImages)...)
 		}
 		return result
 	case map[string]any:
 		keys := []string{"url", "b64_json", "partial_image_b64", "image_url", "image", "image_data", "base64", "inlineData", "parts", "content", "candidates", "result", "response", "data", "output"}
+		if includeChatImages {
+			keys = append(keys, "choices", "message", "images")
+		}
 		var result []string
 		for _, key := range keys {
-			result = append(result, collectImageCandidates(typed[key], depth+1)...)
+			result = append(result, collectImageCandidates(typed[key], depth+1, includeChatImages)...)
 		}
 		return result
 	}

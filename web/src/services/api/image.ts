@@ -30,6 +30,13 @@ type ResponsesApiResponse = {
     msg?: string;
 };
 
+type ChatImagesApiResponse = {
+    choices?: Array<{ message?: { images?: Array<{ image_url?: { url?: string } }> } }>;
+    error?: { message?: string };
+    code?: number;
+    msg?: string;
+};
+
 type GeneratedImage = { id: string; dataUrl: string; seed?: number };
 export type CanvasImageTask = {
     id: string;
@@ -257,6 +264,18 @@ function parseImagePayload(payload: ImageApiResponse, mime: string): GeneratedIm
         throw new ImageRequestError("接口没有返回图片", payload);
     }
 
+    return images;
+}
+
+function parseChatImagesPayload(payload: ChatImagesApiResponse): GeneratedImage[] {
+    if (typeof payload.code === "number" && payload.code !== 0) throw new ImageRequestError(payload.msg || "请求失败", payload);
+    if (payload.error?.message) throw new ImageRequestError(payload.error.message, payload);
+    const images = payload.choices
+        ?.flatMap((choice) => choice.message?.images || [])
+        .map((item) => item.image_url?.url || "")
+        .filter(Boolean)
+        .map((dataUrl) => ({ id: nanoid(), dataUrl })) || [];
+    if (!images.length) throw new ImageRequestError("Chat Completions 没有返回图片", payload);
     return images;
 }
 
@@ -838,6 +857,27 @@ function createResponsesInput(config: AiConfig, prompt: string, inputImageDataUr
     ];
 }
 
+function createChatImageBody(config: AiConfig, prompt: string, inputImageDataUrls: string[], params: ImageRequestParams) {
+    const image = geminiImageSettings(config.model, config.quality, config.size, params.size);
+    const imageConfig = {
+        ...(image.aspectRatio ? { aspect_ratio: image.aspectRatio } : {}),
+        ...(image.imageSize ? { image_size: image.imageSize } : {}),
+    };
+    const text = withPromptGuard(config, withSystemPrompt(config, prompt));
+    return {
+        model: config.model,
+        messages: [{
+            role: "user",
+            content: inputImageDataUrls.length
+                ? [{ type: "text", text }, ...inputImageDataUrls.map((url) => ({ type: "image_url", image_url: { url } }))]
+                : text,
+        }],
+        modalities: ["image", "text"],
+        ...(Object.keys(imageConfig).length ? { image_config: imageConfig } : {}),
+        stream: false,
+    };
+}
+
 async function requestResponsesSingle(config: AiConfig, prompt: string, inputImageDataUrls: string[], params: ImageRequestParams): Promise<GeneratedImage[]> {
     const mime = IMAGE_MIME;
     const body: Record<string, unknown> = {
@@ -875,6 +915,26 @@ async function requestResponsesSingle(config: AiConfig, prompt: string, inputIma
     );
 }
 
+async function requestChatImagesSingle(config: AiConfig, prompt: string, inputImageDataUrls: string[], params: ImageRequestParams): Promise<GeneratedImage[]> {
+    const body = createChatImageBody(config, prompt, inputImageDataUrls, params);
+    return requestAndParseImages(
+        config,
+        "/chat/completions",
+        body,
+        params.timeoutSeconds,
+        () => requestWithTransientRetry(() => withTimeout(params.timeoutSeconds, (signal) => fetch(aiApiUrl(config, "/chat/completions"), {
+            method: "POST",
+            headers: aiHeaders(config, "application/json"),
+            body: JSON.stringify(body),
+            signal,
+        }))),
+        async (response) => {
+            const payload = await response.json() as ChatImagesApiResponse;
+            return { images: parseChatImagesPayload(payload), responseBody: stringifyLogPayload(payload) };
+        },
+    );
+}
+
 async function requestAndParseImages(config: AiConfig, endpoint: string, requestBody: unknown, timeoutSeconds: number, fetchResponse: () => Promise<Response>, parseResponse: (response: Response) => Promise<ParsedImageResponse>) {
     const startedAt = Date.now();
     let logged = false;
@@ -902,7 +962,7 @@ async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?
     assertImageReferencesSupported(config.model, references);
     const params = createImageRequestParams(config);
     const inputImageDataUrls = references.length ? await Promise.all(references.map((image) => imageToDataUrl(image))) : [];
-    const useConcurrentSingleRequests = isGeminiConfig(config) || config.apiMode === "responses" || config.codexCli || config.streamImages || isZhipuImageModel(config.model);
+    const useConcurrentSingleRequests = isGeminiConfig(config) || config.apiMode === "responses" || config.apiMode === "chat" || config.codexCli || config.streamImages || isZhipuImageModel(config.model);
     if (params.n > 1 && useConcurrentSingleRequests) {
         const results = await Promise.allSettled(Array.from({ length: params.n }, () => requestImages({ ...config, count: "1" }, prompt, references)));
         const images = results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
@@ -913,6 +973,7 @@ async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?
     if (references.length && isAgnesImageModel(config.model)) {
         return requestAgnesImageEdit(config, prompt, references, params);
     }
+    if (config.apiMode === "chat" && !isGeminiConfig(config) && !isZhipuImageModel(config.model)) return requestChatImagesSingle(config, prompt, inputImageDataUrls, params);
     if (config.apiMode === "responses" && !isGeminiConfig(config) && !isZhipuImageModel(config.model)) return requestResponsesSingle(config, prompt, inputImageDataUrls, params);
     return references.length ? requestImageEditSingle(config, prompt, references, params) : requestImageGenerationSingle(config, prompt, params);
 }
@@ -1021,6 +1082,14 @@ async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: num
             method: "POST",
             headers: jsonHeaders,
             body: JSON.stringify({ endpoint: "/images/generations", ...meta, request: body }),
+        };
+    }
+    if (config.apiMode === "chat" && !isZhipuImageModel(config.model)) {
+        const inputImageDataUrls = references.length ? await Promise.all(references.map((image) => imageToDataUrl(image))) : [];
+        return {
+            method: "POST",
+            headers: jsonHeaders,
+            body: JSON.stringify({ endpoint: "/chat/completions", ...meta, request: createChatImageBody(config, prompt, inputImageDataUrls, params) }),
         };
     }
     if (config.apiMode === "responses" && !isZhipuImageModel(config.model)) {
