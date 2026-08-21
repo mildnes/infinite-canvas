@@ -15,6 +15,7 @@ import { defaultConfig, type AiConfig, useConfigStore, useEffectiveConfig } from
 import { collectImageStorageKeys, deleteStoredImages, resolveImageUrl, uploadImage, type UploadedImage } from "@/services/image-storage";
 import { canUploadCanvasMediaToServer, nodeNeedsCloudUpload, repairCanvasProjectMedia, uploadCanvasNodeToCloud } from "../utils/canvas-media-persistence";
 import { downloadRemoteMedia, resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
+import { createZip } from "@/lib/zip";
 import { nanoid } from "nanoid";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
@@ -1954,26 +1955,54 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     );
 
     const downloadNodeImage = useCallback(async (node: CanvasNodeData) => {
-        if ((!isCanvasImageNodeType(node.type) && node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) || !node.metadata?.content) return;
-        const isVideo = node.type === CanvasNodeType.Video;
-        const isAudio = node.type === CanvasNodeType.Audio;
-        const filename = `canvas-${node.type}-${node.id}.${isVideo ? "mp4" : isAudio ? audioExtension(node.metadata.mimeType) : imageExtension(node.metadata.mimeType || node.metadata.content)}`;
         try {
-            const source = isVideo || isAudio
-                ? await resolveMediaUrl(node.metadata.storageKey, node.metadata.content)
-                : await resolveImageUrl(node.metadata.storageKey, node.metadata.content);
-            if (!source) throw new Error("媒体地址不可用");
-            // blob:/data: can download directly; /api/files and remote URLs should be fetched first.
-            if (source.startsWith("blob:") || source.startsWith("data:")) {
-                saveAs(source, filename);
-                return;
-            }
-            const blob = await downloadRemoteMedia(source);
-            saveAs(blob, filename);
+            const file = await resolveCanvasNodeDownloadFile(node);
+            if (!file) return;
+            saveAs(file.blob, file.name);
         } catch (error) {
             message.error(error instanceof Error ? error.message : "下载失败");
         }
     }, [message]);
+
+    const downloadSelectedNodes = useCallback(async () => {
+        const targets = collectSelectedDownloadableNodes(selectedNodeIds, nodesRef.current);
+        if (!targets.length) {
+            message.warning("请先选择可下载的图片、视频或音频节点");
+            return;
+        }
+        const hideLoading = message.loading(targets.length === 1 ? "正在下载..." : `正在打包下载 ${targets.length} 个文件...`, 0);
+        try {
+            const files: { name: string; data: Blob }[] = [];
+            const usedNames = new Set<string>();
+            for (const node of targets) {
+                const file = await resolveCanvasNodeDownloadFile(node);
+                if (!file) continue;
+                let name = file.name;
+                if (usedNames.has(name)) {
+                    const extIndex = name.lastIndexOf(".");
+                    const stem = extIndex > 0 ? name.slice(0, extIndex) : name;
+                    const ext = extIndex > 0 ? name.slice(extIndex) : "";
+                    name = `${stem}-${node.id.slice(0, 6)}${ext}`;
+                }
+                usedNames.add(name);
+                files.push({ name, data: file.blob });
+            }
+            if (!files.length) throw new Error("没有可下载的媒体内容");
+            if (files.length === 1) {
+                saveAs(files[0].data, files[0].name);
+                message.success("下载完成");
+                return;
+            }
+            const zip = await createZip(files);
+            const projectTitle = (currentProject?.title || "无限画布").trim() || "无限画布";
+            saveAs(zip, `${sanitizeDownloadName(projectTitle)}-选中${files.length}个.zip`);
+            message.success(`已打包下载 ${files.length} 个文件`);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "批量下载失败");
+        } finally {
+            hideLoading();
+        }
+    }, [currentProject?.title, message, selectedNodeIds]);
 
     const uploadNodeMediaToCloud = useCallback(async (node: CanvasNodeData) => {
         if ((node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) || node.metadata?.storageKey?.startsWith("server:") || uploadingMediaNodeIdsRef.current.has(node.id)) return;
@@ -3985,6 +4014,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     onRedo={redoCanvas}
                     onUpload={() => handleUploadRequest()}
                     onUploadBoardToCloud={() => void uploadBoardMediaToCloud()}
+                    onDownloadSelected={() => void downloadSelectedNodes()}
                     onDelete={() => deleteNodes(new Set(selectedNodeIds))}
                     onClear={() => setClearConfirmOpen(true)}
                     onCanvasToolChange={setCanvasTool}
@@ -4460,6 +4490,52 @@ function Shortcut({ keys, value }: { keys: string[]; value: string }) {
             <span className="text-right text-sm opacity-55">{value}</span>
         </div>
     );
+}
+
+async function resolveCanvasNodeDownloadFile(node: CanvasNodeData): Promise<{ name: string; blob: Blob } | null> {
+    if ((!isCanvasImageNodeType(node.type) && node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) || !(node.metadata?.content || node.metadata?.storageKey)) {
+        return null;
+    }
+    const isVideo = node.type === CanvasNodeType.Video;
+    const isAudio = node.type === CanvasNodeType.Audio;
+    const ext = isVideo ? "mp4" : isAudio ? audioExtension(node.metadata?.mimeType) : imageExtension(node.metadata?.mimeType || node.metadata?.content);
+    const baseName = sanitizeDownloadName(node.title || node.metadata?.prompt || `${node.type}-${node.id.slice(0, 8)}`) || `${node.type}-${node.id.slice(0, 8)}`;
+    const name = `${baseName}.${ext}`;
+    const source = isVideo || isAudio
+        ? await resolveMediaUrl(node.metadata?.storageKey, node.metadata?.content)
+        : await resolveImageUrl(node.metadata?.storageKey, node.metadata?.content);
+    if (!source) throw new Error("媒体地址不可用");
+    if (source.startsWith("blob:") || source.startsWith("data:")) {
+        const response = await fetch(source);
+        if (!response.ok) throw new Error(`读取本地媒体失败：${response.status}`);
+        return { name, blob: await response.blob() };
+    }
+    return { name, blob: await downloadRemoteMedia(source) };
+}
+
+function collectSelectedDownloadableNodes(selectedIds: Set<string>, nodes: CanvasNodeData[]) {
+    const expanded = new Set(selectedIds);
+    nodes.forEach((node) => {
+        if (selectedIds.has(node.id) && node.type === CanvasNodeType.Group) {
+            nodes.forEach((child) => {
+                if (child.metadata?.groupId === node.id) expanded.add(child.id);
+            });
+        }
+    });
+    return nodes.filter((node) => {
+        if (!expanded.has(node.id)) return false;
+        if (!(isCanvasImageNodeType(node.type) || node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio)) return false;
+        return Boolean(node.metadata?.content || node.metadata?.storageKey);
+    });
+}
+
+function sanitizeDownloadName(value: string) {
+    return value
+        .trim()
+        .replace(/[\\/:*?"<>|]+/g, "_")
+        .replace(/\s+/g, " ")
+        .slice(0, 48)
+        .trim();
 }
 
 function imageExtension(value?: string) {
