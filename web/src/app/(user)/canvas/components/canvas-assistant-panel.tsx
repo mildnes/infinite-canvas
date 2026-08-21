@@ -704,7 +704,26 @@ function textMentionsLabel(text: string, label: string) {
 
 function buildAssistantReferences(nodes: CanvasNodeData[], selectedNodeIds: Set<string>) {
     const nodeById = new Map(nodes.map((node) => [node.id, node]));
-    return Array.from(selectedNodeIds)
+    const expandedIds: string[] = [];
+    const seen = new Set<string>();
+    const append = (id: string) => {
+        if (!id || seen.has(id)) return;
+        seen.add(id);
+        expandedIds.push(id);
+    };
+
+    selectedNodeIds.forEach((id) => {
+        const node = nodeById.get(id);
+        if (!node) return;
+        if (node.type === CanvasNodeType.Group) {
+            nodes.filter((child) => child.metadata?.groupId === node.id).forEach((child) => append(child.id));
+            return;
+        }
+        append(node.id);
+        node.metadata?.batchChildIds?.forEach(append);
+    });
+
+    return expandedIds
         .map((id) => nodeById.get(id))
         .filter((node): node is CanvasNodeData => Boolean(node))
         .map(nodeToReference)
