@@ -27,7 +27,7 @@ export const BUILTIN_CANVAS_AGENT_SKILLS: Array<CanvasAgentSkillReference & { pr
     { id: "builtin:video-editing", name: "视频编辑", description: "视频重绘、改风格和局部修改", source: "builtin", prompt: VIDEO_EDITING_SKILL },
     { id: "builtin:video-extension", name: "视频续写", description: "视频续写和连续镜头设计", source: "builtin", prompt: VIDEO_EXTENSION_SKILL },
     { id: "builtin:audio", name: "音频与配音", description: "旁白、对白和音频生成", source: "builtin", prompt: AUDIO_SKILL },
-    { id: "builtin:organize", name: "画布整理", description: "节点分组、布局和整理", source: "builtin", prompt: ORGANIZE_SKILL },
+    { id: "builtin:organize", name: "画布整理", description: "原图/参考图/文本/生成结果分组与布局整理", source: "builtin", prompt: ORGANIZE_SKILL },
 ];
 
 export function builtinCanvasAgentSkill(id: string) {
@@ -62,7 +62,7 @@ export function buildCanvasAgentSkillPromptWithExtra(phase: CanvasAgentPhase, us
         (/多镜头|多段镜头|镜头序列|广告片|品牌片|宣传片|音乐视频|MV|蒙太奇|分镜拼图|分镜板|storyboard|能量弧|密度图/.test(intent) ||
             context.nodes.some((node) => context.selectedNodeIds.includes(node.id) && /分镜拼图|分镜板|storyboard/i.test(node.title)));
     const wantsAudio = phase === "audio" || selectedTypes.has("audio") || /独立音频|音色|配音|声音样本|角色声音|角色音色|对白音频|旁白|最终对白|最终旁白|朗读|语音/.test(intent);
-    const wantsOrganize = phase === "references" || phase === "review" || phase === "complete" || /分组|整理|布局|归类|排列|收纳|画布太乱|自动整理/.test(intent);
+    const wantsOrganize = phase === "references" || phase === "review" || phase === "complete" || /分组|整理|布局|归类|排列|收纳|画板太乱|画布太乱|自动整理|整理画板|整理结果|按参考图分组|洗图整理|结果归组|收纳结果/.test(intent);
 
     if (wantsScript) skills.push(SCRIPT_SKILL);
     if (wantsImage) skills.push(IMAGE_SKILL);
