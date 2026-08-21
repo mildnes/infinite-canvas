@@ -95,7 +95,7 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 		Fail(w, "AI 接口请求失败")
 		return
 	}
-	request.Header.Set("Authorization", "Bearer "+channel.APIKey)
+	service.SetModelChannelAuthHeader(request, channel)
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}
@@ -222,6 +222,52 @@ func serveAIVideoTask(w http.ResponseWriter, r *http.Request, id string) bool {
 	return true
 }
 
+func serveGeminiVideoTaskContent(w http.ResponseWriter, r *http.Request, id string) bool {
+	user, ok := service.UserFromContext(r.Context())
+	if !ok {
+		return false
+	}
+	task, found, err := service.GetUserVideoTask(user.ID, strings.TrimSpace(id))
+	if err != nil || !found {
+		return false
+	}
+	var channel model.ModelChannel
+	if strings.TrimSpace(task.UserChannelID) != "" {
+		channel, err = service.SelectUserLocalModelChannelForModel(task.UserID, task.Model, task.UserChannelID)
+	} else {
+		channel, err = service.SelectModelChannelForModel(task.Model, task.ChannelID)
+	}
+	if err != nil || !service.IsGeminiChannel(channel) {
+		return false
+	}
+	if strings.TrimSpace(task.VideoURL) == "" {
+		Fail(w, "Gemini Veo 任务完成但没有返回视频地址")
+		return true
+	}
+	request, err := http.NewRequest(http.MethodGet, task.VideoURL, nil)
+	if err != nil {
+		Fail(w, "视频内容下载失败")
+		return true
+	}
+	service.SetModelChannelAuthHeader(request, channel)
+	response, err := service.HTTPClientForChannel(channel).Do(request)
+	if err != nil {
+		Fail(w, "视频内容下载失败")
+		return true
+	}
+	defer response.Body.Close()
+	if response.StatusCode >= http.StatusBadRequest {
+		Fail(w, readUpstreamAIErrorMessage(nil, response.StatusCode))
+		return true
+	}
+	if contentType := response.Header.Get("Content-Type"); contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	w.WriteHeader(response.StatusCode)
+	_, _ = io.Copy(w, response.Body)
+	return true
+}
+
 func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdate, error) {
 	var channel model.ModelChannel
 	var err error
@@ -246,7 +292,7 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 	if err != nil {
 		return service.VideoTaskPollUpdate{}, err
 	}
-	request.Header.Set("Authorization", "Bearer "+channel.APIKey)
+	service.SetModelChannelAuthHeader(request, channel)
 	startedAt := time.Now()
 	logContext := aiLogContext{
 		StartedAt:       startedAt,
@@ -299,6 +345,10 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 }
 
 func normalizeVideoCreateBody(body []byte, contentType string, modelName string, channel model.ModelChannel, upstreamPath string) ([]byte, string, error) {
+	if service.IsGeminiChannel(channel) {
+		normalized, err := service.StripGeminiModelField(body, contentType)
+		return normalized, contentType, err
+	}
 	if isKIEChannel(channel, modelName) && upstreamPath == "/jobs/createTask" {
 		return normalizeKIEVideoBody(body, contentType, modelName, channel)
 	}
@@ -322,6 +372,11 @@ func doAIRequest(request *http.Request, channel model.ModelChannel) ([]byte, int
 }
 
 func transformVideoCreatePayload(payload []byte, request *http.Request, channel model.ModelChannel, modelName string) []byte {
+	if service.IsGeminiChannel(channel) {
+		if transformed, ok := transformGeminiVideoTaskResponse(payload); ok {
+			return transformed
+		}
+	}
 	if isKIEChannel(channel, modelName) && strings.Contains(request.URL.Path, "/jobs/createTask") {
 		if transformed, ok := transformKIECreateVideoResponse(payload, modelName); ok {
 			return transformed
@@ -336,6 +391,11 @@ func transformVideoCreatePayload(payload []byte, request *http.Request, channel 
 }
 
 func transformVideoStatusPayload(payload []byte, request *http.Request, channel model.ModelChannel, modelName string) []byte {
+	if service.IsGeminiChannel(channel) {
+		if transformed, ok := transformGeminiVideoTaskResponse(payload); ok {
+			return transformed
+		}
+	}
 	if isMiniMaxH3Channel(channel, modelName) && strings.Contains(request.URL.Path, "/v2/query/video_generation/") {
 		if transformed, ok := transformMiniMaxVideoTaskResponse(payload); ok {
 			return transformed
@@ -352,6 +412,37 @@ func transformVideoStatusPayload(payload []byte, request *http.Request, channel 
 		}
 	}
 	return payload
+}
+
+func transformGeminiVideoTaskResponse(payload []byte) ([]byte, bool) {
+	var root map[string]any
+	if len(payload) == 0 || json.Unmarshal(payload, &root) != nil {
+		return nil, false
+	}
+	name := readStringPath(root, "name")
+	done, _ := root["done"].(bool)
+	videoURL := findFirstHTTPURL(root)
+	errorMessage := firstNonEmpty(readStringPath(root, "error.message"))
+	status := "processing"
+	progress := 0
+	if errorMessage != "" {
+		status = "failed"
+	} else if done && videoURL != "" {
+		status = "completed"
+		progress = 100
+	} else if done {
+		status = "failed"
+		errorMessage = "Gemini Veo 任务完成但没有返回视频地址"
+	}
+	transformed, err := json.Marshal(map[string]any{
+		"id":        name,
+		"task_id":   name,
+		"status":    status,
+		"progress":  progress,
+		"video_url": videoURL,
+		"error":     map[string]any{"message": errorMessage},
+	})
+	return transformed, err == nil
 }
 
 func readVideoCreateErrorMessage(raw []byte, transformed []byte, channel model.ModelChannel, modelName string) string {
@@ -537,7 +628,7 @@ func findFirstHTTPURL(value any) string {
 			}
 		}
 	case map[string]any:
-		for _, key := range []string{"url", "video_url", "videoUrl", "download_url", "downloadUrl", "output_url", "outputUrl", "resultUrls", "result_urls", "videoUrls", "video_urls", "urls", "videos", "video_result", "video", "data", "result", "metadata"} {
+		for _, key := range []string{"uri", "url", "video_url", "videoUrl", "download_url", "downloadUrl", "output_url", "outputUrl", "resultUrls", "result_urls", "videoUrls", "video_urls", "urls", "videos", "video_result", "video", "generatedSamples", "generateVideoResponse", "response", "data", "result", "metadata"} {
 			if url := findFirstHTTPURL(typed[key]); url != "" {
 				return url
 			}

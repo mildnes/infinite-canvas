@@ -160,7 +160,10 @@ export const HomeBannerCarousel = memo(function HomeBannerCarousel({ banners }: 
                             type="button"
                             data-banner-card
                             data-banner-offset={offset}
-                            className="home-banner-carousel-card absolute top-1/2 aspect-video rounded-2xl outline-none transition-[left,width,transform] duration-300 ease-out focus:outline-none focus-visible:ring-2 focus-visible:ring-white/35"
+                            className={cn(
+                                "home-banner-carousel-card absolute top-1/2 aspect-video rounded-2xl outline-none transition-[left,width,transform] duration-300 ease-out focus:outline-none focus-visible:ring-2 focus-visible:ring-white/35",
+                                (banner.linkUrl || banner.videoUrl) && "cursor-pointer",
+                            )}
                             style={{
                                 left: offset === 0 ? "calc(50% + var(--banner-drag-x, 0px))" : offset < 0 ? `calc(50% - ${SIDE_BANNER_WIDTH} + 16px + var(--banner-drag-x, 0px))` : `calc(50% + ${SIDE_BANNER_WIDTH} - 16px + var(--banner-drag-x, 0px))`,
                                 width: active ? BANNER_WIDTH : SIDE_BANNER_WIDTH,

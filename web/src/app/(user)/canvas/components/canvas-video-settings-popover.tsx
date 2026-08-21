@@ -9,7 +9,7 @@ import { VideoSettingsPanel, isAPIMartKlingMotionControlConfig, isKIEKlingMotion
 import { canvasThemes } from "@/lib/canvas-theme";
 import { supportsVideoFrameReferences } from "@/lib/video-model-capabilities";
 import { useThemeStore } from "@/stores/use-theme-store";
-import type { AiConfig } from "@/stores/use-config-store";
+import { channelProtocolForConfig, type AiConfig } from "@/stores/use-config-store";
 import type { CanvasNodeMetadata } from "../types";
 
 export type CanvasVideoFrameOption = { nodeId: string; label: string; previewUrl?: string };
@@ -91,7 +91,7 @@ function VideoSettingsPortal({ buttonRect, panelRef, placement, theme, config, o
     const kieKlingOmni = kieKlingOmniVariant(config, model);
     const isKlingMotionControl = isAPIMartKlingMotionControlConfig(config, model) || isKIEKlingMotionControlConfig(config, model);
     const isKlingV3 = isAPIMartKlingV3 || isKIEKlingV3;
-    const frameReferencesEnabled = !isKlingV3 && supportsVideoFrameReferences(model);
+    const frameReferencesEnabled = !isKlingV3 && supportsVideoFrameReferences(model, channelProtocolForConfig({ ...config, model }));
     const optionIds = useMemo(() => new Set(frameOptions.map((item) => item.nodeId)), [frameOptions]);
     const firstFrameValue = firstFrameNodeId && optionIds.has(firstFrameNodeId) ? firstFrameNodeId : "";
     const lastFrameValue = lastFrameNodeId && optionIds.has(lastFrameNodeId) ? lastFrameNodeId : "";

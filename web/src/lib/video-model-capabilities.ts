@@ -17,7 +17,7 @@ export function normalizeCogVideoX3Duration(value: string) {
     return Math.abs(seconds - 5) <= Math.abs(seconds - 10) ? COGVIDEOX3_DURATIONS[0] : COGVIDEOX3_DURATIONS[1];
 }
 
-export function supportsVideoFrameReferences(modelName: string) {
+export function supportsVideoFrameReferences(modelName: string, protocol = "") {
     const model = modelKey(modelName);
     return (
         isAgnesVideoV25Model(model) ||
@@ -39,6 +39,7 @@ export function supportsVideoFrameReferences(modelName: string) {
         model.includes("doubao-seedance-1-5") ||
         model.includes("doubao-seedance-1-0") ||
         model === "happyhorse-1-1" ||
+        (protocol === "gemini" && (model.startsWith("veo-3-1") || model.startsWith("veo3-1"))) ||
         (model.includes("veo3-1") && model.includes("official")) ||
         model.includes("minimax-hailuo-02") ||
         model.includes("skyreels-v4") ||

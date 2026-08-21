@@ -7,7 +7,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { EditorView } from "@uiw/react-codemirror";
 
-import { modelChannelDefaultBaseUrls } from "@/lib/model-channel";
+import { modelChannelApiKeyUrls, modelChannelDefaultBaseUrls } from "@/lib/model-channel";
 import { fetchAdminSettings, fetchChannelModels, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider } from "@/services/api/admin";
 import { useUserStore } from "@/stores/use-user-store";
 
@@ -84,6 +84,8 @@ export default function AdminSettingsPage() {
     const [knownModels, setKnownModels] = useState<string[]>([]);
     const publicModels = Form.useWatch(["public", "modelChannel", "availableModels"], form) || [];
     const storageProviders = Form.useWatch(["private", "storage", "providers"], form) || [];
+    const channelProtocol = Form.useWatch("protocol", channelForm);
+    const channelApiKeyUrl = channelProtocol ? modelChannelApiKeyUrls[channelProtocol] : undefined;
     const channelModels = useMemo(() => collectChannelModels(channels), [channels]);
     const channelTableData = useMemo(() => channels.map((channel, index) => ({ ...channel, _index: index, _rowKey: `${index}-${channel.name}-${channel.baseUrl}` })), [channels]);
     const activeMode = editorMode[activeTab];
@@ -899,8 +901,9 @@ export default function AdminSettingsPage() {
                                     <Select
                                         options={[
                                             { label: "OpenAI", value: "openai" },
+                                            { label: "Gemini", value: "gemini" },
                                             { label: "Grok2API", value: "grok2api" },
-                                            { label: "MetaSo", value: "metaso" },
+                                            { label: "MiniMax & METASO", value: "metaso" },
                                             { label: "APIMart", value: "apimart" },
                                             { label: "KIE", value: "kie" },
                                             { label: "MiMo", value: "mimo" },
@@ -927,7 +930,22 @@ export default function AdminSettingsPage() {
                                 </Form.Item>
                             </Col>
                             <Col span={24}>
-                                <Form.Item name="baseUrl" label="接口地址" rules={[{ required: true, message: "请输入接口地址" }]}>
+                                <Form.Item
+                                    name="baseUrl"
+                                    label={
+                                        <span className="relative inline-flex items-center">
+                                            接口地址
+                                            {channelApiKeyUrl ? (
+                                                <span className="absolute left-full top-1/2 ml-2 -translate-y-1/2 whitespace-nowrap">
+                                                    <Button type="primary" size="small" href={channelApiKeyUrl} target="_blank">
+                                                        获取 API Key
+                                                    </Button>
+                                                </span>
+                                            ) : null}
+                                        </span>
+                                    }
+                                    rules={[{ required: true, message: "请输入接口地址" }]}
+                                >
                                     <Input />
                                 </Form.Item>
                             </Col>

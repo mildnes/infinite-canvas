@@ -23,7 +23,7 @@ import { deleteStoredImages, resolveImageUrl, uploadImage } from "@/services/ima
 import { deleteVideoGenerationLogs, fetchVideoGenerationLogs, saveVideoGenerationLogs } from "@/services/api/generation-logs";
 import { createVideoGenerationTask, deleteVideoGenerationTask, listVideoGenerationTasks, pollVideoGenerationTaskStatus, VIDEO_POLL_INTERVAL_MS, VideoRequestError, type VideoResponse } from "@/services/api/video";
 import { useAssetStore } from "@/stores/use-asset-store";
-import { normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig, type VideoElementItem, type VideoElementReference } from "@/stores/use-config-store";
+import { channelProtocolForConfig, normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig, type VideoElementItem, type VideoElementReference } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
@@ -625,7 +625,7 @@ export default function VideoPage() {
                 return null;
             }
         }
-        const frameReferencesEnabled = !kling && supportsVideoFrameReferences(modelValue);
+        const frameReferencesEnabled = !kling && supportsVideoFrameReferences(modelValue, channelProtocolForConfig({ ...configValue, model: modelValue }));
         const normalizedConfig = buildVideoConfig({ ...configValue, videoNegativePrompt: currentNegativePrompt }, modelValue);
         if (omni === "reference-to-video" && videoReferenceItems.length) normalizedConfig.videoGenerateAudio = "false";
         const imageReferences = omni === "text-to-video" ? [] : omni === "reference-to-video" ? [...referenceItems] : [...referenceItems].slice(0, kling ? omni === "transformation" ? 4 : 2 : referenceItems.length);
@@ -1363,7 +1363,7 @@ function WorkbenchPanel({
     bottomSettingsCollapsed?: boolean;
     setBottomSettingsCollapsed?: (value: boolean) => void;
 }) {
-    const frameReferencesEnabled = supportsVideoFrameReferences(model);
+    const frameReferencesEnabled = supportsVideoFrameReferences(model, channelProtocolForConfig({ ...config, model }));
     const cogVideoX3 = isCogVideoX3Model(model);
     const audioGenerationEnabled = supportsVideoAudioGeneration(model);
     const generateAudio = boolConfig(config.videoGenerateAudio, false);

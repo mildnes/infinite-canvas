@@ -1,7 +1,9 @@
 import { mimoTextModels } from "@/lib/mimo-tts";
 import { nanoid } from "nanoid";
+import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig } from "@/lib/gemini";
 import { aiApiUrl, aiHeaders, refreshRemoteUser } from "@/services/api/image";
-import type { AiConfig } from "@/stores/use-config-store";
+import { imageToDataUrl } from "@/services/image-storage";
+import { localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
 import type { CanvasAgentProtocolMessage, CanvasAgentToolCall } from "@/app/(user)/canvas/types";
 import type { CanvasAgentToolDefinition } from "@/app/(user)/canvas/agent/canvas-agent-tools";
 
@@ -95,6 +97,7 @@ export async function requestCanvasAgentTurn(input: RequestCanvasAgentTurnInput)
 }
 
 async function requestCompletion(config: AiConfig, systemPrompt: string, messages: CanvasAgentProtocolMessage[], tools: CanvasAgentToolDefinition[], signal?: AbortSignal) {
+    if (isGeminiConfig(config)) return requestGeminiCompletion(config, systemPrompt, messages, tools, signal);
     const body: Record<string, unknown> = {
         model: config.model,
         messages: [{ role: "system", content: systemPrompt }, ...messages.map(toRequestMessage)],
@@ -137,6 +140,71 @@ async function requestCompletion(config: AiConfig, systemPrompt: string, message
             ];
         }),
     };
+}
+
+async function requestGeminiCompletion(config: AiConfig, systemPrompt: string, messages: CanvasAgentProtocolMessage[], tools: CanvasAgentToolDefinition[], signal?: AbortSignal) {
+    const contents = await Promise.all(messages.filter((message) => message.role !== "system").map(async (message) => {
+        if (message.role === "assistant") {
+            return {
+                role: "model",
+                parts: [
+                    ...(message.content ? [{ text: message.content }] : []),
+                    ...(message.toolCalls || []).map((call) => ({ functionCall: { name: call.name, args: call.arguments } })),
+                ],
+            };
+        }
+        if (message.role === "tool") {
+            return { role: "user", parts: [{ functionResponse: { name: message.name, response: parseGeminiToolResponse(message.content) } }] };
+        }
+        const parts = await Promise.all((typeof message.content === "string" ? [{ type: "text" as const, text: message.content }] : message.content).map(async (part) => {
+            if (part.type === "text") return { text: part.text };
+            return dataUrlToGeminiInlineData(await imageToDataUrl({ dataUrl: part.image_url.url, url: part.image_url.url }));
+        }));
+        return { role: "user", parts };
+    }));
+    const extraSystemParts = messages.filter((message) => message.role === "system").flatMap((message) => typeof message.content === "string" ? [{ text: message.content }] : message.content.flatMap((part) => part.type === "text" ? [{ text: part.text }] : []));
+    const body = {
+        model: config.model,
+        stream: false,
+        systemInstruction: { parts: [{ text: systemPrompt }, ...extraSystemParts] },
+        contents,
+        ...(tools.length ? { tools: [{ functionDeclarations: tools.map((tool) => tool.function) }] } : {}),
+    };
+    const proxy = Boolean(aiApiUrl(config, "/chat/completions").startsWith("/api/"));
+    const channel = localChannelForActiveModel(config);
+    const { model: _model, stream: _stream, ...nativeBody } = body;
+    const response = await fetch(proxy ? aiApiUrl(config, "/chat/completions") : geminiActionUrl(channel?.baseUrl || config.baseUrl, config.model, "generateContent"), {
+        method: "POST",
+        headers: proxy ? aiHeaders(config, "application/json") : geminiDirectHeaders(config),
+        body: JSON.stringify(proxy ? body : nativeBody),
+        signal,
+    });
+    const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+    if (!response.ok) throw new CanvasAgentRequestError(geminiErrorMessage(payload, "文本模型请求失败"), response.status);
+    const candidates = Array.isArray(payload.candidates) ? payload.candidates as Array<Record<string, unknown>> : [];
+    const parts = candidates.flatMap((candidate) => {
+        const content = candidate.content && typeof candidate.content === "object" ? candidate.content as Record<string, unknown> : {};
+        return Array.isArray(content.parts) ? content.parts as Array<Record<string, unknown>> : [];
+    });
+    if (!parts.length) throw new CanvasAgentRequestError(geminiErrorMessage(payload, "文本模型没有返回内容"), response.status);
+    refreshRemoteUser(config);
+    return {
+        content: parts.map((part) => typeof part.text === "string" ? part.text : "").join(""),
+        toolCalls: parts.flatMap((part, index) => {
+            const call = part.functionCall && typeof part.functionCall === "object" ? part.functionCall as Record<string, unknown> : null;
+            const name = typeof call?.name === "string" ? call.name.trim() : "";
+            return name ? [{ id: `gemini-tool-${index}`, name, arguments: call?.args && typeof call.args === "object" ? call.args as Record<string, unknown> : {} }] : [];
+        }),
+    };
+}
+
+function parseGeminiToolResponse(value: string) {
+    try {
+        const parsed = JSON.parse(value);
+        return parsed && typeof parsed === "object" ? parsed : { result: parsed };
+    } catch {
+        return { result: value };
+    }
 }
 
 function toRequestMessage(message: CanvasAgentProtocolMessage) {

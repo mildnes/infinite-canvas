@@ -49,22 +49,33 @@ func DraftCreativeWorkflow(ctx context.Context, request WorkflowAgentDraftReques
 		}
 	}
 
+	messages := workflowAgentMessages(prompt, request.References)
 	body, _ := json.Marshal(map[string]any{
 		"model":       modelName,
-		"messages":    workflowAgentMessages(prompt, request.References),
+		"messages":    messages,
 		"temperature": 0.2,
 	})
+	upstreamPath := "/chat/completions"
+	if IsGeminiChannel(channel) {
+		body = GeminiMessagesRequestBody(modelName, messages)
+		body, _ = StripGeminiModelField(body, "application/json")
+		upstreamPath = GeminiModelActionPath(modelName, "generateContent")
+	}
+	requestLogBody := string(body)
+	if IsGeminiChannel(channel) && len(request.References) > 0 {
+		requestLogBody = "[redacted Gemini workflow request]"
+	}
 
 	httpRequest, err := http.NewRequest(
 		http.MethodPost,
-		BuildModelChannelURL(channel, "/chat/completions"),
+		BuildModelChannelURL(channel, upstreamPath),
 		bytes.NewReader(body),
 	)
 	if err != nil {
 		refundCredits()
 		return WorkflowAgentDraftResponse{}, err
 	}
-	httpRequest.Header.Set("Authorization", "Bearer "+channel.APIKey)
+	SetModelChannelAuthHeader(httpRequest, channel)
 	httpRequest.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: time.Duration(maxInt(channel.Timeout, 600)) * time.Second}
@@ -82,7 +93,7 @@ func DraftCreativeWorkflow(ctx context.Context, request WorkflowAgentDraftReques
 			Status:          0,
 			DurationMs:      time.Since(startedAt).Milliseconds(),
 			Credits:         credits,
-			RequestBody:     string(body),
+			RequestBody:     requestLogBody,
 			Error:           err.Error(),
 		})
 		return WorkflowAgentDraftResponse{}, err
@@ -103,7 +114,7 @@ func DraftCreativeWorkflow(ctx context.Context, request WorkflowAgentDraftReques
 			Status:          response.StatusCode,
 			DurationMs:      time.Since(startedAt).Milliseconds(),
 			Credits:         credits,
-			RequestBody:     string(body),
+			RequestBody:     requestLogBody,
 			ResponseBody:    string(responseBody),
 			Error:           string(responseBody),
 		})
@@ -111,6 +122,9 @@ func DraftCreativeWorkflow(ctx context.Context, request WorkflowAgentDraftReques
 	}
 
 	content := extractChatMessage(string(responseBody))
+	if IsGeminiChannel(channel) {
+		content = GeminiResponseText(responseBody)
+	}
 	draft, warnings, err := normalizeWorkflowDraft(content, request.Scope)
 	if err != nil {
 		refundCredits()
@@ -125,7 +139,7 @@ func DraftCreativeWorkflow(ctx context.Context, request WorkflowAgentDraftReques
 			Status:          response.StatusCode,
 			DurationMs:      time.Since(startedAt).Milliseconds(),
 			Credits:         credits,
-			RequestBody:     string(body),
+			RequestBody:     requestLogBody,
 			ResponseBody:    string(responseBody),
 			Error:           err.Error(),
 		})
@@ -143,7 +157,7 @@ func DraftCreativeWorkflow(ctx context.Context, request WorkflowAgentDraftReques
 		Status:          response.StatusCode,
 		DurationMs:      time.Since(startedAt).Milliseconds(),
 		Credits:         credits,
-		RequestBody:     string(body),
+		RequestBody:     requestLogBody,
 		ResponseBody:    string(responseBody),
 	})
 	return WorkflowAgentDraftResponse{Draft: draft, Warnings: warnings, Model: modelName}, nil
@@ -185,6 +199,7 @@ func workflowDraftChannel(request WorkflowAgentDraftRequest, modelName string) (
 			Models:   []string{modelName},
 			Weight:   1,
 			Timeout:  600,
+			Protocol: strings.TrimSpace(request.Protocol),
 		}
 		if channel.BaseURL == "" || channel.APIKey == "" {
 			return model.ModelChannel{}, safeMessageError{message: "文本模型本地直连渠道配置不完整"}

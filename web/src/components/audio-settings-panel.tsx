@@ -8,12 +8,14 @@ import { ImageSettingsTheme } from "@/components/image-settings-panel";
 import { audioFormatOptions, audioSpeedLabel, audioVoiceOptions, glmTtsFormatOptions, glmTtsVoiceOptions, isGlmTtsModel, normalizeAudioFormatValue, normalizeAudioSpeedValue, normalizeAudioVoiceValue, normalizeGlmTtsFormat, normalizeGlmTtsSpeed, normalizeGlmTtsVoice } from "@/lib/audio-generation";
 import { grokTtsFormatOptions, grokTtsLanguageOptions, isGrok2APITtsConfig, normalizeGrokTtsFormat, normalizeGrokTtsLanguage, normalizeGrokTtsSpeed } from "@/lib/grok-tts";
 import { isMimoPresetTtsModel, isMimoTtsModel, isMimoVoiceCloneModel, isMimoVoiceDesignModel, mimoTtsFormatOptions, mimoTtsVoiceOptions, normalizeMimoTtsFormat, normalizeMimoTtsVoice } from "@/lib/mimo-tts";
+import { isGeminiConfig, isGeminiTtsModel } from "@/lib/gemini";
+import { geminiTtsVoiceOptions, normalizeGeminiTtsVoice } from "@/lib/gemini-tts";
 import { type CanvasTheme } from "@/lib/canvas-theme";
 import type { AiConfig } from "@/stores/use-config-store";
 
 const speedOptions = ["0.75", "1", "1.25", "1.5"];
 
-export type AudioSettingKey = "audioVoice" | "audioFormat" | "audioSpeed" | "audioInstructions" | "grokTtsVoice" | "grokTtsLanguage" | "grokTtsFormat" | "grokTtsSpeed" | "glmTtsVoice" | "glmTtsFormat" | "glmTtsSpeed" | "mimoTtsVoice" | "mimoTtsFormat" | "mimoVoiceDesignPrompt";
+export type AudioSettingKey = "audioVoice" | "audioFormat" | "audioSpeed" | "audioInstructions" | "grokTtsVoice" | "grokTtsLanguage" | "grokTtsFormat" | "grokTtsSpeed" | "glmTtsVoice" | "glmTtsFormat" | "glmTtsSpeed" | "mimoTtsVoice" | "mimoTtsFormat" | "mimoVoiceDesignPrompt" | "geminiTtsVoice";
 
 type AudioSettingsPanelProps = {
     config: AiConfig;
@@ -26,14 +28,23 @@ type AudioSettingsPanelProps = {
 export function AudioSettingsPanel({ config, onConfigChange, theme, showTitle = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5" }: AudioSettingsPanelProps) {
     const model = config.model || config.audioModel || "";
     const grok = isGrok2APITtsConfig(config, model);
+    const gemini = isGeminiTtsModel(model) && isGeminiConfig(config, model);
 
     return (
         <ImageSettingsTheme theme={theme}>
             <div className={className} style={{ color: theme.node.text }} onMouseDown={(event) => event.stopPropagation()}>
                 {showTitle ? <div className="text-lg font-semibold">音频设置</div> : null}
-                {isMimoTtsModel(model) ? <MiMoAudioSettings config={config} model={model} onConfigChange={onConfigChange} theme={theme} /> : <AudioSpeechSettings config={config} model={model} glm={isGlmTtsModel(model)} grok={grok} onConfigChange={onConfigChange} theme={theme} />}
+                {gemini ? <GeminiAudioSettings config={config} onConfigChange={onConfigChange} theme={theme} /> : isMimoTtsModel(model) ? <MiMoAudioSettings config={config} model={model} onConfigChange={onConfigChange} theme={theme} /> : <AudioSpeechSettings config={config} model={model} glm={isGlmTtsModel(model)} grok={grok} onConfigChange={onConfigChange} theme={theme} />}
             </div>
         </ImageSettingsTheme>
+    );
+}
+
+function GeminiAudioSettings({ config, onConfigChange, theme }: { config: AiConfig; onConfigChange: AudioSettingsPanelProps["onConfigChange"]; theme: CanvasTheme }) {
+    return (
+        <SettingGroup title="声音" color={theme.node.muted}>
+            <Select className="w-full" showSearch optionFilterProp="label" value={normalizeGeminiTtsVoice(config.geminiTtsVoice)} options={geminiTtsVoiceOptions} onChange={(value) => onConfigChange("geminiTtsVoice", value)} />
+        </SettingGroup>
     );
 }
 

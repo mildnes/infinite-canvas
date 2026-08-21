@@ -31,6 +31,7 @@ type WorkflowAgentDraftRequest struct {
 	Model       string   `json:"model"`
 	ChannelID   string   `json:"channelId"`
 	ChannelMode string   `json:"channelMode"`
+	Protocol    string   `json:"protocol"`
 	BaseURL     string   `json:"baseUrl"`
 	APIKey      string   `json:"apiKey"`
 	References  []string `json:"references"`

@@ -74,6 +74,9 @@ func AIVideo(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 func AIVideoContent(w http.ResponseWriter, r *http.Request, id string) {
+	if serveGeminiVideoTaskContent(w, r, id) {
+		return
+	}
 	proxyAIGetRequest(w, r, "/videos/"+id+"/content")
 }
 
@@ -113,7 +116,7 @@ func proxyAIGetRequest(w http.ResponseWriter, r *http.Request, path string) {
 		Fail(w, "AI 接口请求失败")
 		return
 	}
-	request.Header.Set("Authorization", "Bearer "+channel.APIKey)
+	service.SetModelChannelAuthHeader(request, channel)
 	copyAIResponse(w, request, channel, aiLogContext{StartedAt: startedAt, Endpoint: path, Method: http.MethodGet, Model: modelName, Channel: channel, UserID: user.ID, UserDisplayName: firstNonEmpty(user.DisplayName, user.Username), RequestBody: summarizeQueryParams(r.URL.Query())}, nil)
 }
 
@@ -147,6 +150,17 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		credits *= readAIRequestCount(body, contentType)
 	}
 	upstreamPath := resolveAIProxyPath(channel, modelName, path)
+	if service.IsGeminiChannel(channel) {
+		if path == "/chat/completions" && !geminiStreamRequested(body) {
+			upstreamPath = service.GeminiModelActionPath(modelName, "generateContent")
+		}
+		body, err = service.StripGeminiModelField(body, contentType)
+		if err != nil {
+			log.Printf("AI proxy normalize Gemini request failed: model=%s err=%v", modelName, err)
+			Fail(w, "AI 接口请求失败")
+			return
+		}
+	}
 	if service.IsMiMoTTSModelName(modelName) && path == "/audio/speech" {
 		body, contentType, err = normalizeMiMoTTSBody(body, contentType, modelName)
 		if err != nil {
@@ -182,7 +196,7 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		Fail(w, "AI 接口请求失败")
 		return
 	}
-	request.Header.Set("Authorization", "Bearer "+channel.APIKey)
+	service.SetModelChannelAuthHeader(request, channel)
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}
@@ -209,6 +223,13 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 			}
 		}
 	})
+}
+
+func geminiStreamRequested(body []byte) bool {
+	var payload struct {
+		Stream *bool `json:"stream"`
+	}
+	return json.Unmarshal(body, &payload) == nil && payload.Stream != nil && *payload.Stream
 }
 
 type aiLogContext struct {
@@ -301,6 +322,13 @@ func copyAIResponseBody(w http.ResponseWriter, body io.Reader) string {
 func saveAIProxyLog(context aiLogContext, status int, responseBody string, errorMessage string) {
 	if context.StartedAt.IsZero() {
 		context.StartedAt = time.Now()
+	}
+	if service.IsGeminiChannel(context.Channel) {
+		if context.Endpoint == "/images/generations" || context.Endpoint == "/images/edits" || context.Endpoint == "/audio/speech" {
+			responseBody = "[redacted Gemini media response]"
+		} else if strings.TrimSpace(responseBody) != "" {
+			responseBody = summarizeAIRequest([]byte(responseBody), "application/json")
+		}
 	}
 	service.SaveAICallLog(service.AICallLogInput{
 		UserID:          context.UserID,
@@ -518,6 +546,19 @@ func agnesVideoQueryID(modelName string, path string) (string, bool) {
 }
 
 func resolveAIProxyPath(channel model.ModelChannel, modelName string, path string) string {
+	if service.IsGeminiChannel(channel) {
+		switch path {
+		case "/chat/completions":
+			return service.GeminiModelActionPath(modelName, "streamGenerateContent") + "?alt=sse"
+		case "/images/generations", "/images/edits", "/audio/speech":
+			return service.GeminiModelActionPath(modelName, "generateContent")
+		case "/videos":
+			return service.GeminiModelActionPath(modelName, "predictLongRunning")
+		}
+		if strings.HasPrefix(path, "/videos/") && !strings.HasSuffix(path, "/content") {
+			return service.GeminiOperationPath(strings.TrimPrefix(path, "/videos/"))
+		}
+	}
 	if service.IsMiMoTTSModelName(modelName) && path == "/audio/speech" {
 		return "/chat/completions"
 	}

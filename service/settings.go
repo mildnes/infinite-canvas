@@ -377,6 +377,9 @@ func HTTPClientForChannel(channel model.ModelChannel) *http.Client {
 }
 
 func BuildModelChannelURL(channel model.ModelChannel, path string) string {
+	if IsGeminiChannel(channel) {
+		return BuildGeminiChannelURL(channel, path)
+	}
 	baseURL := normalizeModelChannelBaseURL(channel.BaseURL)
 	if IsMiniMaxChannel(channel) {
 		return baseURL + path
@@ -545,6 +548,9 @@ func resolveAdminChannel(index *int, channel model.ModelChannel) (model.ModelCha
 }
 
 func fetchAdminChannelModels(channel model.ModelChannel) ([]string, error) {
+	if IsGeminiChannel(channel) {
+		return fetchGeminiAdminChannelModels(channel)
+	}
 	if IsMiniMaxChannel(channel) {
 		return MiniMaxModels(), nil
 	}
@@ -589,7 +595,7 @@ func fetchOpenAICompatibleModels(channel model.ModelChannel) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	request.Header.Set("Authorization", "Bearer "+channel.APIKey)
+	SetModelChannelAuthHeader(request, channel)
 	response, err := adminModelHTTPClient.Do(request)
 	if err != nil {
 		return nil, safeMessageError{message: "读取模型失败：上游接口无响应或网络不可达"}
@@ -792,6 +798,9 @@ func testAdminChannelModel(channel model.ModelChannel, modelName string) (string
 	if IsMiMoTTSModelName(modelName) {
 		return testMiMoTTSChannelModel(channel, modelName)
 	}
+	if IsGeminiChannel(channel) {
+		return testGeminiChannelModel(channel, modelName)
+	}
 	body, _ := json.Marshal(map[string]any{
 		"model": modelName,
 		"messages": []map[string]string{{
@@ -824,6 +833,94 @@ func testAdminChannelModel(channel model.ModelChannel, modelName string) (string
 	_ = json.Unmarshal(responseBody, &payload)
 	if len(payload.Choices) > 0 && strings.TrimSpace(payload.Choices[0].Message.Content) != "" {
 		return payload.Choices[0].Message.Content, nil
+	}
+	return "ok", nil
+}
+
+func fetchGeminiAdminChannelModels(channel model.ModelChannel) ([]string, error) {
+	result := []string{}
+	pageToken := ""
+	for {
+		path := "/v1beta/models"
+		if pageToken != "" {
+			path += "?pageToken=" + url.QueryEscape(pageToken)
+		}
+		request, err := http.NewRequest(http.MethodGet, BuildGeminiChannelURL(channel, path), nil)
+		if err != nil {
+			return nil, err
+		}
+		SetModelChannelAuthHeader(request, channel)
+		response, err := adminModelHTTPClient.Do(request)
+		if err != nil {
+			return nil, safeMessageError{message: "读取模型失败：上游接口无响应或网络不可达"}
+		}
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		if response.StatusCode >= http.StatusBadRequest {
+			return nil, readAdminChannelError(body, response.StatusCode, "读取模型失败")
+		}
+		var payload struct {
+			Models []struct {
+				Name                       string   `json:"name"`
+				SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
+			} `json:"models"`
+			NextPageToken string `json:"nextPageToken"`
+		}
+		if json.Unmarshal(body, &payload) != nil {
+			return nil, safeMessageError{message: "读取模型失败：上游响应无法解析"}
+		}
+		for _, item := range payload.Models {
+			name := strings.TrimPrefix(strings.TrimSpace(item.Name), "models/")
+			methods := strings.Join(item.SupportedGenerationMethods, ",")
+			if name != "" && !strings.Contains(strings.ToLower(name), "embed") && (strings.Contains(methods, "generateContent") || strings.Contains(methods, "predictLongRunning") || strings.HasPrefix(strings.ToLower(name), "veo-") || strings.HasPrefix(strings.ToLower(name), "imagen-")) {
+				result = append(result, name)
+			}
+		}
+		pageToken = strings.TrimSpace(payload.NextPageToken)
+		if pageToken == "" {
+			break
+		}
+	}
+	seen := map[string]bool{}
+	unique := result[:0]
+	for _, name := range result {
+		if !seen[name] {
+			seen[name] = true
+			unique = append(unique, name)
+		}
+	}
+	result = unique
+	sort.Strings(result)
+	if len(result) == 0 {
+		return nil, safeMessageError{message: "Gemini 模型列表为空"}
+	}
+	return result, nil
+}
+
+func testGeminiChannelModel(channel model.ModelChannel, modelName string) (string, error) {
+	lowerModel := strings.ToLower(strings.TrimSpace(modelName))
+	if strings.HasPrefix(lowerModel, "veo-") || strings.Contains(lowerModel, "image") || strings.Contains(lowerModel, "tts") {
+		return "模型列表与渠道配置有效；图片、视频和语音模型未执行付费生成测试。", nil
+	}
+	body := GeminiTextRequestBody(modelName, "hi")
+	body, _ = StripGeminiModelField(body, "application/json")
+	request, err := http.NewRequest(http.MethodPost, BuildGeminiChannelURL(channel, GeminiModelActionPath(modelName, "generateContent")), strings.NewReader(string(body)))
+	if err != nil {
+		return "", err
+	}
+	SetModelChannelAuthHeader(request, channel)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := adminModelHTTPClient.Do(request)
+	if err != nil {
+		return "", safeMessageError{message: "测试失败：上游接口无响应或网络不可达"}
+	}
+	defer response.Body.Close()
+	responseBody, _ := io.ReadAll(response.Body)
+	if response.StatusCode >= http.StatusBadRequest {
+		return "", readAdminChannelError(responseBody, response.StatusCode, "测试失败")
+	}
+	if text := GeminiResponseText(responseBody); text != "" {
+		return text, nil
 	}
 	return "ok", nil
 }

@@ -107,6 +107,7 @@ export async function draftUserWorkflow<T>(
         model?: string;
         channelId?: string;
         channelMode?: "remote" | "local";
+        protocol?: string;
         baseUrl?: string;
         apiKey?: string;
         references?: string[];

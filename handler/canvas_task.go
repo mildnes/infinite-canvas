@@ -678,7 +678,7 @@ func collectImageCandidates(value any, depth int) []string {
 		}
 		return result
 	case map[string]any:
-		keys := []string{"url", "b64_json", "partial_image_b64", "image_url", "image", "image_data", "base64", "result", "response", "data", "output"}
+		keys := []string{"url", "b64_json", "partial_image_b64", "image_url", "image", "image_data", "base64", "inlineData", "parts", "content", "candidates", "result", "response", "data", "output"}
 		var result []string
 		for _, key := range keys {
 			result = append(result, collectImageCandidates(typed[key], depth+1)...)

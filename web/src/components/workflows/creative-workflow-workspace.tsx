@@ -16,7 +16,7 @@ import { createCanvasImageTask, requestEdit, requestGeneration, requestImageQues
 import { saveImageGenerationLogs } from "@/services/api/generation-logs";
 import { deleteUserWorkflow, draftUserWorkflow, fetchUserConfig, fetchUserWorkflows, saveUserWorkflow, type CreativeWorkflowRecord } from "@/services/api/user-config";
 import { deleteStoredImages, imageToDataUrl, uploadImage } from "@/services/image-storage";
-import { defaultConfig, localChannelForActiveModel, normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { channelProtocolForConfig, defaultConfig, localChannelForActiveModel, normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
@@ -555,6 +555,7 @@ export function CreativeWorkflowWorkspace({
                 model: textModel,
                 channelId: textChannelId,
                 channelMode: effectiveConfig.channelMode,
+                protocol: channelProtocolForConfig(textConfig),
                 baseUrl: localChannel?.baseUrl,
                 apiKey: localChannel?.apiKey,
                 references: referenceDataUrls.filter(Boolean),

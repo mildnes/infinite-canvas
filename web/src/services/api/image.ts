@@ -4,6 +4,7 @@ import { isMiniMaxChannel, miniMaxModels } from "@/lib/minimax-video";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { isKIESeedreamLayerDecompositionModel } from "@/lib/kie-models";
 import { isMimoChannel, mimoModels } from "@/lib/mimo-tts";
+import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig, normalizeGeminiBaseUrl } from "@/lib/gemini";
 import { imageToDataUrl, resolveImageUrl } from "@/services/image-storage";
 import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
@@ -537,6 +538,7 @@ export function aiHeaders(config: AiConfig, contentType?: string) {
             ...(contentType ? { "Content-Type": contentType } : {}),
         };
     }
+    if (isGeminiConfig(config)) return geminiDirectHeaders(config);
     return {
         Authorization: `Bearer ${localChannelForActiveModel(config)?.apiKey || config.apiKey}`,
         ...(contentType ? { "Content-Type": contentType } : {}),
@@ -631,6 +633,8 @@ function withSystemMessage(config: AiConfig, messages: ChatCompletionMessage[]) 
 
 async function requestImageGenerationSingle(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, params: ImageRequestParams): Promise<GeneratedImage[]> {
     const mime = IMAGE_MIME;
+
+    if (isGeminiConfig(config)) return requestGeminiImageSingle(config, prompt, [], params);
 
     // 针对 Agnes 渠道文生图模型定制精简 Payload，避免传入官方文档未声明的 seed 参数。
     if (isAgnesImageModel(config.model)) {
@@ -755,6 +759,7 @@ async function requestGrokImageEditSingle(config: AiConfig, prompt: string, refe
 }
 
 async function requestImageEditSingle(config: AiConfig, prompt: string, references: ReferenceImage[], params: ImageRequestParams): Promise<GeneratedImage[]> {
+    if (isGeminiConfig(config)) return requestGeminiImageSingle(config, prompt, references, params);
     if (isGrok2APIImageConfig(config)) return requestGrokImageEditSingle(config, prompt, references, params);
 
     const mime = IMAGE_MIME;
@@ -897,7 +902,7 @@ async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?
     assertImageReferencesSupported(config.model, references);
     const params = createImageRequestParams(config);
     const inputImageDataUrls = references.length ? await Promise.all(references.map((image) => imageToDataUrl(image))) : [];
-    const useConcurrentSingleRequests = config.apiMode === "responses" || config.codexCli || config.streamImages || isZhipuImageModel(config.model);
+    const useConcurrentSingleRequests = isGeminiConfig(config) || config.apiMode === "responses" || config.codexCli || config.streamImages || isZhipuImageModel(config.model);
     if (params.n > 1 && useConcurrentSingleRequests) {
         const results = await Promise.allSettled(Array.from({ length: params.n }, () => requestImages({ ...config, count: "1" }, prompt, references)));
         const images = results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
@@ -908,7 +913,7 @@ async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?
     if (references.length && isAgnesImageModel(config.model)) {
         return requestAgnesImageEdit(config, prompt, references, params);
     }
-    if (config.apiMode === "responses" && !isZhipuImageModel(config.model)) return requestResponsesSingle(config, prompt, inputImageDataUrls, params);
+    if (config.apiMode === "responses" && !isGeminiConfig(config) && !isZhipuImageModel(config.model)) return requestResponsesSingle(config, prompt, inputImageDataUrls, params);
     return references.length ? requestImageEditSingle(config, prompt, references, params) : requestImageGenerationSingle(config, prompt, params);
 }
 
@@ -987,6 +992,14 @@ async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: num
     const tokenHeaders = { ...aiHeaders(config), ...taskChannelHeader };
     const jsonHeaders = { ...aiHeaders(config, "application/json"), ...taskChannelHeader };
     const meta = { nodeId: options.nodeId || "", source: options.source || "canvas", sourceId: options.sourceId || "", clientTaskId: options.clientTaskId || "", prompt, channelId: taskChannelId };
+    if (isGeminiConfig(config)) {
+        const body = await createGeminiImageBody(config, prompt, references, params);
+        return {
+            method: "POST",
+            headers: jsonHeaders,
+            body: JSON.stringify({ endpoint: references.length ? "/images/edits" : "/images/generations", ...meta, request: body }),
+        };
+    }
     if (references.length && isAgnesImageModel(config.model)) {
         const imageUrls = await Promise.all(
             references.map(async (ref) => {
@@ -1082,6 +1095,7 @@ async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: num
 }
 
 export async function requestImageQuestion(config: AiConfig, messages: ChatCompletionMessage[], onDelta: (text: string) => void) {
+    if (isGeminiConfig(config)) return requestGeminiText(config, messages, onDelta);
     let buffer = "";
     let answer = "";
     let processedLength = 0;
@@ -1147,6 +1161,7 @@ export async function requestImageQuestion(config: AiConfig, messages: ChatCompl
 export async function fetchImageModels(config: AiConfig) {
     if (config.channelMode === "remote") return config.models;
     const channel = localChannelForActiveModel(config);
+    if (channel?.protocol === "gemini") return fetchGeminiModels(channel.baseUrl, channel.apiKey);
     if (isMiniMaxChannel(channel)) return [...miniMaxModels];
     if (isMimoChannel(channel || { baseUrl: config.baseUrl })) return [...mimoModels];
     try {
@@ -1163,6 +1178,159 @@ export async function fetchImageModels(config: AiConfig) {
     } catch (error) {
         throw new Error(readAxiosError(error, "读取模型失败"));
     }
+}
+
+async function requestGeminiImageSingle(config: AiConfig, prompt: string, references: ReferenceImage[], params: ImageRequestParams): Promise<GeneratedImage[]> {
+    const body = await createGeminiImageBody(config, prompt, references, params);
+    const proxy = usesAccountProxy(config);
+    const channel = localChannelForActiveModel(config);
+    const nativeBody = proxy ? body : withoutModel(body);
+    return requestAndParseImages(
+        config,
+        references.length ? "/images/edits" : "/images/generations",
+        body,
+        params.timeoutSeconds,
+        () => requestWithTransientRetry(() => withTimeout(params.timeoutSeconds, (signal) => fetch(
+            proxy ? `/api/v1${references.length ? "/images/edits" : "/images/generations"}` : geminiActionUrl(channel?.baseUrl || config.baseUrl, config.model, "generateContent"),
+            { method: "POST", headers: proxy ? aiHeaders(config, "application/json") : geminiDirectHeaders(config), body: JSON.stringify(nativeBody), signal },
+        ))),
+        async (response) => {
+            const payload = await response.json() as Record<string, unknown>;
+            const images = parseGeminiImages(payload);
+            return { images, responseBody: stringifyLogPayload(payload) };
+        },
+    );
+}
+
+async function createGeminiImageBody(config: AiConfig, prompt: string, references: ReferenceImage[], params: ImageRequestParams) {
+    const image = geminiImageSettings(config.model, config.quality, config.size, params.size);
+    const parts: Array<Record<string, unknown>> = [{ text: withPromptGuard(config, prompt) }];
+    const dataUrls = await Promise.all(references.map(imageToDataUrl));
+    parts.push(...dataUrls.map(dataUrlToGeminiInlineData));
+    const systemPrompt = (config.systemPrompts.image || config.systemPrompt).trim();
+    return {
+        model: config.model,
+        ...(systemPrompt ? { systemInstruction: { parts: [{ text: systemPrompt }] } } : {}),
+        contents: [{ role: "user", parts }],
+        generationConfig: { responseModalities: ["TEXT", "IMAGE"], responseFormat: { image } },
+    };
+}
+
+function geminiImageSettings(model: string, quality: string, size: string, resolvedSize?: string) {
+    const aspectRatio = normalizeGeminiImageRatio(size);
+    const normalizedQuality = quality.trim().toLowerCase();
+    const preset = `${size} ${resolvedSize || ""}`.toLowerCase();
+    const imageSize = normalizedQuality === "low" ? "1K" : normalizedQuality === "medium" ? "2K" : normalizedQuality === "high" ? "4K" : preset.includes("6272x2688") || preset.includes("3840x2160") || preset.includes("2160x3840") ? "4K" : preset.includes("2048x") || preset.includes("3136x1344") ? "2K" : "";
+    return {
+        ...(aspectRatio ? { aspectRatio } : {}),
+        ...(!model.toLowerCase().includes("2.5") && imageSize ? { imageSize } : {}),
+    };
+}
+
+function normalizeGeminiImageRatio(value: string) {
+    const normalized = value.trim().toLowerCase();
+    const exact: Record<string, string> = {
+        "1:1": "1:1", "2048x2048": "1:1", "3:2": "3:2", "2:3": "2:3", "4:3": "4:3", "3:4": "3:4",
+        "16:9": "16:9", "2048x1152": "16:9", "3840x2160": "16:9", "9:16": "9:16", "1152x2048": "9:16", "2160x3840": "9:16",
+        "21:9": "21:9", "3136x1344": "21:9", "6272x2688": "21:9",
+    };
+    if (exact[normalized]) return exact[normalized];
+    if (normalized === "auto") return "";
+    const dimensions = normalized.match(/^(\d+)x(\d+)$/);
+    if (!dimensions) return "1:1";
+    const ratio = Number(dimensions[1]) / Number(dimensions[2]);
+    const ratios: Array<[string, number]> = [["1:1", 1], ["3:2", 1.5], ["2:3", 2 / 3], ["4:3", 4 / 3], ["3:4", 3 / 4], ["16:9", 16 / 9], ["9:16", 9 / 16], ["21:9", 21 / 9]];
+    return ratios.reduce((best, current) => Math.abs(current[1] - ratio) < Math.abs(best[1] - ratio) ? current : best)[0];
+}
+
+function parseGeminiImages(payload: Record<string, unknown>) {
+    const candidates = Array.isArray(payload.candidates) ? payload.candidates as Array<Record<string, unknown>> : [];
+    const images = candidates.flatMap((candidate) => {
+        const content = candidate.content && typeof candidate.content === "object" ? candidate.content as Record<string, unknown> : {};
+        const parts = Array.isArray(content.parts) ? content.parts as Array<Record<string, unknown>> : [];
+        return parts.flatMap((part) => {
+            const inlineData = part.inlineData && typeof part.inlineData === "object" ? part.inlineData as Record<string, unknown> : {};
+            const data = typeof inlineData.data === "string" ? inlineData.data : "";
+            if (!data) return [];
+            const mimeType = typeof inlineData.mimeType === "string" ? inlineData.mimeType : IMAGE_MIME;
+            return [{ id: nanoid(), dataUrl: `data:${mimeType};base64,${data}` }];
+        });
+    });
+    if (!images.length) throw new ImageRequestError(geminiErrorMessage(payload, "Gemini 接口没有返回图片"), payload);
+    return images;
+}
+
+async function requestGeminiText(config: AiConfig, messages: ChatCompletionMessage[], onDelta: (text: string) => void) {
+    const body = await createGeminiTextBody(config, withSystemMessage(config, messages));
+    const proxy = usesAccountProxy(config);
+    const channel = localChannelForActiveModel(config);
+    const response = await fetch(proxy ? "/api/v1/chat/completions" : geminiActionUrl(channel?.baseUrl || config.baseUrl, config.model, "streamGenerateContent"), {
+        method: "POST",
+        headers: proxy ? aiHeaders(config, "application/json") : geminiDirectHeaders(config),
+        body: JSON.stringify(proxy ? body : withoutModel(body)),
+    });
+    if (!response.ok) {
+        const error = await fetchErrorDetail(response, "请求失败");
+        throw new ImageRequestError(error.message, error.detail);
+    }
+    let answer = "";
+    await readJsonServerSentEvents(response, (event) => {
+        const candidates = Array.isArray(event.candidates) ? event.candidates as Array<Record<string, unknown>> : [];
+        const delta = candidates.flatMap((candidate) => {
+            const content = candidate.content && typeof candidate.content === "object" ? candidate.content as Record<string, unknown> : {};
+            return Array.isArray(content.parts) ? content.parts as Array<Record<string, unknown>> : [];
+        }).map((part) => typeof part.text === "string" ? part.text : "").join("");
+        if (delta) {
+            answer += delta;
+            onDelta(answer);
+        }
+    });
+    refreshRemoteUser(config);
+    return answer || "没有返回内容";
+}
+
+async function createGeminiTextBody(config: AiConfig, messages: ChatCompletionMessage[]) {
+    const systemParts: Array<{ text: string }> = [];
+    const contents: Array<{ role: string; parts: Array<Record<string, unknown>> }> = [];
+    for (const message of messages) {
+        if (message.role === "system") {
+            const text = typeof message.content === "string" ? message.content : message.content.filter((part) => part.type === "text").map((part) => part.type === "text" ? part.text : "").join("\n");
+            if (text.trim()) systemParts.push({ text });
+            continue;
+        }
+        const parts: Array<Record<string, unknown>> = [];
+        for (const part of typeof message.content === "string" ? [{ type: "text" as const, text: message.content }] : message.content) {
+            if (part.type === "text") parts.push({ text: part.text });
+            else parts.push(dataUrlToGeminiInlineData(await imageToDataUrl({ dataUrl: part.image_url.url, url: part.image_url.url })));
+        }
+        contents.push({ role: message.role === "assistant" ? "model" : "user", parts });
+    }
+    return { model: config.model, stream: true, ...(systemParts.length ? { systemInstruction: { parts: systemParts } } : {}), contents };
+}
+
+async function fetchGeminiModels(baseUrl: string, apiKey: string) {
+    const result: string[] = [];
+    let pageToken = "";
+    do {
+        const url = new URL(`${normalizeGeminiBaseUrl(baseUrl)}/v1beta/models`);
+        if (pageToken) url.searchParams.set("pageToken", pageToken);
+        const response = await fetch(url, { headers: { "x-goog-api-key": apiKey } });
+        if (!response.ok) throw new Error(geminiErrorMessage(await response.json().catch(() => ({})), `读取模型失败（${response.status}）`));
+        const payload = await response.json() as { models?: Array<{ name?: string; supportedGenerationMethods?: string[] }>; nextPageToken?: string };
+        for (const item of payload.models || []) {
+            const name = item.name?.replace(/^models\//, "") || "";
+            const methods = item.supportedGenerationMethods || [];
+            if (name && !/embed|embedding/i.test(name) && (methods.includes("generateContent") || methods.includes("predictLongRunning") || /^(veo-|imagen-)/i.test(name))) result.push(name);
+        }
+        pageToken = payload.nextPageToken || "";
+    } while (pageToken);
+    if (!result.length) throw new Error("Gemini 模型列表为空");
+    return Array.from(new Set(result)).sort((a, b) => a.localeCompare(b));
+}
+
+function withoutModel<T extends { model: string; stream?: boolean }>(body: T) {
+    const { model: _model, stream: _stream, ...nativeBody } = body;
+    return nativeBody;
 }
 function isAgnesImageModel(model: string) {
     const m = model.toLowerCase().replace(/[\s_]+/g, "-");
