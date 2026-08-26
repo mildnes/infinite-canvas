@@ -270,7 +270,7 @@ async function maybeUploadImageToServer(blob: Blob): Promise<UploadedImage | nul
             }
             return null;
         }
-        return finalizeUploadedImage(payload.data, blob);
+        return cacheAnonymousImage(payload.data, blob);
     } catch (error) {
         const detail = error instanceof Error ? error.message : "服务端图片上传失败";
         console.warn("cloud image upload failed, fallback to local:", detail);
