@@ -297,7 +297,10 @@ export function AppConfigModal() {
                                 block
                                 size="middle"
                                 value={effectiveMode}
-                                onChange={(value) => updateConfig("channelMode", value as AiConfig["channelMode"])}
+                                onChange={(value) => {
+                                    updateConfig("channelMode", value as AiConfig["channelMode"]);
+                                    updateConfig("channelModeManuallySelected", true);
+                                }}
                                 options={[
                                     { label: "本地直连", value: "local" },
                                     { label: "云端渠道", value: "remote" },

@@ -10,7 +10,7 @@ import { useUserStore } from "@/stores/use-user-store";
 
 export type LocalModelChannel = {
     id: string;
-    protocol: "openai" | "gemini" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo";
+    protocol: "openai" | "gemini" | "grok2api" | "xai" | "metaso" | "apimart" | "kie" | "mimo";
     name: string;
     baseUrl: string;
     apiKey: string;
@@ -23,6 +23,7 @@ export type VideoElementItem = { name: string; description: string; references: 
 
 export type AiConfig = {
     channelMode: "remote" | "local";
+    channelModeManuallySelected: boolean;
     baseUrl: string;
     apiKey: string;
     model: string;
@@ -96,6 +97,7 @@ export type ModelCapability = "image" | "video" | "text" | "audio";
 
 export const defaultConfig: AiConfig = {
     channelMode: "local",
+    channelModeManuallySelected: false,
     baseUrl: "https://api.openai.com",
     apiKey: "",
     model: "gpt-image-2",
@@ -179,7 +181,11 @@ type ConfigStore = {
 };
 
 function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSettings["modelChannel"] | null, canUseRemoteChannel: boolean) {
-    const channelMode = canUseRemoteChannel ? (modelChannel?.allowCustomChannel ? config.channelMode : "remote") : "local";
+    const channelMode = !canUseRemoteChannel
+        ? "local"
+        : !modelChannel?.allowCustomChannel || !config.channelModeManuallySelected
+            ? "remote"
+            : config.channelMode;
     if (channelMode === "local" || !modelChannel) {
         const localChannels = normalizeLocalChannels(config);
         return {
@@ -406,6 +412,7 @@ export const useConfigStore = create<ConfigStore>()(
                         syncStorageConfig: config.syncStorageConfig === true,
                         syncWebDAVStorageConfig: config.syncWebDAVStorageConfig === true,
                         channelMode: config.channelMode || "remote",
+                        channelModeManuallySelected: config.channelModeManuallySelected === true,
                         imageModel: config.imageModel || config.model,
                         videoModel: config.videoModel || "grok-imagine-video",
                         textModel: config.textModel || config.model,
@@ -492,7 +499,7 @@ export function normalizeLocalChannels(config: Partial<AiConfig>): LocalModelCha
     const channels = Array.isArray(config.localChannels) ? config.localChannels : [];
     const normalized: LocalModelChannel[] = channels.map((channel, index) => ({
         id: channel.id || `local-${index + 1}`,
-        protocol: channel.protocol || "openai",
+        protocol: channel.protocol === "gemini" || channel.protocol === "grok2api" || channel.protocol === "xai" || channel.protocol === "metaso" || channel.protocol === "apimart" || channel.protocol === "kie" || channel.protocol === "mimo" ? channel.protocol : "openai",
         name: typeof channel.name === "string" ? channel.name : `本地渠道 ${index + 1}`,
         baseUrl: channel.baseUrl || "",
         apiKey: channel.apiKey || "",
