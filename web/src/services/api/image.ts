@@ -1555,12 +1555,14 @@ export async function listCanvasImageTasks(config: AiConfig, sources: Array<"ima
     return payload.data;
 }
 
-export async function batchCanvasImageTaskStatus(config: AiConfig, ids: string[]) {
+export async function batchCanvasImageTaskStatus(config: AiConfig | undefined, ids: string[]) {
     const taskIds = Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean)));
-    if (!usesAccountProxy(config) || !taskIds.length) return [];
+    if ((config && !usesAccountProxy(config)) || !taskIds.length) return [];
+    const token = useUserStore.getState().token;
+    if (!token) throw new Error("请先登录后再读取云端图片任务");
     const response = await fetch("/api/v1/canvas/image-tasks/status", {
         method: "POST",
-        headers: aiHeaders(config, "application/json"),
+        headers: config ? aiHeaders(config, "application/json") : { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ ids: taskIds }),
     });
     if (!response.ok) {

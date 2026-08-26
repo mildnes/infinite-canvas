@@ -8,7 +8,7 @@ import { ChevronLeft, ChevronRight, Globe2, Home, ImageIcon, Images, Layers3, Li
 import { saveAs } from "file-saver";
 
 import { deleteCanvasProjects, deleteCanvasTasks } from "@/services/api/canvas-tasks";
-import { createCanvasImageTask, pollCanvasImageTaskStatus, requestImageQuestion, type CanvasImageTask } from "@/services/api/image";
+import { batchCanvasImageTaskStatus, createCanvasImageTask, pollCanvasImageTaskStatus, requestImageQuestion, type CanvasImageTask } from "@/services/api/image";
 import { createCanvasAudioTask, pollCanvasAudioTaskStatus, type CanvasAudioTask } from "@/services/api/audio";
 import { createVideoGenerationTask, pollVideoGenerationTaskStatus, VIDEO_POLL_INTERVAL_MS, type VideoResponse } from "@/services/api/video";
 import { channelProtocolForConfig, defaultConfig, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
@@ -491,9 +491,12 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             let restoredNodes = resetInterruptedGeneration(project.nodes);
             let restoredSessions = project.chatSessions || [];
             try {
+                const recovered = await recoverPersistedCanvasImageTasks(restoredNodes);
+                restoredNodes = recovered.nodes;
                 const repaired = await repairCanvasProjectMedia(restoredNodes, restoredSessions, { allowUpload: true });
                 restoredNodes = repaired.nodes;
                 restoredSessions = repaired.sessions;
+                if (recovered.count > 0) message.success(`已从云端任务记录恢复 ${recovered.count} 张图片`);
                 if (repaired.uploaded > 0) message.success(`已自动上传 ${repaired.uploaded} 个本地媒体到云存储`);
             } catch {
                 restoredNodes = await hydrateCanvasImages(restoredNodes);
@@ -4871,6 +4874,35 @@ async function applyAndPersistCanvasImageTaskUpdate(
 ) {
     const updated = applyCanvasImageTaskUpdate(nodes, nodeId, task, startedAt, fallbackSize);
     return (await persistGeneratedImageNodes(updated, [nodeId, ...canvasImageTaskChildIds(nodeId, task)])).nodes;
+}
+
+async function recoverPersistedCanvasImageTasks(nodes: CanvasNodeData[]) {
+    const targets = nodes.filter(
+        (node) =>
+            isCanvasImageNodeType(node.type) &&
+            !node.metadata?.content &&
+            !node.metadata?.storageKey &&
+            Boolean(node.metadata?.imageTaskId) &&
+            (node.metadata?.status === NODE_STATUS_SUCCESS || node.metadata?.mediaStatus === "broken"),
+    );
+    if (!targets.length) return { nodes, count: 0 };
+
+    let tasks: CanvasImageTask[];
+    try {
+        tasks = await batchCanvasImageTaskStatus(undefined, targets.map((node) => node.metadata?.imageTaskId || ""));
+    } catch {
+        return { nodes, count: 0 };
+    }
+    const taskById = new Map(tasks.map((task) => [task.id, task]));
+    let next = nodes;
+    let count = 0;
+    for (const node of targets) {
+        const task = taskById.get(node.metadata?.imageTaskId || "");
+        if (!task || !canvasImageTaskURLs(task).length) continue;
+        next = await applyAndPersistCanvasImageTaskUpdate(next, node.id, task, node.metadata?.startedAt || Date.now(), { width: node.width, height: node.height });
+        count += 1;
+    }
+    return { nodes: next, count };
 }
 
 function applyCanvasImageTaskUpdate(nodes: CanvasNodeData[], nodeId: string, task: CanvasImageTask, startedAt: number, fallbackSize: { width: number; height: number }) {
