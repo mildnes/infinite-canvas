@@ -586,7 +586,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 pollingImageNodeIdsRef.current.add(node.id);
                 void pollCanvasImageTaskStatus(node.metadata.imageTaskId)
                     .then((task) => {
-                        setNodes((prev) => applyCanvasImageTaskUpdate(prev, node.id, task, node.metadata?.startedAt || Date.now(), { width: node.width, height: node.height }));
+                        void applyAndPersistCanvasImageTaskUpdate(nodesRef.current, node.id, task, node.metadata?.startedAt || Date.now(), { width: node.width, height: node.height }).then((next) => setNodes(next));
                         setConnections((prev) => applyCanvasImageTaskConnections(prev, node.id, task));
                     })
                     .catch(() => undefined)
@@ -2330,7 +2330,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             setDialogNodeId(childId);
             try {
                 const task = await createCanvasImageTask(generationConfig, prompt, [markedReference], { nodeId: childId, sourceId: projectId, clientTaskId });
-                setNodes((prev) => applyCanvasImageTaskUpdate(prev, childId, task, childNode.metadata?.startedAt || Date.now(), { width: node.width, height: node.height }));
+                setNodes(await applyAndPersistCanvasImageTaskUpdate(nodesRef.current, childId, task, childNode.metadata?.startedAt || Date.now(), { width: node.width, height: node.height }));
                 setConnections((prev) => applyCanvasImageTaskConnections(prev, childId, task));
             } catch (error) {
                 const errorDetails = error instanceof Error ? error.message : "局部修改失败";
@@ -2410,7 +2410,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             setDialogNodeId(childId);
             try {
                 const task = await createCanvasImageTask(generationConfig, prompt, referenceImages, { nodeId: childId, sourceId: projectId, clientTaskId });
-                setNodes((prev) => applyCanvasImageTaskUpdate(prev, childId, task, startedAt, { width: imageConfig.width, height: imageConfig.height }));
+                setNodes(await applyAndPersistCanvasImageTaskUpdate(nodesRef.current, childId, task, startedAt, { width: imageConfig.width, height: imageConfig.height }));
                 setConnections((prev) => applyCanvasImageTaskConnections(prev, childId, task));
             } catch (error) {
                 const errorDetails = error instanceof Error ? error.message : "生成失败";
@@ -2730,14 +2730,12 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                             try {
                                 const task = await createCanvasImageTask({ ...panoramaGenerationConfig, count: "1", quality: panoramaGenerationConfig.quality === "auto" ? "medium" : panoramaGenerationConfig.quality }, panoramaPrompt, referenceImages, { nodeId: targetId, sourceId: projectId, clientTaskId: targetTaskIds[targetId] });
                                 if (task.image_url || task.url) {
-                                    setNodes((prev) => {
-                                        const root = prev.find((node) => node.id === rootId);
-                                        let next = applyCanvasImageTaskUpdate(prev, targetId, task, generationStartedAt, { width: panoramaNodeConfig.width, height: panoramaNodeConfig.height });
-                                        if (targetId !== rootId && root?.metadata?.primaryImageId === targetId) {
-                                            next = applyCanvasImageTaskUpdate(next, rootId, task, generationStartedAt, { width: panoramaNodeConfig.width, height: panoramaNodeConfig.height });
-                                        }
-                                        return next;
-                                    });
+                                    let next = applyCanvasImageTaskUpdate(nodesRef.current, targetId, task, generationStartedAt, { width: panoramaNodeConfig.width, height: panoramaNodeConfig.height });
+                                    const root = next.find((node) => node.id === rootId);
+                                    if (targetId !== rootId && root?.metadata?.primaryImageId === targetId) {
+                                        next = applyCanvasImageTaskUpdate(next, rootId, task, generationStartedAt, { width: panoramaNodeConfig.width, height: panoramaNodeConfig.height });
+                                    }
+                                    setNodes((await persistGeneratedImageNodes(next, [targetId, rootId])).nodes);
                                     return true;
                                 }
                                 setNodes((prev) => {
@@ -2882,14 +2880,12 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                             try {
                                 const task = await createCanvasImageTask({ ...generationConfig, count: "1" }, requestPrompt, referenceImages, { nodeId: targetId, sourceId: projectId, clientTaskId: targetTaskIds[targetId] });
                                 if (task.image_url || task.url) {
-                                    setNodes((prev) => {
-                                        const root = prev.find((node) => node.id === rootId);
-                                        let next = applyCanvasImageTaskUpdate(prev, targetId, task, generationStartedAt, { width: imageSize.width, height: imageSize.height });
-                                        if (targetId !== rootId && root?.metadata?.primaryImageId === targetId) {
-                                            next = applyCanvasImageTaskUpdate(next, rootId, task, generationStartedAt, { width: imageSize.width, height: imageSize.height });
-                                        }
-                                        return next;
-                                    });
+                                    let next = applyCanvasImageTaskUpdate(nodesRef.current, targetId, task, generationStartedAt, { width: imageSize.width, height: imageSize.height });
+                                    const root = next.find((node) => node.id === rootId);
+                                    if (targetId !== rootId && root?.metadata?.primaryImageId === targetId) {
+                                        next = applyCanvasImageTaskUpdate(next, rootId, task, generationStartedAt, { width: imageSize.width, height: imageSize.height });
+                                    }
+                                    setNodes((await persistGeneratedImageNodes(next, [targetId, rootId])).nodes);
                                     setConnections((prev) => applyCanvasImageTaskConnections(prev, targetId, task));
                                     return true;
                                 }
@@ -3550,8 +3546,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 const generationMetadata = savedImageMetadata?.generationType
                     ? { generationType: savedImageMetadata.generationType, model: generationConfig.model, channelId: generationConfig.imageChannelId || generationConfig.activeChannelId, size: generationConfig.size, quality: generationConfig.quality, count: savedImageMetadata.count || 1, references: savedImageMetadata.references }
                     : buildImageGenerationMetadata(useReferenceImages ? "edit" : "generation", generationConfig, 1, retryImages);
-                setNodes((prev) => {
-                    const next = prev.map((item) =>
+                let next = nodesRef.current.map((item) =>
                         item.id === node.id
                             ? {
                                 ...item,
@@ -3569,9 +3564,12 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                             }
                             : item,
                     );
-                    return task.image_url || task.url ? applyCanvasImageTaskUpdate(next, node.id, task, retryStartedAt, { width: node.width, height: node.height }) : next;
-                });
-                if (task.image_url || task.url) setConnections((prev) => applyCanvasImageTaskConnections(prev, node.id, task));
+                if (task.image_url || task.url) {
+                    next = applyCanvasImageTaskUpdate(next, node.id, task, retryStartedAt, { width: node.width, height: node.height });
+                    next = (await persistGeneratedImageNodes(next, [node.id])).nodes;
+                    setConnections((prev) => applyCanvasImageTaskConnections(prev, node.id, task));
+                }
+                setNodes(next);
             } catch (error) {
                 const errorDetails = error instanceof Error ? error.message : "生成失败";
                 message.error(errorDetails);
@@ -4827,6 +4825,52 @@ function canvasImageTaskURLs(task: CanvasImageTask) {
 
 function canvasImageTaskChildIds(nodeId: string, task: CanvasImageTask) {
     return canvasImageTaskURLs(task).map((_, index) => `${nodeId}-result-${index}`);
+}
+
+async function persistGeneratedImageNodes(nodes: CanvasNodeData[], candidateIds?: string[]) {
+    const candidateIdSet = candidateIds?.length ? new Set(candidateIds) : null;
+    const next = await Promise.all(
+        nodes.map(async (node) => {
+            if (candidateIdSet && !candidateIdSet.has(node.id)) return node;
+            if (!isCanvasImageNodeType(node.type)) return node;
+            const content = String(node.metadata?.content || "");
+            const storageKey = String(node.metadata?.storageKey || "");
+            if (!content.startsWith("data:image/") || storageKey.startsWith("image:") || storageKey.startsWith("server:")) return node;
+            try {
+                let image: UploadedImage;
+                try {
+                    image = await uploadImage(content);
+                } catch {
+                    image = await uploadImage(content, { localOnly: true });
+                }
+                return {
+                    ...node,
+                    metadata: {
+                        ...node.metadata,
+                        ...imageMetadata(image),
+                        status: NODE_STATUS_SUCCESS,
+                        imageTaskId: node.metadata?.imageTaskId,
+                        imageTaskResultId: node.metadata?.imageTaskResultId,
+                        progress: 100,
+                    },
+                };
+            } catch {
+                return node;
+            }
+        }),
+    );
+    return { nodes: next };
+}
+
+async function applyAndPersistCanvasImageTaskUpdate(
+    nodes: CanvasNodeData[],
+    nodeId: string,
+    task: CanvasImageTask,
+    startedAt: number,
+    fallbackSize: { width: number; height: number },
+) {
+    const updated = applyCanvasImageTaskUpdate(nodes, nodeId, task, startedAt, fallbackSize);
+    return (await persistGeneratedImageNodes(updated, [nodeId, ...canvasImageTaskChildIds(nodeId, task)])).nodes;
 }
 
 function applyCanvasImageTaskUpdate(nodes: CanvasNodeData[], nodeId: string, task: CanvasImageTask, startedAt: number, fallbackSize: { width: number; height: number }) {

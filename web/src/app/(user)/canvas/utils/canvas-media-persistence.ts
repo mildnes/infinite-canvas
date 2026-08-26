@@ -43,6 +43,8 @@ export type RepairCanvasMediaResult = {
     broken: number;
 };
 
+type MediaRepairCache = Map<string, Promise<{ ref: CanvasMediaRef; uploaded: boolean }>>;
+
 const UPLOAD_CONCURRENCY = 3;
 
 function isBlobUrl(value?: string) {
@@ -222,6 +224,30 @@ function sameRef(a: CanvasMediaRef, b: CanvasMediaRef) {
         a.mediaStatus === b.mediaStatus &&
         (a.mediaError || "") === (b.mediaError || "")
     );
+}
+
+function mediaRepairCacheKey(kind: "image" | "media", ref: CanvasMediaRef) {
+    const storageKey = String(ref.storageKey || "").trim();
+    const content = String(ref.content || "").trim();
+    const source = storageKey || content;
+    return source ? `${kind}:${source}` : "";
+}
+
+async function repairCanvasMediaRefOnce(
+    ref: CanvasMediaRef,
+    kind: "image" | "media",
+    options: { allowUpload?: boolean; filename?: string },
+    cache?: MediaRepairCache,
+) {
+    const key = mediaRepairCacheKey(kind, ref);
+    if (key && cache?.has(key)) {
+        const shared = await cache.get(key)!;
+        return { ref: shared.ref, changed: !sameRef(ref, shared.ref), uploaded: false };
+    }
+    const pending = repairCanvasMediaRef(ref, kind, options).then(({ ref: repaired, uploaded }) => ({ ref: repaired, uploaded }));
+    if (key) cache?.set(key, pending);
+    const repaired = await pending;
+    return { ref: repaired.ref, changed: !sameRef(ref, repaired.ref), uploaded: repaired.uploaded };
 }
 
 async function tryUploadImageSource(source: string | Blob, filename: string) {
@@ -423,7 +449,7 @@ export async function repairCanvasMediaRef(
     };
 }
 
-export async function repairCanvasNodeMedia(node: CanvasNodeData, options: { allowUpload?: boolean } = {}) {
+export async function repairCanvasNodeMedia(node: CanvasNodeData, options: { allowUpload?: boolean } = {}, cache?: MediaRepairCache) {
     const metadata = node.metadata || {};
     const isImage = isCanvasImageNodeType(node.type);
     const isMedia = node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio;
@@ -433,7 +459,7 @@ export async function repairCanvasNodeMedia(node: CanvasNodeData, options: { all
         return { node, changed: false, uploaded: false };
     }
 
-    const repaired = await repairCanvasMediaRef(
+    const repaired = await repairCanvasMediaRefOnce(
         {
             content: metadata.content,
             storageKey: metadata.storageKey,
@@ -450,6 +476,7 @@ export async function repairCanvasNodeMedia(node: CanvasNodeData, options: { all
             allowUpload: options.allowUpload,
             filename: `canvas-${node.type}-${node.id}.${isImage ? "png" : node.type === CanvasNodeType.Audio ? "mp3" : "mp4"}`,
         },
+        cache,
     );
     if (!repaired.changed) return { node, changed: false, uploaded: repaired.uploaded };
     return {
@@ -473,12 +500,12 @@ async function mapPool<T, R>(items: T[], limit: number, worker: (item: T, index:
     return results;
 }
 
-export async function repairCanvasNodesMedia(nodes: CanvasNodeData[], options: { allowUpload?: boolean } = {}) {
+export async function repairCanvasNodesMedia(nodes: CanvasNodeData[], options: { allowUpload?: boolean } = {}, cache?: MediaRepairCache) {
     let changed = false;
     let uploaded = 0;
     let broken = 0;
     const next = await mapPool(nodes, UPLOAD_CONCURRENCY, async (node) => {
-        const result = await repairCanvasNodeMedia(node, options);
+        const result = await repairCanvasNodeMedia(node, options, cache);
         if (result.changed) changed = true;
         if (result.uploaded) uploaded += 1;
         if (result.node.metadata?.mediaStatus === "broken") broken += 1;
@@ -487,7 +514,7 @@ export async function repairCanvasNodesMedia(nodes: CanvasNodeData[], options: {
     return { nodes: next, changed, uploaded, broken };
 }
 
-export async function repairCanvasSessionsMedia(sessions: CanvasAssistantSession[], options: { allowUpload?: boolean } = {}) {
+export async function repairCanvasSessionsMedia(sessions: CanvasAssistantSession[], options: { allowUpload?: boolean } = {}, cache?: MediaRepairCache) {
     let changed = false;
     let uploaded = 0;
     let broken = 0;
@@ -497,10 +524,11 @@ export async function repairCanvasSessionsMedia(sessions: CanvasAssistantSession
         for (const message of session.messages || []) {
             const images = [];
             for (const image of message.images || []) {
-                const repaired = await repairCanvasMediaRef(
+                const repaired = await repairCanvasMediaRefOnce(
                     { content: image.dataUrl, storageKey: image.storageKey },
                     "image",
                     { allowUpload: options.allowUpload, filename: "assistant-image.png" },
+                    cache,
                 );
                 if (repaired.changed) changed = true;
                 if (repaired.uploaded) uploaded += 1;
@@ -514,10 +542,11 @@ export async function repairCanvasSessionsMedia(sessions: CanvasAssistantSession
             const references = [];
             for (const reference of message.references || []) {
                 const kind = reference.type?.startsWith("video/") || reference.type?.startsWith("audio/") ? "media" : "image";
-                const repaired = await repairCanvasMediaRef(
+                const repaired = await repairCanvasMediaRefOnce(
                     { content: reference.dataUrl || reference.url, storageKey: reference.storageKey },
                     kind,
                     { allowUpload: options.allowUpload, filename: "assistant-reference.bin" },
+                    cache,
                 );
                 if (repaired.changed) changed = true;
                 if (repaired.uploaded) uploaded += 1;
@@ -541,8 +570,9 @@ export async function repairCanvasProjectMedia(
     sessions: CanvasAssistantSession[] = [],
     options: { allowUpload?: boolean } = {},
 ): Promise<RepairCanvasMediaResult> {
-    const nodeResult = await repairCanvasNodesMedia(nodes, options);
-    const sessionResult = await repairCanvasSessionsMedia(sessions, options);
+    const cache: MediaRepairCache = new Map();
+    const nodeResult = await repairCanvasNodesMedia(nodes, options, cache);
+    const sessionResult = await repairCanvasSessionsMedia(sessions, options, cache);
     return {
         nodes: nodeResult.nodes,
         sessions: sessionResult.sessions,
