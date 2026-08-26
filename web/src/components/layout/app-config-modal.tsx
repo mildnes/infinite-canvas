@@ -60,7 +60,11 @@ export function AppConfigModal() {
     const isLoggedIn = Boolean(token && user);
     const canUseRemoteChannel = isLoggedIn && (user?.role === "admin" || modelChannel?.allowUserRemoteChannel === true);
     const allowCustomChannel = isLoggedIn && modelChannel?.allowCustomChannel === true;
-    const effectiveMode = canUseRemoteChannel ? (allowCustomChannel ? config.channelMode : "remote") : "local";
+    const effectiveMode = !canUseRemoteChannel
+        ? "local"
+        : !allowCustomChannel || !config.channelModeManuallySelected
+            ? "remote"
+            : config.channelMode;
     const localModelConfig: AiConfig = effectiveMode === "local" && config.channelMode !== "local" ? { ...config, channelMode: "local" } : config;
     const modelConfig = effectiveMode === "remote" ? effectiveConfig : localModelConfig;
     const canUseUserStorageProvider = allowUserStorageProvider;
@@ -330,6 +334,7 @@ export function AppConfigModal() {
                                                     { label: "OpenAI", value: "openai" },
                                                     { label: "Gemini", value: "gemini" },
                                                     { label: "Grok2API", value: "grok2api" },
+                                                    { label: "xAI", value: "xai" },
                                                     { label: "MiniMax & METASO", value: "metaso" },
                                                     { label: "APIMart", value: "apimart" },
                                                     { label: "KIE", value: "kie" },

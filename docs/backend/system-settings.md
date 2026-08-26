@@ -66,8 +66,8 @@ description: settings 表中 public 和 private 配置结构说明
 
 | 模式 | 说明 |
 | --- | --- |
-| 云端渠道 | 使用后端 `/api/v1/*` 代理接口，请求会按模型名匹配 `private.value.channels` 中的可用渠道 |
-| 本地直连 | 默认可选；`allowCustomChannel` 关闭后不可选，用户在浏览器本地配置 `baseUrl`、`apiKey` 和模型列表后直接请求模型接口 |
+| 云端渠道 | 登录用户在后台允许云端渠道时默认使用；通过后端 `/api/v1/*` 代理接口，请求会按模型名匹配 `private.value.channels` 中的可用渠道 |
+| 本地直连 | 用户在配置页主动切换后使用；`allowCustomChannel` 关闭时不可选，浏览器本地配置 `baseUrl`、`apiKey` 和模型列表后直接请求模型接口 |
 
 `auth` 字段：
 
@@ -108,7 +108,7 @@ description: settings 表中 public 和 private 配置结构说明
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `protocol` | string | 协议，支持 OpenAI、Gemini、Grok2API、MiniMax、APIMart、KIE、MiMo |
+| `protocol` | string | 协议，支持 OpenAI、Gemini、Grok2API、xAI、MiniMax、APIMart、KIE、MiMo |
 | `name` | string | 渠道名称 |
 | `baseUrl` | string | 渠道接口地址 |
 | `apiKey` | string | 渠道密钥 |

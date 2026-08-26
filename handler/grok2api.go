@@ -455,6 +455,12 @@ func normalizeGrok2APITTSBody(body []byte, contentType string, modelName string)
 		}
 	}
 	delete(payload, "voice")
+	if _, ok := payload["output_format"]; !ok {
+		if format := strings.TrimSpace(toStringSafe(payload["response_format"])); format != "" {
+			payload["output_format"] = map[string]any{"codec": format}
+		}
+	}
+	delete(payload, "response_format")
 	if strings.TrimSpace(toStringSafe(payload["language"])) == "" {
 		payload["language"] = "en"
 	}

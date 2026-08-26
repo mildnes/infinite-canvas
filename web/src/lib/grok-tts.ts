@@ -47,7 +47,8 @@ export function isGrokTtsModel(model: string) {
 }
 
 export function isGrok2APITtsConfig(config: AiConfig, model: string) {
-    return isGrokTtsModel(model) && channelProtocolForConfig({ ...config, model, audioModel: model }) === "grok2api";
+    const protocol = channelProtocolForConfig({ ...config, model, audioModel: model });
+    return isGrokTtsModel(model) && (protocol === "grok2api" || protocol === "xai");
 }
 
 export function normalizeGrokTtsLanguage(value: string) {

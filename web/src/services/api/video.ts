@@ -203,7 +203,8 @@ export async function deleteVideoGenerationTask(config: AiConfig, task?: VideoRe
 
 function isGrok2APIVideoConfig(config: AiConfig, model: string) {
     const normalizedModel = model.trim().toLowerCase();
-    return (normalizedModel === "grok-imagine-video" || normalizedModel === "grok-imagine-video-1.5") && videoChannelProtocol(config, model) === "grok2api";
+    const protocol = videoChannelProtocol(config, model);
+    return normalizedModel.startsWith("grok-imagine-video") && (protocol === "grok2api" || protocol === "xai");
 }
 
 async function cacheProtectedGrokVideo(config: AiConfig, model: string, task: VideoResponse) {
@@ -217,20 +218,39 @@ async function cacheProtectedGrokVideo(config: AiConfig, model: string, task: Vi
 }
 
 async function createGrok2APIVideoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
+    const references = [input.firstFrame, ...input.references, input.lastFrame].filter((reference): reference is ReferenceImage => Boolean(reference));
+    const urls = await Promise.all(references.map((reference) => imageToDataUrl(reference)));
+    const multiReferenceMode = urls.length > 1;
     const body: Record<string, unknown> = {
         model,
         prompt,
-        duration: Number(normalizeVideoSeconds(config.videoSeconds)),
-        resolution: normalizeVideoResolution(config.vquality),
+        duration: normalizeGrok2APIVideoDuration(config.videoSeconds),
+        resolution: normalizeGrok2APIVideoResolution(config.vquality, multiReferenceMode),
     };
-    const aspectRatio = normalizeSeedanceRatio(config.size);
-    if (aspectRatio !== "adaptive") body.aspect_ratio = aspectRatio;
-
-    const urls = await Promise.all(input.references.map((reference) => imageToDataUrl(reference)));
+    const aspectRatio = normalizeGrok2APIVideoAspectRatio(config.size);
+    if (aspectRatio) body.aspect_ratio = aspectRatio;
     if (urls.length === 1) body.image = { url: urls[0] };
-    else if (urls.length > 1) body.reference_images = urls.map((url) => ({ url }));
+    if (urls.length > 1) body.reference_images = urls.map((url) => ({ url }));
 
     return body;
+}
+
+function normalizeGrok2APIVideoResolution(value: string, multiReferenceMode = false) {
+    if (multiReferenceMode) return "720p";
+    const normalized = String(value || "").toLowerCase();
+    if (normalized.includes("1080") || normalized.includes("2k") || normalized.includes("4k")) return "1080p";
+    return "720p";
+}
+
+function normalizeGrok2APIVideoDuration(value: string) {
+    const seconds = Math.floor(Number(value) || 6);
+    return Math.max(4, Math.min(15, seconds));
+}
+
+function normalizeGrok2APIVideoAspectRatio(size: string) {
+    const ratio = normalizeSeedanceRatio(size);
+    if (ratio === "adaptive" || ratio === "21:9") return "16:9";
+    return ratio;
 }
 
 async function createAgnesVideoV25RequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {

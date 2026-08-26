@@ -175,7 +175,52 @@ function isGrokImageModel(model: string) {
 }
 
 function isGrok2APIImageConfig(config: AiConfig) {
-    return channelProtocolForConfig(config) === "grok2api" && isGrokImageModel(config.model);
+    const protocol = channelProtocolForConfig(config);
+    return (protocol === "grok2api" || protocol === "xai") && isGrokImageModel(config.model);
+}
+
+function normalizeGrokImageResolution(quality: string, size: string, operation: "generation" | "edit", model: string) {
+    if (operation === "edit" && model.includes("edit")) return "1k";
+    const value = size.trim().toLowerCase();
+    if (/(^|[^a-z0-9])(2k|4k)([^a-z0-9]|$)/i.test(value)) return "2k";
+    if (/(^|[^a-z0-9])1k([^a-z0-9]|$)/i.test(value)) return "1k";
+    const dimensions = value.match(/^(\d+)x(\d+)$/);
+    if (dimensions) return Math.max(Number(dimensions[1]), Number(dimensions[2])) >= 1536 ? "2k" : "1k";
+    const normalized = normalizeQuality(quality);
+    return normalized !== "auto" && QUALITY_BASE[normalized] > 1024 ? "2k" : "1k";
+}
+
+function normalizeGrokImageAspectRatio(size: string) {
+    const value = size.trim().toLowerCase();
+    if (!value || value === "auto") return "";
+    const dimensions = value.match(/^(\d+)x(\d+)$/);
+    if (dimensions) return snapGrokImageAspectRatio(Number(dimensions[1]) / Number(dimensions[2]));
+    const match = value.match(/^(\d+(?:\.\d+)?:\d+(?:\.\d+)?)/);
+    return match ? snapGrokImageAspectRatioLabel(match[1]) : "";
+}
+
+const GROK_IMAGE_ASPECT_RATIOS = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "2:1", "1:2", "20:9", "9:20", "19.5:9", "9:19.5"] as const;
+
+function snapGrokImageAspectRatioLabel(value: string) {
+    if ((GROK_IMAGE_ASPECT_RATIOS as readonly string[]).includes(value)) return value;
+    if (value === "21:9") return "20:9";
+    if (value === "9:21") return "9:20";
+    const [width, height] = value.split(":").map(Number);
+    return width > 0 && height > 0 ? snapGrokImageAspectRatio(width / height) : "";
+}
+
+function snapGrokImageAspectRatio(ratio: number) {
+    let best = "1:1";
+    let score = Number.POSITIVE_INFINITY;
+    for (const item of GROK_IMAGE_ASPECT_RATIOS) {
+        const [width, height] = item.split(":").map(Number);
+        const next = Math.abs(Math.log(ratio) - Math.log(width / height));
+        if (Number.isFinite(next) && next < score) {
+            best = item;
+            score = next;
+        }
+    }
+    return best;
 }
 
 function isZhipuImageModel(model: string) {
@@ -200,21 +245,12 @@ function applyImageGenerationParams(body: Record<string, unknown>, config: AiCon
 
     const grok = isGrok2APIImageConfig(config) && (operation === "edit" || !model.includes("edit"));
     if (grok) {
-        const size = config.size.trim().toLowerCase();
-        if (size && size !== "auto") {
-            const match = size.match(/^(\d+)x(\d+)$/);
-            if (match) {
-                const width = Number(match[1]);
-                const height = Number(match[2]);
-                const divisor = greatestCommonDivisor(width, height);
-                body.aspect_ratio = `${width / divisor}:${height / divisor}`;
-            } else {
-                body.aspect_ratio = size;
-            }
-        }
-        if (params.quality !== "auto") {
-            body.resolution = operation === "edit" && model.includes("edit") ? "1k" : QUALITY_BASE[params.quality] > 1024 ? "2k" : "1k";
-        }
+        const size = String(config.size || params.size || "").trim();
+        const aspectRatio = normalizeGrokImageAspectRatio(size);
+        if (aspectRatio) body.aspect_ratio = aspectRatio;
+        body.resolution = normalizeGrokImageResolution(params.quality || config.quality || "auto", size, operation, model);
+        delete body.size;
+        delete body.quality;
         return;
     }
 

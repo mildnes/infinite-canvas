@@ -903,6 +903,7 @@ export default function AdminSettingsPage() {
                                             { label: "OpenAI", value: "openai" },
                                             { label: "Gemini", value: "gemini" },
                                             { label: "Grok2API", value: "grok2api" },
+                                            { label: "xAI", value: "xai" },
                                             { label: "MiniMax & METASO", value: "metaso" },
                                             { label: "APIMart", value: "apimart" },
                                             { label: "KIE", value: "kie" },

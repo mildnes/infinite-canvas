@@ -1,9 +1,10 @@
-export type ModelChannelProtocol = "openai" | "gemini" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo";
+export type ModelChannelProtocol = "openai" | "gemini" | "grok2api" | "xai" | "metaso" | "apimart" | "kie" | "mimo";
 
 export const modelChannelDefaultBaseUrls: Record<ModelChannelProtocol, string> = {
     openai: "https://api.openai.com",
     gemini: "https://generativelanguage.googleapis.com",
     grok2api: "",
+    xai: "https://api.x.ai",
     metaso: "https://metaso.cn/api/minimax",
     apimart: "https://api.apimart.ai/v1",
     kie: "https://api.kie.ai/api/v1",

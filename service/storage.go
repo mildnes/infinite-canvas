@@ -487,18 +487,10 @@ func DownloadStorageObject(id string, rangeHeader string) (DownloadedStorageObje
 	if settings, loadErr := repository.GetSettings(); loadErr == nil {
 		providers = append(providers, normalizePrivateStorageSetting(settings.Private.Storage).Providers...)
 	}
-	if provider, ok := findStorageProviderForObject(object, providers); ok && storageProviderConfigured(provider) {
-		var stream storageObjectStream
-		var readErr error
-		switch provider.Type {
-		case model.StorageProviderTypeS3:
-			stream, readErr = getS3ObjectStream(provider, object.ObjectKey, rangeHeader)
-		case model.StorageProviderTypeWebDAV:
-			stream, readErr = getWebDAVObjectStream(provider, object.ObjectKey, object.Bytes, rangeHeader)
-		}
-		if readErr == nil && stream.Body != nil {
-			return downloadedStorageObject(object, stream), nil
-		}
+	if stream, readErr := readStorageObjectStreamFromProviders(object, providers, rangeHeader); readErr == nil && stream.Body != nil {
+		return downloadedStorageObject(object, stream), nil
+	} else if strings.TrimSpace(object.PublicURL) == "" {
+		return DownloadedStorageObject{}, safeMessageError{message: "对象存储读取失败，请检查存储配置或重新上传"}
 	}
 
 	if object.PublicURL != "" {
@@ -540,6 +532,59 @@ func httpStorageObjectStream(response *http.Response, acceptRanges bool) storage
 
 func storageDownloadStatus(status int) bool {
 	return status >= 200 && status < 300 || status == http.StatusRequestedRangeNotSatisfiable
+}
+
+func readStorageObjectStreamFromProviders(object model.StorageObject, providers []model.StorageProvider, rangeHeader string) (storageObjectStream, error) {
+	tried := map[string]bool{}
+	ordered := make([]model.StorageProvider, 0, len(providers))
+	if provider, ok := findStorageProviderForObject(object, providers); ok {
+		ordered = append(ordered, provider)
+	}
+	ordered = append(ordered, providers...)
+	var lastErr error
+	for _, provider := range ordered {
+		if !provider.Enabled || !storageProviderConfigured(provider) {
+			continue
+		}
+		key := provider.ID
+		if key == "" {
+			key = provider.Endpoint + "|" + provider.Bucket + "|" + provider.PathPrefix
+		}
+		if tried[key] {
+			continue
+		}
+		tried[key] = true
+		var stream storageObjectStream
+		var err error
+		switch provider.Type {
+		case model.StorageProviderTypeS3:
+			stream, err = getS3ObjectStream(provider, object.ObjectKey, rangeHeader)
+		case model.StorageProviderTypeWebDAV:
+			stream, err = getWebDAVObjectStream(provider, object.ObjectKey, object.Bytes, rangeHeader)
+		default:
+			continue
+		}
+		if err == nil && stream.Body != nil {
+			return stream, nil
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return storageObjectStream{}, lastErr
+	}
+	return storageObjectStream{}, errors.New("没有可用对象存储配置")
+}
+
+// readStorageObjectFromProviders is retained for byte-oriented callers and tests.
+// It first tries the object provider, then other configured providers for recovery
+// after a storage endpoint is replaced without moving its object path.
+func readStorageObjectFromProviders(object model.StorageObject, providers []model.StorageProvider) ([]byte, error) {
+	stream, err := readStorageObjectStreamFromProviders(object, providers, "")
+	if err != nil {
+		return nil, err
+	}
+	defer stream.Body.Close()
+	return io.ReadAll(stream.Body)
 }
 
 type storageByteRange struct {
@@ -913,6 +958,9 @@ func findStorageProviderForObject(object model.StorageObject, providers []model.
 				return provider, true
 			}
 		}
+	}
+	if len(providers) == 1 && providers[0].Enabled && storageProviderConfigured(providers[0]) {
+		return providers[0], true
 	}
 	return model.StorageProvider{}, false
 }

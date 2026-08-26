@@ -279,9 +279,6 @@ async function maybeUploadImageToServer(blob: Blob): Promise<UploadedImage | nul
         }
         return null;
     }
-    const meta = await readImageMeta(payload.data.url);
-    if (payload.data.storageKey?.startsWith("server:")) serverUrls.set(payload.data.storageKey.slice("server:".length), payload.data.url);
-    return { ...payload.data, width: payload.data.width || meta.width, height: payload.data.height || meta.height, mimeType: payload.data.mimeType || blob.type || "image/png", bytes: payload.data.bytes || blob.size };
 }
 
 async function uploadWebDAVImageDirect(blob: Blob, filename: string, provider: UserWebDAVStorageProvider): Promise<UploadedImage | null> {

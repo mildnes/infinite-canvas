@@ -2,8 +2,10 @@
 
 ## Unreleased
 
-+ [修复] 画板上传图片在对象存储失败时回退本地，并透出 WebDAV/S3 真实错误
-+ [优化] Agent 不再因画布选中节点自动显示附件图，仅 @ 明确引用时带入
++ [优化] 合并上游 v0.5.5：MiniMax-H3 官方协议、Gemini 原生多媒体协议、Chat Completions 生图、匿名存储与按需媒体读取
++ [优化] 登录用户默认使用后台云端模型；配置页仍可手动切换本地直连
++ [修复] 保留 grok2api/xAI 图片、视频、TTS、2K/1080p、模型目录和音色能力
++ [修复] 保留画布媒体恢复、云端失败本地回退、Safari Range、批量下载、Agent 选中引用、MCP/Skill 和洗图整理
 + [新增] 画布 Agent 支持后台 Skill 与 MCP 工具：Skill 追加工作流提示，MCP 通过后端 JSON-RPC 代理调用，管理端可配置服务与工具白名单
 + [新增] 管理后台新增画布 Agent 扩展配置：Skill 工作流列表、MCP 服务/API Key/工具定义，支持读取 MCP tools/list
 + [新增] MCP 支持 Streamable HTTP 与 stdio 长驻进程，并支持 JSON/SSE 工具结果
