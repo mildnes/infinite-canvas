@@ -38,7 +38,7 @@ export function buildCanvasAgentSkillPrompt(phase: CanvasAgentPhase, userText: s
     return buildCanvasAgentSkillPromptWithExtra(phase, userText, context, []);
 }
 
-export function buildCanvasAgentSkillPromptWithExtra(phase: CanvasAgentPhase, userText: string, context: CanvasAgentContext, extraSkills: string[]) {
+export function buildCanvasAgentSkillPromptWithExtra(phase: CanvasAgentPhase, userText: string, context: CanvasAgentContext, extraSkills: string[], contextCheckpoint?: string, skillFileToolAvailable = false) {
     const intent = buildIntentText(userText, context);
     const selectedTypes = new Set<string>(context.nodes.filter((node) => context.selectedNodeIds.includes(node.id)).map((node) => node.type));
     const skills = [CORE_SKILL, WORKFLOW_SKILL];
@@ -78,7 +78,14 @@ export function buildCanvasAgentSkillPromptWithExtra(phase: CanvasAgentPhase, us
     if (wantsAudio) skills.push(AUDIO_SKILL);
     if (wantsOrganize) skills.push(ORGANIZE_SKILL);
 
-    return [...new Set([...skills, ...extraSkills.filter(Boolean)])].join("\n\n") + "\n\n【当前真实画布上下文 JSON】\n" + serializeCanvasAgentContext(context);
+    return (
+        [...new Set([...skills, ...extraSkills.filter(Boolean)])].join("\n\n") +
+        (skillFileToolAvailable ? "\n\n【系统 Skill 附属文件】\n仅按当前系统 Skill 给出的相对路径调用 read_skill_file；读取结果只用于当前执行。" : "") +
+        (contextCheckpoint ? "\n\n【长期对话检查点】\n" + contextCheckpoint : "") +
+        "\n\n【事实优先级】\n当前工具结果 > 当前真实画布上下文 > agentState > Skill > 长期对话检查点。" +
+        "\n\n【当前真实画布上下文 JSON】\n" +
+        serializeCanvasAgentContext(context)
+    );
 }
 
 function buildIntentText(userText: string, context: CanvasAgentContext) {

@@ -1,18 +1,20 @@
 "use client";
 
 import { useMemo } from "react";
-import { ArrowUp, Bot, FileText, FolderOpen, ImageIcon, Menu, Music2, Sparkles, Square, Upload, Video, X } from "lucide-react";
+import { ArrowUp, Bot, Brain, FileText, FolderOpen, ImageIcon, Menu, Music2, Sparkles, Square, Upload, Video, X } from "lucide-react";
 import { Button, Dropdown } from "antd";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useEffectiveConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasNodeType, type CanvasAgentConfig, type CanvasAgentSkillReference, type CanvasAssistantReference } from "../types";
+import type { CanvasAgentConfigCompat, CanvasAgentSkillSelection } from "../agent/canvas-agent-compat";
 import type { CanvasResourceReference } from "../utils/canvas-resource-references";
 import { isCanvasImageNodeType } from "../utils/canvas-panorama";
 import { CanvasImageSettingsPopover } from "./canvas-image-settings-popover";
 import { CanvasPromptChipInput } from "./canvas-prompt-chip-input";
 import { CanvasVideoSettingsPopover } from "./canvas-video-settings-popover";
+import { CanvasAgentSkillPopover } from "./canvas-agent-skill-popover";
 
 export type CanvasAssistantComposerProps = {
     prompt: string;
@@ -21,9 +23,11 @@ export type CanvasAssistantComposerProps = {
     /** 首页等无画布上下文场景可省略，默认空列表 */
     mentionReferences?: CanvasResourceReference[];
     skills?: CanvasAgentSkillReference[];
-    selectedSkills?: CanvasAgentSkillReference[];
+    selectedSkills?: CanvasAgentSkillSelection[];
     onSelectSkill?: (skill: CanvasAgentSkillReference) => void;
     onRemoveSkill?: (id: string) => void;
+    onSelectLibrarySkill?: (skill: CanvasAgentSkillSelection) => void;
+    onRemoveLibrarySkill?: (id: string, source: CanvasAgentSkillSelection["source"]) => void;
     agentConfig: CanvasAgentConfig;
     onAgentConfigChange: (patch: Partial<CanvasAgentConfig>) => void;
     onPromptChange: (prompt: string) => void;
@@ -44,6 +48,8 @@ export function CanvasAssistantComposer({
     selectedSkills = [],
     onSelectSkill,
     onRemoveSkill,
+    onSelectLibrarySkill,
+    onRemoveLibrarySkill,
     agentConfig,
     onAgentConfigChange,
     onPromptChange,
@@ -58,6 +64,7 @@ export function CanvasAssistantComposer({
     const effectiveConfig = useEffectiveConfig();
     const imageConfig = useMemo(() => ({ ...effectiveConfig, quality: agentConfig.imageQuality, size: agentConfig.imageSize }), [agentConfig.imageQuality, agentConfig.imageSize, effectiveConfig]);
     const videoConfig = useMemo(() => ({ ...effectiveConfig, vquality: agentConfig.videoQuality, size: agentConfig.videoSize }), [agentConfig.videoQuality, agentConfig.videoSize, effectiveConfig]);
+    const compatConfig = agentConfig as CanvasAgentConfigCompat;
 
     return (
         <div className="px-2 pb-2" onWheelCapture={(event) => event.stopPropagation()}>
@@ -112,6 +119,7 @@ export function CanvasAssistantComposer({
                         >
                             <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" style={{ color: theme.node.text }} icon={<Menu className="size-4" />} aria-label="添加素材" />
                         </Dropdown>
+                        {onSelectLibrarySkill && onRemoveLibrarySkill ? <CanvasAgentSkillPopover selectedSkills={selectedSkills} onSelect={onSelectLibrarySkill} onDeleteSelected={onRemoveLibrarySkill} /> : null}
                         <CanvasImageSettingsPopover
                             config={imageConfig}
                             placement="topLeft"
@@ -135,15 +143,39 @@ export function CanvasAssistantComposer({
                             }}
                         />
                     </div>
-                    <Button
-                        type="primary"
-                        shape="circle"
-                        className="!size-10 !min-w-10"
-                        disabled={!isRunning && !prompt.trim()}
-                        onClick={() => (isRunning ? onStop?.() : void onSubmit())}
-                        aria-label={isRunning ? "停止" : "发送"}
-                        icon={isRunning ? <Square className="size-4 fill-current" /> : <ArrowUp className="size-4" />}
-                    />
+                    <div className="flex shrink-0 items-center gap-1">
+                        <Dropdown
+                            trigger={["click"]}
+                            placement="topRight"
+                            menu={{
+                                selectable: true,
+                                selectedKeys: [compatConfig.textApiMode || "chat"],
+                                items: [
+                                    { key: "chat", label: "Chat" },
+                                    { key: "responses", label: "Responses" },
+                                ],
+                                onClick: ({ key }) => onAgentConfigChange({ textApiMode: key } as Partial<CanvasAgentConfig>),
+                            }}
+                        >
+                            <Button
+                                type="text"
+                                shape="circle"
+                                className="!h-8 !w-8 !min-w-8"
+                                style={{ color: theme.node.text }}
+                                icon={<Brain className="size-4" />}
+                                aria-label={`文本接口：${compatConfig.textApiMode === "responses" ? "Responses" : "Chat"}`}
+                            />
+                        </Dropdown>
+                        <Button
+                            type="primary"
+                            shape="circle"
+                            className="!size-10 !min-w-10"
+                            disabled={!isRunning && !prompt.trim()}
+                            onClick={() => (isRunning ? onStop?.() : void onSubmit())}
+                            aria-label={isRunning ? "停止" : "发送"}
+                            icon={isRunning ? <Square className="size-4 fill-current" /> : <ArrowUp className="size-4" />}
+                        />
+                    </div>
                 </div>
             </div>
         </div>
