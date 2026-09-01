@@ -2,21 +2,13 @@
 
 ## Unreleased
 
-+ [优化] 合并上游 v0.5.5：MiniMax-H3 官方协议、Gemini 原生多媒体协议、Chat Completions 生图、匿名存储与按需媒体读取
-+ [优化] 登录用户默认使用后台云端模型；配置页仍可手动切换本地直连
-+ [修复] 保留 grok2api/xAI 图片、视频、TTS、2K/1080p、模型目录和音色能力
-+ [修复] 保留画布媒体恢复、云端失败本地回退、Safari Range、批量下载、Agent 选中引用、MCP/Skill 和洗图整理
-+ [新增] 画布 Agent 支持后台 Skill 与 MCP 工具：Skill 追加工作流提示，MCP 通过后端 JSON-RPC 代理调用，管理端可配置服务与工具白名单
-+ [新增] 管理后台新增画布 Agent 扩展配置：Skill 工作流列表、MCP 服务/API Key/工具定义，支持读取 MCP tools/list
-+ [新增] MCP 支持 Streamable HTTP 与 stdio 长驻进程，并支持 JSON/SSE 工具结果
-+ [新增] Agent 对话框支持 `/` 选择内置或后台 Skill，保留 `@` 画布素材引用
-+ [新增] 管理后台支持从 GitHub 仓库或 `SKILL.md` 地址安装 Skill，仅保存文本提示词，不执行远程代码
-+ [新增] Agent 输入支持 @ 选择画布图片/视频/音频引用（芯片展示，发送时带入真实节点）
-+ [修复] gpt-image 等 base64 生图结果刷新丢失：生成完成写入本地/云端 storageKey，打开画板自动物化 data URL
-+ [修复] 恢复 Base64 图片任务完成时的稳定存储写入；画板媒体修复对节点与 Agent 历史同源文件去重，避免重复上传 WebDAV/S3
-+ [修复] 画板打开时批量回填仍保留图片任务记录的历史失效 Base64 图片，并重新写入稳定媒体指针
-+ [修复] 修复图片已写入 WebDAV/S3 后因前端成功收尾函数缺失而误报上传失败并重复上传的问题
-+ [合并] 合并上游 v0.5.4：智谱 GLM、导演台运镜时间轴/速度曲线、参考图 MIME 规范化
+## v0.6.0 - 2026-09-01
+
++ [合并] 合并上游 v0.6.0：Agent Chat/Responses、检查点压缩、按需节点查询、媒体自动生成开关、提示词参考内容、视频截帧与播放器、分组树和图片参考图修复
++ [新增] Agent Skill 改为系统/用户数据库表，支持附属 Markdown/TXT 文件按需读取；旧私有设置中的 Skill 自动迁移，GitHub 安装继续可用
++ [新增] 管理后台恢复 MCP 多传输配置和工具读取，支持 Streamable HTTP 与 stdio；敏感参数仅保存在私有设置
++ [优化] 登录团队用户默认使用后台云端模型；本地直连保留为可手动切换的简洁回退入口
++ [修复] 恢复成功图片任务的 `image_url`/`storageKey` 历史回填，保留 Base64、WebDAV/S3、Safari Range、Grok/xAI 与媒体恢复定制
 
 ## v0.5.4 - 2026-08-16
 

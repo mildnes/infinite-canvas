@@ -32,6 +32,8 @@ description: 当前后端主要数据表与字段说明
 - `canvas_projects`
 - `user_configs`
 - `storage_objects`
+- `agent_skills`
+- `agent_skill_files`
 
 后续新增表时再同步补充本文档，未实际使用的规划表不提前写入。
 
@@ -273,6 +275,37 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `deleted_at` | string | 软删除时间，空字符串表示未删除；超过 7 天由启动时和每天定时任务物理清理 |
 
 索引：`idx_canvas_projects_user_deleted_updated (user_id, deleted_at, updated_at)`、`idx_canvas_projects_deleted_at (deleted_at)`
+
+### agent_skills
+
+系统预设和用户 Agent Skill 表。系统 Skill 由管理员管理或从 GitHub 安装；用户 Skill 仅属于创建者。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | string | 主键 |
+| `owner_user_id` | string | 用户 Skill 所属用户；系统 Skill 为空 |
+| `source` | string | `system` 或 `user` |
+| `name` | string | Skill 名称 |
+| `description` | string | 简介 |
+| `content` | text | 主 `SKILL.md` 正文 |
+| `enabled` | bool | 是否可被 Agent 使用 |
+| `sort` | number | 菜单排序 |
+| `created_at` | string | 创建时间 |
+| `updated_at` | string | 更新时间 |
+
+### agent_skill_files
+
+Skill 的附属目录与 Markdown/TXT 引用文件。Agent 按需读取，不会将整个目录直接塞入会话上下文。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `skill_id` | string | 复合主键，关联 `agent_skills.id` |
+| `path` | string | 复合主键，Skill 内相对路径 |
+| `kind` | string | `folder` 或 `file` |
+| `content` | text | 文本文件内容；目录为空 |
+| `sort` | number | 同级排序 |
+| `created_at` | string | 创建时间 |
+| `updated_at` | string | 更新时间 |
 
 
 ### settings

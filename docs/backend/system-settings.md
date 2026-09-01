@@ -33,6 +33,9 @@ description: settings 表中 public 和 private 配置结构说明
     "linuxDo": {
       "enabled": false
     }
+  },
+  "agent": {
+    "mcpServers": []
   }
 }
 ```
@@ -41,6 +44,7 @@ description: settings 表中 public 和 private 配置结构说明
 | --- | --- | --- |
 | `modelChannel` | object | 模型渠道公开配置组 |
 | `auth` | object | 认证相关公开配置 |
+| `agent.mcpServers` | object[] | 可向当前用户公开的 MCP 服务及工具白名单；不包含地址、密钥或 stdio 参数 |
 
 `modelChannel` 字段：
 
@@ -95,6 +99,9 @@ description: settings 表中 public 和 private 配置结构说明
   "promptSync": {
     "enabled": true,
     "cron": "0 0 * * *"
+  },
+  "agent": {
+    "mcpServers": []
   }
 }
 ```
@@ -103,6 +110,7 @@ description: settings 表中 public 和 private 配置结构说明
 | --- | --- | --- |
 | `channels` | object[] | 模型渠道列表 |
 | `promptSync` | object | GitHub 远程提示词定时同步配置 |
+| `agent.mcpServers` | object[] | MCP 服务私有配置，包含传输和密钥；仅管理员接口可读 |
 
 `channels` 每项字段：
 
@@ -118,6 +126,8 @@ description: settings 表中 public 和 private 配置结构说明
 | `remark` | string | 备注 |
 
 后端调用模型时，会从已启用、已配置 `baseUrl` 和 `apiKey`、且 `models` 包含目标模型的渠道中选择一个。
+
+`agent.mcpServers` 每项可使用 `transport=streamable_http`（填写 `endpoint`、可选 `apiKey`）或 `transport=stdio`（填写 `command`、`args`、`env`、可选 `workingDirectory`）。`tools` 是允许 Agent 调用的工具白名单；`allowUsers` 为 `false` 时仅管理员可调用。系统 Skill 已迁移至 `agent_skills` 与 `agent_skill_files`，不再保存在此 JSON；旧 `private.agent.skills` 会在启动时一次性迁移。
 
 `promptSync` 字段：
 

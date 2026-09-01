@@ -85,15 +85,18 @@ func CallMCPTool(ctx context.Context, request MCPToolCallRequest) (map[string]an
 }
 
 func ListMCPTools(ctx context.Context, request MCPDiscoveryRequest) ([]model.MCPTool, error) {
-	if strings.TrimSpace(request.Server.Endpoint) == "" {
+	server := request.Server
+	if !mcpServerConfigured(server) {
+		if strings.EqualFold(strings.TrimSpace(server.Transport), mcpTransportStdio) {
+			return nil, errors.New("请先填写 MCP Command")
+		}
 		return nil, errors.New("请先填写 MCP 服务地址")
 	}
-	server := request.Server
 	if strings.TrimSpace(server.APIKey) == "" {
 		if settings, err := repository.GetSettings(); err == nil {
 			for i := range settings.Private.Agent.MCPServers {
 				item := settings.Private.Agent.MCPServers[i]
-				if item.ID == server.ID || (item.Name == server.Name && item.Endpoint == server.Endpoint) {
+				if item.ID == server.ID || (item.Name == server.Name && item.Transport == server.Transport && item.Endpoint == server.Endpoint && item.Command == server.Command) {
 					server.APIKey = item.APIKey
 					break
 				}
