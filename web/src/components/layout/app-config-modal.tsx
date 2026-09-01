@@ -3,7 +3,6 @@
 import { App, Button, Form, Input, Modal, Segmented, Select, Switch } from "antd";
 import { useEffect, useState } from "react";
 
-import { ChannelModelSelectorModal } from "@/components/channel-model-selector-modal";
 import { GrokTtsVoiceSelect } from "@/components/grok-tts-voice-select";
 import { ModelPicker } from "@/components/model-picker";
 import { fetchImageModels } from "@/services/api/image";
@@ -39,7 +38,6 @@ export function AppConfigModal() {
     const { message } = App.useApp();
     const [loadingModels, setLoadingModels] = useState(false);
     const [savingConfig, setSavingConfig] = useState(false);
-    const [modelSelectChannelId, setModelSelectChannelId] = useState("");
     const [remoteStorageSyncEnabled, setRemoteStorageSyncEnabled] = useState(false);
     const [remoteWebDAVStorageSyncEnabled, setRemoteWebDAVStorageSyncEnabled] = useState(false);
     const [allowUserStorageProvider, setAllowUserStorageProvider] = useState(false);
@@ -73,7 +71,6 @@ export function AppConfigModal() {
     const glmTts = isGlmTtsModel(config.audioModel);
     const grokTts = isGrok2APITtsConfig({ ...modelConfig, model: config.audioModel, audioModel: config.audioModel }, config.audioModel);
     const geminiTts = isGeminiTtsModel(config.audioModel) && isGeminiConfig({ ...modelConfig, model: config.audioModel, audioModel: config.audioModel }, config.audioModel);
-    const modelSelectChannel = normalizeLocalChannels(config).find((channel) => channel.id === modelSelectChannelId);
 
     useEffect(() => {
         setUserStorage(loadUserS3StorageProvider() || defaultUserStorageProvider());
@@ -177,14 +174,11 @@ export function AppConfigModal() {
         }
         setLoadingModels(true);
         try {
-            const results = await Promise.allSettled(channels.map(async (channel) => fetchImageModels(configForLocalChannel(config, channel))));
-            updateLocalChannels(channels.map((channel, index) => {
-                const result = results[index];
-                return result.status === "fulfilled" ? { ...channel, models: result.value } : channel;
-            }));
-            const failedCount = results.filter((result) => result.status === "rejected").length;
-            if (failedCount) message.warning(`${failedCount} 个渠道拉取失败，已保留原有模型，可在“选择”中手动增加模型`);
-            else message.success("模型列表已更新");
+            const nextChannels = await Promise.all(channels.map(async (channel) => ({ ...channel, models: await fetchImageModels(configForLocalChannel(config, channel)) })));
+            updateLocalChannels(nextChannels);
+            message.success("模型列表已更新");
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "读取模型失败");
         } finally {
             setLoadingModels(false);
         }
@@ -231,23 +225,20 @@ export function AppConfigModal() {
         updateLocalChannels(normalizeLocalChannels(config).filter((channel) => channel.id !== id));
     };
 
-    const openLocalModelSelector = (channel: LocalModelChannel) => setModelSelectChannelId(channel.id);
-
-    const closeLocalModelSelector = () => setModelSelectChannelId("");
-
-    const confirmLocalModelSelector = (models: string[]) => {
-        if (!modelSelectChannelId) return;
-        patchLocalChannel(modelSelectChannelId, { models });
-        closeLocalModelSelector();
-    };
-
-    const fetchLocalModelList = async () => {
-        if (!modelSelectChannel) return;
-        if (!modelSelectChannel.baseUrl.trim() || !modelSelectChannel.apiKey.trim()) {
+    const refreshLocalChannelModels = async (channel: LocalModelChannel) => {
+        if (!channel.baseUrl.trim() || !channel.apiKey.trim()) {
             message.error("请先填写该渠道的 Base URL 和 API Key");
             return;
         }
-        return uniqueModels(await fetchImageModels(configForLocalChannel(config, modelSelectChannel)));
+        setLoadingModels(true);
+        try {
+            patchLocalChannel(channel.id, { models: await fetchImageModels(configForLocalChannel(config, channel)) });
+            message.success("模型列表已更新");
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "读取模型失败");
+        } finally {
+            setLoadingModels(false);
+        }
     };
 
 
@@ -354,8 +345,8 @@ export function AppConfigModal() {
                                             <Input value={channel.baseUrl} placeholder="Base URL" onChange={(event) => patchLocalChannel(channel.id, { baseUrl: event.target.value })} />
                                             <Input.Password value={channel.apiKey} placeholder="API Key" onChange={(event) => patchLocalChannel(channel.id, { apiKey: event.target.value })} />
                                             <div className="relative flex flex-wrap gap-2 md:flex-nowrap">
-                                                <Button size="small" onClick={() => openLocalModelSelector(channel)}>
-                                                    选择
+                                                <Button size="small" loading={loadingModels} onClick={() => void refreshLocalChannelModels(channel)}>
+                                                    拉取
                                                 </Button>
                                                 <Button size="small" danger disabled={index === 0 && normalizeLocalChannels(config).length === 1} onClick={() => removeLocalChannel(channel.id)}>
                                                     删除
@@ -530,14 +521,6 @@ export function AppConfigModal() {
                     ) : null}
                 </Form>
             </div>
-            {modelSelectChannel ? (
-                <ChannelModelSelectorModal
-                    models={modelSelectChannel.models}
-                    onCancel={closeLocalModelSelector}
-                    onConfirm={confirmLocalModelSelector}
-                    onFetchModels={fetchLocalModelList}
-                />
-            ) : null}
         </Modal>
     );
 }
