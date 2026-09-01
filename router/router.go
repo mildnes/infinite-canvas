@@ -22,6 +22,11 @@ func New() *gin.Engine {
 	api.GET("/auth/linux-do/callback", gin.WrapF(handler.LinuxDoCallback))
 	api.GET("/auth/me", middleware.OptionalAuth, gin.WrapF(handler.CurrentUser))
 	api.GET("/settings", gin.WrapF(handler.Settings))
+	api.GET("/agent/settings", middleware.OptionalAuth, gin.WrapF(handler.AgentSettings))
+	api.GET("/agent-skills", gin.WrapF(handler.AgentSkills))
+	api.GET("/agent-skills/:id/file", func(c *gin.Context) {
+		handler.AgentSkillFile(c.Writer, c.Request, c.Param("id"))
+	})
 	api.GET("/storage/config", gin.WrapF(handler.StorageConfig))
 	api.GET("/media/references/:id", func(c *gin.Context) {
 		handler.ReferenceMedia(c.Writer, c.Request, c.Param("id"))
@@ -84,6 +89,11 @@ func New() *gin.Engine {
 	v1.DELETE("/workflows/:id", func(c *gin.Context) {
 		handler.DeleteUserWorkflow(c.Writer, c.Request, c.Param("id"))
 	})
+	v1.GET("/agent-skills", gin.WrapF(handler.UserAgentSkills))
+	v1.POST("/agent-skills", gin.WrapF(handler.SaveUserAgentSkill))
+	v1.DELETE("/agent-skills/:id", func(c *gin.Context) {
+		handler.DeleteUserAgentSkill(c.Writer, c.Request, c.Param("id"))
+	})
 	v1.POST("/storage/measure", gin.WrapF(handler.MeasureUserStorageProvider))
 	v1.POST("/files", gin.WrapF(handler.UploadFile))
 	v1.POST("/files/direct", gin.WrapF(handler.RegisterDirectFile))
@@ -141,6 +151,8 @@ func New() *gin.Engine {
 	admin.POST("/settings", gin.WrapF(handler.AdminSaveSettings))
 	admin.POST("/settings/channel-models", gin.WrapF(handler.AdminChannelModels))
 	admin.POST("/settings/channel-test", gin.WrapF(handler.AdminTestChannelModel))
+	admin.POST("/agent/mcp/tools", gin.WrapF(handler.AdminListMCPTools))
+	admin.POST("/agent/skills/install", gin.WrapF(handler.AdminInstallRemoteAgentSkill))
 	admin.POST("/storage/measure", gin.WrapF(handler.AdminMeasureStorageProvider))
 	admin.GET("/prompt-categories", gin.WrapF(handler.AdminPromptCategories))
 	admin.POST("/prompt-categories/sync", gin.WrapF(handler.AdminSyncPromptCategories))
@@ -150,6 +162,14 @@ func New() *gin.Engine {
 	admin.POST("/prompts/batch-delete", gin.WrapF(handler.AdminDeletePrompts))
 	admin.DELETE("/prompts/:id", func(c *gin.Context) {
 		handler.AdminDeletePrompt(c.Writer, c.Request, c.Param("id"))
+	})
+	admin.GET("/agent-skills", gin.WrapF(handler.AdminAgentSkills))
+	admin.GET("/agent-skills/:id/files", func(c *gin.Context) {
+		handler.AdminAgentSkillFiles(c.Writer, c.Request, c.Param("id"))
+	})
+	admin.POST("/agent-skills", gin.WrapF(handler.AdminSaveAgentSkill))
+	admin.DELETE("/agent-skills/:id", func(c *gin.Context) {
+		handler.AdminDeleteAgentSkill(c.Writer, c.Request, c.Param("id"))
 	})
 	admin.GET("/assets", gin.WrapF(handler.AdminAssets))
 	admin.POST("/assets", gin.WrapF(handler.AdminSaveAsset))

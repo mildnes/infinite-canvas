@@ -1,9 +1,11 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/tigerowo/infinite-canvas/model"
@@ -28,17 +30,17 @@ func TestDecodeMCPJSONSupportsJSONAndSSE(t *testing.T) {
 
 func TestPublicAgentSettingForUserFiltersMCPAccess(t *testing.T) {
 	setting := model.PrivateAgentSetting{
-		Skills: []model.AgentSkill{{ID: "skill-1", Name: "视频工作流", Prompt: "按步骤执行", Enabled: true}},
 		MCPServers: []model.MCPServer{
 			{ID: "public", Name: "公共视频", Endpoint: "https://example.com/public", Enabled: true, AllowUsers: true},
 			{ID: "admin", Name: "管理员视频", Endpoint: "https://example.com/admin", Enabled: true, AllowUsers: false},
 		},
 	}
-	regular := publicAgentSettingForUser(setting, false)
+	skills := []model.AgentSkill{{ID: "skill-1", Name: "视频工作流", Content: "按步骤执行", Enabled: true}}
+	regular := publicAgentSettingForUser(setting, skills, false)
 	if len(regular.Skills) != 1 || len(regular.MCPServers) != 1 || regular.MCPServers[0].ID != "public" {
 		t.Fatalf("regular user result = %#v, want one skill and one public MCP", regular)
 	}
-	admin := publicAgentSettingForUser(setting, true)
+	admin := publicAgentSettingForUser(setting, skills, true)
 	if len(admin.MCPServers) != 2 {
 		t.Fatalf("admin MCP count = %d, want 2", len(admin.MCPServers))
 	}
@@ -126,4 +128,46 @@ func TestSplitSkillFrontMatter(t *testing.T) {
 	if prompt != "请先拆分镜头。" {
 		t.Fatalf("prompt = %q", prompt)
 	}
+}
+
+func TestFetchRemoteAgentSkillAttachmentsImportsAllowedSiblingFiles(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/acme/video-skills/contents/skills/video":
+			_, _ = w.Write([]byte(`[
+                    {"name":"SKILL.md","path":"skills/video/SKILL.md","type":"file","download_url":"https://raw.githubusercontent.com/skill"},
+                    {"name":"notes.md","path":"skills/video/notes.md","type":"file","download_url":"https://raw.githubusercontent.com/notes"},
+                    {"name":"guide.txt","path":"skills/video/guide.txt","type":"file","download_url":"https://raw.githubusercontent.com/guide"},
+                    {"name":"image.png","path":"skills/video/image.png","type":"file","download_url":"https://raw.githubusercontent.com/image"}
+                ]`))
+		case "/notes":
+			_, _ = w.Write([]byte("notes"))
+		case "/guide":
+			_, _ = w.Write([]byte("guide"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	previous := agentSkillHTTPClient
+	base, _ := url.Parse(server.URL)
+	agentSkillHTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		clone := request.Clone(context.Background())
+		clone.URL.Scheme = base.Scheme
+		clone.URL.Host = base.Host
+		return http.DefaultTransport.RoundTrip(clone)
+	})}
+	t.Cleanup(func() { agentSkillHTTPClient = previous })
+
+	files := fetchRemoteAgentSkillAttachments(t.Context(), "https://github.com/acme/video-skills", "main", "skills/video/SKILL.md")
+	if len(files) != 2 || files[0].Path != "notes.md" || files[0].Content != "notes" || files[1].Path != "guide.txt" {
+		t.Fatalf("files = %#v", files)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
 }

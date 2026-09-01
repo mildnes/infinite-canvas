@@ -16,6 +16,12 @@ func main() {
 	if err := service.EnsureDefaultAdmin(); err != nil {
 		log.Fatal(err)
 	}
+	if err := service.EnsureDefaultAgentSkills(); err != nil {
+		log.Fatal(err)
+	}
+	if err := service.MigrateLegacyAgentSkills(); err != nil {
+		log.Fatal(err)
+	}
 	service.StartPromptSyncScheduler()
 	service.StartCanvasProjectCleanupScheduler()
 	handler.StartVideoTaskPoller()

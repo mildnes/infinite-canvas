@@ -5,8 +5,10 @@ import "encoding/json"
 type SettingKey string
 
 const (
-	SettingKeyPublic  SettingKey = "public"
-	SettingKeyPrivate SettingKey = "private"
+	SettingKeyPublic                 SettingKey = "public"
+	SettingKeyPrivate                SettingKey = "private"
+	SettingKeyAgentSkillsInitialized SettingKey = "agent-skills-initialized"
+	SettingKeyAgentSkillsMigration   SettingKey = "agent-skills-migration-version"
 
 	StorageProviderTypeS3     = "s3"
 	StorageProviderTypeWebDAV = "webdav"
@@ -75,7 +77,8 @@ type PublicSetting struct {
 	Agent        PublicAgentSetting        `json:"agent"`
 }
 
-type AgentSkill struct {
+// LegacyAgentSkill 仅用于读取 v0.6.0 之前保存在 private.agent.skills 中的 Skill。
+type LegacyAgentSkill struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
@@ -86,6 +89,16 @@ type AgentSkill struct {
 	Ref         string `json:"ref"`
 	Path        string `json:"path"`
 	InstalledAt string `json:"installedAt"`
+}
+
+// PublicAgentSkill 保留旧 Agent 设置接口使用的 prompt 字段。
+type PublicAgentSkill struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Prompt      string `json:"prompt"`
+	Enabled     bool   `json:"enabled"`
+	Source      string `json:"source"`
 }
 
 type MCPServer struct {
@@ -118,13 +131,13 @@ type PublicMCPServer struct {
 }
 
 type PublicAgentSetting struct {
-	Skills     []AgentSkill      `json:"skills"`
-	MCPServers []PublicMCPServer `json:"mcpServers"`
+	Skills     []PublicAgentSkill `json:"skills"`
+	MCPServers []PublicMCPServer  `json:"mcpServers"`
 }
 
 type PrivateAgentSetting struct {
-	Skills     []AgentSkill `json:"skills"`
-	MCPServers []MCPServer  `json:"mcpServers"`
+	Skills     []LegacyAgentSkill `json:"skills"`
+	MCPServers []MCPServer        `json:"mcpServers"`
 }
 
 type PublicStorageSetting struct {

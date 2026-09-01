@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,10 +12,13 @@ import (
 	"path"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/repository"
 )
+
+var agentSkillHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 type RemoteAgentSkillRequest struct {
 	Repository string `json:"repository"`
@@ -50,41 +55,49 @@ func InstallRemoteAgentSkill(ctx context.Context, request RemoteAgentSkillReques
 		}
 	}
 	description := firstSkillFrontMatter(frontMatter, "description")
-	settings, err := repository.GetSettings()
+	current := now()
+	id := remoteAgentSkillID(repositoryURL, ref, skillPath)
+	files := fetchRemoteAgentSkillAttachments(ctx, repositoryURL, ref, skillPath)
+	skill := model.AgentSkill{
+		ID:          id,
+		Source:      model.AgentSkillSourceSystem,
+		Name:        name,
+		Description: description,
+		Content:     strings.TrimSpace(document),
+		Enabled:     true,
+		CreatedAt:   current,
+		UpdatedAt:   current,
+		Files:       files,
+	}
+	return SaveRemoteSystemAgentSkill(skill)
+}
+
+func SaveRemoteSystemAgentSkill(input model.AgentSkill) (model.AgentSkill, error) {
+	if strings.TrimSpace(input.Name) == "" || strings.TrimSpace(input.Content) == "" {
+		return model.AgentSkill{}, errors.New("远程 Skill 名称或内容为空")
+	}
+	if utf8.RuneCountInString(input.Content) > maxAgentSkillContentLength {
+		return model.AgentSkill{}, errors.New("Skill 内容不能超过 20000 字")
+	}
+	current := now()
+	files, err := normalizeAgentSkillFiles(input.ID, input.Files, current)
 	if err != nil {
 		return model.AgentSkill{}, err
 	}
-	settings = normalizeSettings(settings)
-	skill := model.AgentSkill{
-		ID:          stableAgentID("github:"+repositoryURL+":"+ref+":"+skillPath, len(settings.Private.Agent.Skills)),
-		Name:        name,
-		Description: description,
-		Prompt:      prompt,
-		Enabled:     true,
-		Source:      "github",
-		Repository:  repositoryURL,
-		Ref:         ref,
-		Path:        skillPath,
-		InstalledAt: time.Now().Format(time.RFC3339),
-	}
-	replaced := false
-	for i := range settings.Private.Agent.Skills {
-		existing := &settings.Private.Agent.Skills[i]
-		if existing.Repository == skill.Repository && existing.Ref == skill.Ref && existing.Path == skill.Path {
-			skill.ID = existing.ID
-			skill.Enabled = existing.Enabled
-			settings.Private.Agent.Skills[i] = skill
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		settings.Private.Agent.Skills = append(settings.Private.Agent.Skills, skill)
-	}
-	if _, err := SaveSettings(settings); err != nil {
+	existing, found, err := repository.GetAgentSkill(input.ID)
+	if err != nil {
 		return model.AgentSkill{}, err
 	}
-	return skill, nil
+	if found {
+		if existing.Source != model.AgentSkillSourceSystem {
+			return model.AgentSkill{}, errors.New("Skill ID 已被占用")
+		}
+		input.Enabled = existing.Enabled
+		input.CreatedAt = existing.CreatedAt
+	}
+	input.Source = model.AgentSkillSourceSystem
+	input.UpdatedAt = current
+	return repository.SaveAgentSkillPackage(input, files)
 }
 
 func normalizeGitHubSkillSource(request RemoteAgentSkillRequest) (string, string, string, string, error) {
@@ -149,7 +162,7 @@ func fetchRemoteSkillDocument(ctx context.Context, rawURL string) (string, error
 		return "", err
 	}
 	request.Header.Set("User-Agent", "infinite-canvas-skill-installer")
-	response, err := (&http.Client{Timeout: 30 * time.Second}).Do(request)
+	response, err := agentSkillHTTPClient.Do(request)
 	if err != nil {
 		return "", err
 	}
@@ -169,6 +182,83 @@ func fetchRemoteSkillDocument(ctx context.Context, rawURL string) (string, error
 		return "", errors.New("SKILL.md 超过 512KB，拒绝安装")
 	}
 	return string(body), nil
+}
+
+type githubContentItem struct {
+	Name        string `json:"name"`
+	Path        string `json:"path"`
+	Type        string `json:"type"`
+	DownloadURL string `json:"download_url"`
+}
+
+func fetchRemoteAgentSkillAttachments(ctx context.Context, repositoryURL string, ref string, skillPath string) []model.AgentSkillFile {
+	repositoryPath := strings.TrimPrefix(repositoryURL, "https://github.com/")
+	directory := path.Dir(skillPath)
+	apiURL := "https://api.github.com/repos/" + repositoryPath + "/contents"
+	if directory != "." {
+		apiURL += "/" + strings.ReplaceAll(directory, " ", "%20")
+	}
+	apiURL += "?ref=" + url.QueryEscape(ref)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return nil
+	}
+	request.Header.Set("Accept", "application/vnd.github+json")
+	request.Header.Set("User-Agent", "infinite-canvas-skill-installer")
+	response, err := agentSkillHTTPClient.Do(request)
+	if err != nil {
+		return nil
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil
+	}
+	var entries []githubContentItem
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1024*1024)).Decode(&entries); err != nil {
+		return nil
+	}
+	files := make([]model.AgentSkillFile, 0, len(entries))
+	for _, entry := range entries {
+		ext := strings.ToLower(path.Ext(entry.Name))
+		if entry.Type != "file" || entry.Path == skillPath || (ext != ".md" && ext != ".markdown" && ext != ".txt") {
+			continue
+		}
+		content, err := fetchRemoteTextFile(ctx, entry.DownloadURL)
+		if err != nil {
+			continue
+		}
+		files = append(files, model.AgentSkillFile{Path: entry.Name, Kind: model.AgentSkillFileKindFile, Content: content, Sort: len(files)})
+	}
+	return files
+}
+
+func fetchRemoteTextFile(ctx context.Context, rawURL string) (string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return "", err
+	}
+	request.Header.Set("User-Agent", "infinite-canvas-skill-installer")
+	response, err := agentSkillHTTPClient.Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return "", fmt.Errorf("HTTP %d", response.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, 512*1024+1))
+	if err != nil {
+		return "", err
+	}
+	if len(body) > 512*1024 {
+		return "", errors.New("附件超过 512KB")
+	}
+	return string(body), nil
+}
+
+func remoteAgentSkillID(repositoryURL string, ref string, skillPath string) string {
+	digest := sha256.Sum256([]byte(repositoryURL + "\x00" + ref + "\x00" + skillPath))
+	return fmt.Sprintf("agent-skill-github-%x", digest[:8])
 }
 
 func splitSkillFrontMatter(document string) (map[string]string, string) {

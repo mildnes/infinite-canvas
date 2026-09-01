@@ -24,7 +24,7 @@ func PublicSettings() (model.PublicSetting, error) {
 	settings, err := repository.GetSettings()
 	settings = normalizeSettings(settings)
 	settings.Public.ModelChannel.Channels = publicChannelInfos(settings.Private.Channels)
-	settings.Public.Agent = model.PublicAgentSetting{Skills: []model.AgentSkill{}, MCPServers: []model.PublicMCPServer{}}
+	settings.Public.Agent = model.PublicAgentSetting{Skills: []model.PublicAgentSkill{}, MCPServers: []model.PublicMCPServer{}}
 	if len(settings.Public.ModelChannel.AvailableModels) == 0 {
 		settings.Public.ModelChannel.AvailableModels = enabledChannelModels(settings.Private.Channels)
 	}
@@ -50,6 +50,7 @@ func SaveSettings(settings model.Settings) (model.Settings, error) {
 		return model.Settings{}, err
 	}
 	settings = normalizeSettings(settings)
+	settings.Private.Agent.Skills = []model.LegacyAgentSkill{}
 	keepPrivateAPIKeys(&settings, normalizeSettings(saved))
 	keepPrivateAuthSecrets(&settings, normalizeSettings(saved))
 	keepPrivateAgentSecrets(&settings, normalizeSettings(saved))
@@ -219,7 +220,7 @@ func normalizePrivateSetting(setting model.PrivateSetting) model.PrivateSetting 
 	setting.AILog = normalizeAILogSetting(setting.AILog)
 	setting.Storage = normalizePrivateStorageSetting(setting.Storage)
 	if setting.Agent.Skills == nil {
-		setting.Agent.Skills = []model.AgentSkill{}
+		setting.Agent.Skills = []model.LegacyAgentSkill{}
 	}
 	if setting.Agent.MCPServers == nil {
 		setting.Agent.MCPServers = []model.MCPServer{}

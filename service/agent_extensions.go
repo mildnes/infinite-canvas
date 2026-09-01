@@ -28,9 +28,13 @@ func PublicAgentSettings(ctx context.Context) (model.PublicAgentSetting, error) 
 	}
 	user, ok := UserFromContext(ctx)
 	if !ok || user.ID == "" {
-		return model.PublicAgentSetting{Skills: []model.AgentSkill{}, MCPServers: []model.PublicMCPServer{}}, nil
+		return model.PublicAgentSetting{Skills: []model.PublicAgentSkill{}, MCPServers: []model.PublicMCPServer{}}, nil
 	}
-	return publicAgentSettingForUser(normalizePrivateSetting(settings.Private).Agent, user.Role == model.UserRoleAdmin), nil
+	skills, err := repository.ListEnabledSystemAgentSkills()
+	if err != nil {
+		return model.PublicAgentSetting{}, err
+	}
+	return publicAgentSettingForUser(normalizePrivateSetting(settings.Private).Agent, skills, user.Role == model.UserRoleAdmin), nil
 }
 
 func CallMCPTool(ctx context.Context, request MCPToolCallRequest) (map[string]any, error) {
@@ -128,12 +132,13 @@ func ListMCPTools(ctx context.Context, request MCPDiscoveryRequest) ([]model.MCP
 	return tools, nil
 }
 
-func publicAgentSettingForUser(setting model.PrivateAgentSetting, admin bool) model.PublicAgentSetting {
-	result := model.PublicAgentSetting{Skills: []model.AgentSkill{}, MCPServers: []model.PublicMCPServer{}}
-	for _, skill := range setting.Skills {
-		if skill.Enabled && strings.TrimSpace(skill.Prompt) != "" {
-			result.Skills = append(result.Skills, skill)
-		}
+func publicAgentSettingForUser(setting model.PrivateAgentSetting, skills []model.AgentSkill, admin bool) model.PublicAgentSetting {
+	result := model.PublicAgentSetting{Skills: []model.PublicAgentSkill{}, MCPServers: []model.PublicMCPServer{}}
+	for _, skill := range skills {
+		result.Skills = append(result.Skills, model.PublicAgentSkill{
+			ID: skill.ID, Name: skill.Name, Description: skill.Description, Prompt: skill.Content,
+			Enabled: skill.Enabled, Source: model.AgentSkillSourceSystem,
+		})
 	}
 	for _, server := range setting.MCPServers {
 		if !server.Enabled || !mcpServerConfigured(server) || (!admin && !server.AllowUsers) {
