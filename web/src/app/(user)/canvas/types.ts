@@ -192,6 +192,8 @@ export type CanvasAssistantImage = {
 export type CanvasAgentPhase = "intake" | "concept" | "script" | "breakdown" | "references" | "storyboard" | "video" | "audio" | "review" | "complete";
 
 export type CanvasAgentConfig = {
+    textApiMode: "chat" | "responses";
+    autoGenerateMedia: boolean;
     imageQuality: string;
     imageSize: string;
     videoQuality: string;
@@ -219,7 +221,7 @@ export type CanvasAgentToolCall = {
 
 export type CanvasAgentProtocolMessage =
     | { role: "user" | "system"; content: CanvasAgentContent }
-    | { role: "assistant"; content?: string; reasoningContent?: string; toolCalls?: CanvasAgentToolCall[] }
+    | { role: "assistant"; content?: string; reasoningContent?: string; responseItems?: unknown[]; toolCalls?: CanvasAgentToolCall[] }
     | { role: "tool"; content: string; toolCallId: string; name: string };
 
 export type CanvasAssistantMessageStatus = "thinking" | "running" | "waiting" | "success" | "error";
@@ -241,6 +243,7 @@ export type CanvasAssistantSession = {
     messages: CanvasAssistantMessage[];
     agentState: CanvasAgentState;
     protocolMessages: CanvasAgentProtocolMessage[];
+    contextCheckpoint?: string;
     createdAt: string;
     updatedAt: string;
 };

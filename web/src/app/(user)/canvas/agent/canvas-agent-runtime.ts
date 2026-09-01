@@ -4,7 +4,6 @@ import { fetchSystemAgentSkillFile } from "@/services/api/agent-skills";
 import type { AiConfig } from "@/stores/use-config-store";
 import type { CanvasAgentContent, CanvasAgentProtocolMessage, CanvasAgentState, CanvasAssistantMessageStatus, CanvasAssistantReference, CanvasAgentSkillReference } from "../types";
 import type { CanvasAgentContext } from "./canvas-agent-context";
-import { queryCanvasNodes } from "./canvas-agent-query";
 import type { CanvasAgentAssistantProtocolMessage } from "./canvas-agent-compat";
 import { buildCanvasAgentSkillPromptWithExtra, builtinCanvasAgentSkill } from "./canvas-agent-skills";
 import { compactCanvasAgentHistory, estimateCanvasAgentInputTokens, MAX_AGENT_INPUT_TOKENS, serializeCanvasAgentMessagesForCheckpoint } from "./canvas-agent-memory";
@@ -240,7 +239,6 @@ function serializeToolResult(result: unknown) {
 }
 
 async function executeRuntimeAction(action: CanvasAgentAction, input: RunCanvasAgentInput, state: CanvasAgentState): Promise<CanvasAgentToolResult> {
-    if (action.name === "query_canvas_nodes") return queryCanvasNodes(input.getContext(state), action.arguments);
     if (action.name === "read_skill_file") {
         const skillId = typeof action.arguments.skillId === "string" ? action.arguments.skillId : "";
         const path = typeof action.arguments.path === "string" ? action.arguments.path : "";

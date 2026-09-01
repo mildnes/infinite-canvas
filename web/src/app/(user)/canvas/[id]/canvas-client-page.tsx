@@ -412,7 +412,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const [canvasNow, setCanvasNow] = useState(Date.now());
     const resolvedAgentConfig = useMemo<CanvasAgentConfig>(
         () =>
-            agentConfig || {
+            agentConfig ? { ...agentConfig, textApiMode: agentConfig.textApiMode || "chat", autoGenerateMedia: agentConfig.autoGenerateMedia ?? false } : {
+                textApiMode: "chat",
+                autoGenerateMedia: false,
                 imageQuality: effectiveConfig.quality,
                 imageSize: effectiveConfig.size,
                 videoQuality: effectiveConfig.vquality,
@@ -3155,9 +3157,10 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 connections: connectionsRef.current,
                 selectedNodeIds: selectedNodeIdsRef.current,
                 config: agentEffectiveConfig,
+                autoGenerateMedia: resolvedAgentConfig.autoGenerateMedia,
                 agentState,
             }),
-        [agentEffectiveConfig, currentProject?.title, projectId],
+        [agentEffectiveConfig, currentProject?.title, projectId, resolvedAgentConfig.autoGenerateMedia],
     );
 
     const executeCanvasAgentAction = useCallback(
@@ -3257,6 +3260,22 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
                 if (action.name === "get_selected_nodes") {
                     return { ok: true, nodes: nodesRef.current.filter((node) => selectedNodeIdsRef.current.has(node.id)).map(canvasAgentNodeSummary) };
+                }
+
+                if (action.name === "query_canvas_nodes") {
+                    const nodeId = stringValue("nodeId").toLowerCase();
+                    const keyword = stringValue("keyword").toLowerCase();
+                    const type = stringValue("type");
+                    const page = typeof args.page === "number" ? Math.max(1, Math.floor(args.page)) : 1;
+                    const pageSize = typeof args.pageSize === "number" ? Math.min(50, Math.max(1, Math.floor(args.pageSize))) : 20;
+                    const filtered = nodesRef.current.filter((node) => {
+                        if (nodeId && node.id.toLowerCase() !== nodeId) return false;
+                        if (type && node.type !== type) return false;
+                        if (!keyword) return true;
+                        return [node.id, node.title, node.metadata?.content, node.metadata?.prompt].filter(Boolean).join(" ").toLowerCase().includes(keyword);
+                    });
+                    const start = (page - 1) * pageSize;
+                    return { ok: true, nodes: filtered.slice(start, start + pageSize).map(canvasAgentNodeSummary), total: filtered.length, page, pageSize };
                 }
 
                 if (action.name === "get_generation_config") {
@@ -3532,6 +3551,10 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     commitConnections([...connectionsRef.current, ...createdConnections]);
                     selectOnly(node.id);
 
+                    if (!resolvedAgentConfig.autoGenerateMedia) {
+                        return { ok: true, message: "媒体节点已创建并完成参数配置，尚未提交生成", submitted: false, nodeId: node.id, createdNodeIds: [node.id], connectionIds: createdConnections.map((connection) => connection.id), type: node.type, status: "idle" };
+                    }
+
                     await handleGenerateNode(node.id, mode, prompt);
                     await new Promise<void>((resolve) => setTimeout(resolve, 0));
                     const generatedNode = getNode(node.id) || node;
@@ -3553,6 +3576,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     }
                     return {
                         ok: true,
+                        submitted: true,
                         nodeId: node.id,
                         createdNodeIds,
                         connectionIds: createdConnections.map((connection) => connection.id),
@@ -3565,7 +3589,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 return { ok: false, code: "tool_error", message: error instanceof Error ? error.message : "画布工具执行失败" };
             }
         },
-        [agentEffectiveConfig, createGroupFromSelection, currentProject?.title, deleteConnection, deleteNodes, getCanvasCenter, handleGenerateNode, isAiConfigReady, projectId, renameProject, updateProject],
+        [agentEffectiveConfig, createGroupFromSelection, currentProject?.title, deleteConnection, deleteNodes, getCanvasCenter, handleGenerateNode, isAiConfigReady, projectId, renameProject, resolvedAgentConfig.autoGenerateMedia, updateProject],
     );
 
     const handleRetryNode = useCallback(

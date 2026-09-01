@@ -425,7 +425,7 @@ export async function repairCanvasMediaRef(
             mediaError = "媒体仅存于原浏览器本地，已失效";
         }
     } else if (!content && !storageKey) {
-        mediaStatus = ref.mediaStatus;
+        mediaStatus = ref.mediaStatus || "broken";
         mediaError = ref.mediaError;
     }
 

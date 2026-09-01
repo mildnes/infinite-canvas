@@ -565,7 +565,7 @@ export function CanvasAssistantPanel({
                     <div className="flex items-center justify-between gap-6 py-2">
                         <div className="min-w-0">
                             <div className="text-sm font-medium">自动生成图片/视频/音频</div>
-                            <div className="mt-1 text-xs leading-5 opacity-55">开启后 Agent 可直接提交媒体生成；当前页面执行链路完成接线前，此开关仅保存前端配置</div>
+                            <div className="mt-1 text-xs leading-5 opacity-55">开启后 Agent 可直接提交图片、视频和音频生成，无需再次确认</div>
                         </div>
                         <Switch checked={Boolean(compatConfig.autoGenerateMedia)} onChange={(autoGenerateMedia) => onAgentConfigChange({ autoGenerateMedia } as Partial<CanvasAgentConfig>)} />
                     </div>

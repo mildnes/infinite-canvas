@@ -41,7 +41,7 @@ export function geminiDirectHeaders(config: AiConfig) {
 }
 
 export function dataUrlToGeminiInlineData(dataUrl: string) {
-    const match = dataUrl.match(/^data:([^;,]+);base64,(.+)$/s);
+    const match = dataUrl.match(/^data:([^;,]+);base64,([\s\S]+)$/);
     if (!match) throw new Error("Gemini 素材必须是 Base64 图片数据");
     return { inlineData: { mimeType: match[1], data: match[2] } };
 }
