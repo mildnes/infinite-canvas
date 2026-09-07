@@ -13,6 +13,7 @@ import { uploadImage } from "@/services/image-storage";
 import { useEffectiveConfig } from "@/stores/use-config-store";
 import { AssetPickerModal } from "./canvas/components/asset-picker-modal";
 import { CanvasAssistantComposer } from "./canvas/components/canvas-assistant-composer";
+import { resolveCanvasAgentImageSelection } from "./canvas/agent/canvas-agent-image-model";
 import { useCanvasStore } from "./canvas/stores/use-canvas-store";
 import { HomeBannerCarousel, type HomeBanner } from "./home-banner-carousel";
 import {
@@ -62,12 +63,18 @@ export default function IndexPage() {
     const [agentConfig, setAgentConfig] = useState<CanvasAgentConfig>(() => ({
         textApiMode: "chat",
         autoGenerateMedia: false,
+        imageModel: effectiveConfig.imageModel,
+        imageChannelId: effectiveConfig.imageChannelId,
         imageQuality: effectiveConfig.quality,
         imageSize: effectiveConfig.size,
         videoQuality: effectiveConfig.vquality,
         videoSize: effectiveConfig.videoSize,
     }));
     const uploadInputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        setAgentConfig((current) => ({ ...current, ...resolveCanvasAgentImageSelection(effectiveConfig, current) }));
+    }, [effectiveConfig]);
 
     useEffect(() => {
         void fetchPrompts({ pageSize: 12 })

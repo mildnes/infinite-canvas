@@ -63,6 +63,7 @@ import { CANVAS_ASSET_DRAG_TYPE, CanvasSidePanel } from "../components/canvas-si
 import { DEFAULT_CANVAS_AGENT_PANEL, DEFAULT_CANVAS_SIDE_PANEL, useCanvasStore } from "../stores/use-canvas-store";
 import { assistantReferenceContentFromNode, buildNodeMentionReferences } from "../utils/canvas-resource-references";
 import { buildCanvasAgentContext } from "../agent/canvas-agent-context";
+import { resolveCanvasAgentImageSelection } from "../agent/canvas-agent-image-model";
 import type { CanvasAgentAction, CanvasAgentToolResult } from "../agent/canvas-agent-tools";
 import {
     CanvasNodeType,
@@ -410,20 +411,20 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const [dropTargetGroupId, setDropTargetGroupId] = useState<string | null>(null);
     const [referencePickerNodeId, setReferencePickerNodeId] = useState<string | null>(null);
     const [canvasNow, setCanvasNow] = useState(Date.now());
-    const resolvedAgentConfig = useMemo<CanvasAgentConfig>(
-        () =>
-            agentConfig ? { ...agentConfig, textApiMode: agentConfig.textApiMode || "chat", autoGenerateMedia: agentConfig.autoGenerateMedia ?? false } : {
+    const resolvedAgentConfig = useMemo<CanvasAgentConfig>(() => {
+        const imageSelection = resolveCanvasAgentImageSelection(effectiveConfig, agentConfig);
+        return agentConfig ? { ...agentConfig, ...imageSelection, textApiMode: agentConfig.textApiMode || "chat", autoGenerateMedia: agentConfig.autoGenerateMedia ?? false } : {
                 textApiMode: "chat",
                 autoGenerateMedia: false,
+                ...imageSelection,
                 imageQuality: effectiveConfig.quality,
                 imageSize: effectiveConfig.size,
                 videoQuality: effectiveConfig.vquality,
                 videoSize: effectiveConfig.videoSize,
-            },
-        [agentConfig, effectiveConfig.quality, effectiveConfig.size, effectiveConfig.videoSize, effectiveConfig.vquality],
-    );
+            };
+    }, [agentConfig, effectiveConfig]);
     const agentEffectiveConfig = useMemo(
-        () => ({ ...effectiveConfig, quality: resolvedAgentConfig.imageQuality, size: resolvedAgentConfig.imageSize, vquality: resolvedAgentConfig.videoQuality, videoSize: resolvedAgentConfig.videoSize, count: "1", canvasImageCount: "1" }),
+        () => ({ ...effectiveConfig, imageModel: resolvedAgentConfig.imageModel || effectiveConfig.imageModel, imageChannelId: resolvedAgentConfig.imageChannelId || effectiveConfig.imageChannelId, quality: resolvedAgentConfig.imageQuality, size: resolvedAgentConfig.imageSize, vquality: resolvedAgentConfig.videoQuality, videoSize: resolvedAgentConfig.videoSize, count: "1", canvasImageCount: "1" }),
         [effectiveConfig, resolvedAgentConfig],
     );
 

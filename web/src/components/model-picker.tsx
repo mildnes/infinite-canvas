@@ -17,9 +17,10 @@ type ModelPickerProps = {
     fullWidth?: boolean;
     placeholder?: string;
     onMissingConfig?: () => void;
+    side?: "top" | "bottom";
 };
 
-export function ModelPicker({ config, value, channelId, capability, onChange, className, fullWidth = false, placeholder = "选择模型", onMissingConfig }: ModelPickerProps) {
+export function ModelPicker({ config, value, channelId, capability, onChange, className, fullWidth = false, placeholder = "选择模型", onMissingConfig, side = "bottom" }: ModelPickerProps) {
     const pickerId = useId();
     const [open, setOpen] = useState(false);
     const channelOptions = useMemo(() => {
@@ -27,7 +28,8 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
             config.channelMode === "remote"
                 ? config.publicChannels.map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "云端渠道", baseUrl: channel.baseUrl, models: channel.models }))
                 : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "本地渠道", baseUrl: channel.baseUrl, models: channel.models }));
-        const models = channels.flatMap((channel) => (channel.models ?? []).map((model) => ({ key: `${channel.id}::${model}`, channelId: channel.id, channelName: channel.name, protocol: channel.protocol, model })));
+        const allowedModels = config.channelMode === "remote" ? new Set(config.models) : null;
+        const models = channels.flatMap((channel) => (channel.models ?? []).filter((model) => !allowedModels || allowedModels.has(model)).map((model) => ({ key: `${channel.id}::${model}`, channelId: channel.id, channelName: channel.name, protocol: channel.protocol, model })));
         if (!capability) return models;
         return models.filter((item) => filterModelsByCapability([item.model], capability, item.protocol || "").length > 0);
     }, [capability, config]);
@@ -87,7 +89,7 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
                 className="z-[1200] w-80 max-w-[calc(100vw-24px)] rounded-xl border border-border/70 bg-popover p-1 shadow-xl"
                 position="popper"
                 align="start"
-                side="bottom"
+                side={side}
                 sideOffset={6}
                 onPointerDown={(event) => event.stopPropagation()}
                 onMouseDown={(event) => event.stopPropagation()}

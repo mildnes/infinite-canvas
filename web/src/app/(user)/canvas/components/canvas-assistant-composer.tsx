@@ -4,8 +4,9 @@ import { useMemo } from "react";
 import { ArrowUp, Bot, Brain, FileText, FolderOpen, ImageIcon, Menu, Music2, Sparkles, Square, Upload, Video, X } from "lucide-react";
 import { Button, Dropdown } from "antd";
 
+import { ModelPicker } from "@/components/model-picker";
 import { canvasThemes } from "@/lib/canvas-theme";
-import { useEffectiveConfig } from "@/stores/use-config-store";
+import { useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasNodeType, type CanvasAgentConfig, type CanvasAgentSkillReference, type CanvasAssistantReference } from "../types";
 import type { CanvasAgentConfigCompat, CanvasAgentSkillSelection } from "../agent/canvas-agent-compat";
@@ -62,7 +63,13 @@ export function CanvasAssistantComposer({
 }: CanvasAssistantComposerProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const effectiveConfig = useEffectiveConfig();
-    const imageConfig = useMemo(() => ({ ...effectiveConfig, quality: agentConfig.imageQuality, size: agentConfig.imageSize }), [agentConfig.imageQuality, agentConfig.imageSize, effectiveConfig]);
+    const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
+    const selectedImageModel = agentConfig.imageModel || effectiveConfig.imageModel;
+    const selectedImageChannelId = agentConfig.imageChannelId || effectiveConfig.imageChannelId;
+    const imageConfig = useMemo(
+        () => ({ ...effectiveConfig, model: selectedImageModel, imageModel: selectedImageModel, imageChannelId: selectedImageChannelId, quality: agentConfig.imageQuality, size: agentConfig.imageSize }),
+        [agentConfig.imageQuality, agentConfig.imageSize, effectiveConfig, selectedImageChannelId, selectedImageModel],
+    );
     const videoConfig = useMemo(() => ({ ...effectiveConfig, vquality: agentConfig.videoQuality, size: agentConfig.videoSize }), [agentConfig.videoQuality, agentConfig.videoSize, effectiveConfig]);
     const compatConfig = agentConfig as CanvasAgentConfigCompat;
 
@@ -105,8 +112,8 @@ export function CanvasAssistantComposer({
                     style={{ color: theme.node.text }}
                     placeholder="输入 / 使用技能，@ 引用画布素材"
                 />
-                <div className="mt-2 flex items-center justify-between gap-2">
-                    <div className="flex min-w-0 flex-1 items-center gap-1">
+                <div className="mt-2 flex items-end justify-between gap-2">
+                    <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
                         <Dropdown
                             trigger={["click"]}
                             menu={{
@@ -141,6 +148,17 @@ export function CanvasAssistantComposer({
                                 if (key === "vquality") onAgentConfigChange({ videoQuality: value });
                                 else if (key === "size") onAgentConfigChange({ videoSize: value });
                             }}
+                        />
+                        <ModelPicker
+                            config={effectiveConfig}
+                            value={selectedImageModel}
+                            channelId={selectedImageChannelId}
+                            capability="image"
+                            side="top"
+                            placeholder="图片模型"
+                            className="!h-8 !w-[148px] !min-w-[112px] !max-w-[148px] !shrink-0 !rounded-full !px-2.5 !shadow-none"
+                            onMissingConfig={() => openConfigDialog(false)}
+                            onChange={(imageModel, imageChannelId) => onAgentConfigChange({ imageModel, imageChannelId: imageChannelId || "" })}
                         />
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
