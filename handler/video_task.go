@@ -161,7 +161,7 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 		ChannelName:     channel.Name,
 		Source:          readVideoTaskSource(r),
 		SourceID:        readVideoTaskSourceID(r),
-		ClientTaskID:     readClientVideoTaskID(r),
+		ClientTaskID:    readClientVideoTaskID(r),
 		UpstreamTaskID:  parsed.UpstreamTaskID,
 		UpstreamVideoID: parsed.UpstreamVideoID,
 		Status:          parsed.Status,
@@ -280,7 +280,7 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 		return service.VideoTaskPollUpdate{}, err
 	}
 	pollID := firstNonEmpty(task.UpstreamTaskID, task.ID)
-	if isAgnesVideoModel(task.Model) && strings.HasPrefix(task.UpstreamVideoID, "video_") {
+	if isAIProtocolVideoID(task.Model, task.UpstreamVideoID) {
 		pollID = task.UpstreamVideoID
 	}
 	if strings.TrimSpace(pollID) == "" {
@@ -345,20 +345,11 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 }
 
 func normalizeVideoCreateBody(body []byte, contentType string, modelName string, channel model.ModelChannel, upstreamPath string) ([]byte, string, error) {
-	if service.IsGeminiChannel(channel) {
-		normalized, err := service.StripGeminiModelField(body, contentType)
-		return normalized, contentType, err
-	}
-	if isKIEChannel(channel, modelName) && upstreamPath == "/jobs/createTask" {
-		return normalizeKIEVideoBody(body, contentType, modelName, channel)
-	}
-	if isAPIMartChannel(channel, modelName) && upstreamPath == "/videos/generations" {
-		return normalizeAPIMartVideoBody(body, contentType, modelName, channel)
-	}
-	if isGrok2APIFamilyChannel(channel, modelName) && upstreamPath == "/videos/generations" {
-		return normalizeGrok2APIVideoBody(body, contentType, modelName)
-	}
-	return body, contentType, nil
+	prepared, _, err := prepareAIProtocolRequest(aiProtocolRequest{
+		mode: aiProtocolVideoRequest, body: body, contentType: contentType, modelName: modelName,
+		channel: channel, endpoint: "/videos", path: upstreamPath,
+	})
+	return prepared.body, prepared.contentType, err
 }
 
 func doAIRequest(request *http.Request, channel model.ModelChannel) ([]byte, int, error) {
@@ -372,46 +363,11 @@ func doAIRequest(request *http.Request, channel model.ModelChannel) ([]byte, int
 }
 
 func transformVideoCreatePayload(payload []byte, request *http.Request, channel model.ModelChannel, modelName string) []byte {
-	if service.IsGeminiChannel(channel) {
-		if transformed, ok := transformGeminiVideoTaskResponse(payload); ok {
-			return transformed
-		}
-	}
-	if isKIEChannel(channel, modelName) && strings.Contains(request.URL.Path, "/jobs/createTask") {
-		if transformed, ok := transformKIECreateVideoResponse(payload, modelName); ok {
-			return transformed
-		}
-	}
-	if isAPIMartChannel(channel, modelName) && strings.Contains(request.URL.Path, "/videos/generations") {
-		if transformed, ok := transformAPIMartCreateVideoResponse(payload, modelName); ok {
-			return transformed
-		}
-	}
-	return payload
+	return transformAIProtocolVideoPayload(payload, request, channel, modelName, false)
 }
 
 func transformVideoStatusPayload(payload []byte, request *http.Request, channel model.ModelChannel, modelName string) []byte {
-	if service.IsGeminiChannel(channel) {
-		if transformed, ok := transformGeminiVideoTaskResponse(payload); ok {
-			return transformed
-		}
-	}
-	if isMiniMaxH3Channel(channel, modelName) && strings.Contains(request.URL.Path, "/v2/query/video_generation/") {
-		if transformed, ok := transformMiniMaxVideoTaskResponse(payload); ok {
-			return transformed
-		}
-	}
-	if isKIEChannel(channel, modelName) && strings.Contains(request.URL.Path, "/jobs/recordInfo") {
-		if transformed, ok := transformKIETaskResponse(payload, modelName); ok {
-			return transformed
-		}
-	}
-	if isAPIMartChannel(channel, modelName) && strings.Contains(request.URL.Path, "/tasks/") {
-		if transformed, ok := transformAPIMartTaskResponse(payload, modelName); ok {
-			return transformed
-		}
-	}
-	return payload
+	return transformAIProtocolVideoPayload(payload, request, channel, modelName, true)
 }
 
 func transformGeminiVideoTaskResponse(payload []byte) ([]byte, bool) {
@@ -446,17 +402,11 @@ func transformGeminiVideoTaskResponse(payload []byte) ([]byte, bool) {
 }
 
 func readVideoCreateErrorMessage(raw []byte, transformed []byte, channel model.ModelChannel, modelName string) string {
-	if isKIEChannel(channel, modelName) {
-		return firstNonEmpty(readKIECreateTaskErrorMessage(raw), readProviderPayloadError(raw), readNormalizedVideoError(transformed))
-	}
-	return firstNonEmpty(readProviderPayloadError(raw), readNormalizedVideoError(transformed))
+	return firstNonEmpty(readAIProtocolVideoError(raw, channel, modelName, false), readProviderPayloadError(raw), readNormalizedVideoError(transformed))
 }
 
 func readVideoStatusErrorMessage(raw []byte, transformed []byte, channel model.ModelChannel, modelName string) string {
-	if isKIEChannel(channel, modelName) {
-		return firstNonEmpty(readKIERecordInfoErrorMessage(raw), readProviderPayloadError(raw), readNormalizedVideoError(transformed))
-	}
-	return firstNonEmpty(readProviderPayloadError(raw), readNormalizedVideoError(transformed))
+	return firstNonEmpty(readAIProtocolVideoError(raw, channel, modelName, true), readProviderPayloadError(raw), readNormalizedVideoError(transformed))
 }
 
 type parsedVideoTaskPayload struct {
@@ -501,7 +451,7 @@ func parseVideoTaskPayload(payload []byte, modelName string) parsedVideoTaskPayl
 	if result.Status == "failed" && result.Error == "" {
 		result.Error = firstNonEmpty(readStringPath(data, "message"), readStringPath(data, "msg"), "视频任务生成失败")
 	}
-	if result.UpstreamVideoID == "" && isAgnesVideoModel(modelName) && strings.HasPrefix(result.VideoURL, "video_") {
+	if result.UpstreamVideoID == "" && isAIProtocolVideoID(modelName, result.VideoURL) {
 		result.UpstreamVideoID = result.VideoURL
 	}
 	if result.Error != "" {

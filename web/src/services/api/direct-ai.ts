@@ -1,5 +1,8 @@
 import { apiPost } from "@/services/api/request";
 import { buildApiUrl, localChannelForActiveModel, type AiConfig, type DirectAIProvider } from "@/stores/use-config-store";
+import { directProtocolAdapters } from "./protocols/direct-registry";
+import { isPlainRecord, readPath, readString } from "./protocols/shared";
+import type { DirectProtocolAdapter, DirectVideoResponse } from "./protocols/types";
 
 type DirectRequestBody = Record<string, unknown> | FormData;
 type DirectReferenceKind = "image" | "video" | "audio";
@@ -7,7 +10,6 @@ type DirectReference = { marker: string; file: File; kind: DirectReferenceKind }
 type DirectUploadSpec = { url: string; fileField: string; fileNameField?: string; extraFields?: Record<string, string>; responsePaths: string[] };
 type DirectRequestPlan = { provider: DirectAIProvider; url: string; contentType: string; body: unknown; uploads?: Partial<Record<DirectReferenceKind, DirectUploadSpec>> };
 type DirectImageResponse = { created?: number; data: Array<{ url?: string; b64_json?: string }> };
-type DirectVideoResponse = { id: string; task_id?: string; video_id?: string; status?: string; progress?: number; video_url?: string; url?: string; error?: { message?: string }; model?: string };
 type SerializedDirectBody = { body: unknown; references: DirectReference[] };
 
 const DIRECT_REFERENCE_HOST = "direct-reference.invalid";
@@ -15,18 +17,18 @@ const DIRECT_IMAGE_POLL_INTERVAL_MS = 2000;
 
 export async function requestDirectImages(config: AiConfig, provider: DirectAIProvider, endpoint: "/images/generations" | "/images/edits", body: DirectRequestBody, timeoutSeconds: number): Promise<DirectImageResponse> {
     const startedAt = Date.now();
-    const { plan, requestBody, apiKey } = await prepareDirectRequest(config, provider, endpoint, body);
-    const created = await requestDirectJSON(plan.url, apiKey, plan.contentType, requestBody, remainingTimeoutMs(startedAt, timeoutSeconds));
-    const directUrls = readDirectImageURLs(provider, created);
+    const { plan, requestBody, apiKey, protocol } = await prepareDirectRequest(config, provider, endpoint, body);
+    const created = await requestDirectJSON(protocol, plan.url, apiKey, plan.contentType, requestBody, remainingTimeoutMs(startedAt, timeoutSeconds));
+    const directUrls = protocol.readCreatedImageURLs?.(created) || [];
     if (directUrls.length) return directImageResponse(directUrls);
-    const taskId = readDirectTaskId(provider, created);
-    if (!taskId) throw new Error(readDirectError(created) || "图片接口没有返回结果或任务 ID");
+    const taskId = protocol.readTaskId(created);
+    if (!taskId) throw new Error(protocol.readError(created) || "图片接口没有返回结果或任务 ID");
 
     for (;;) {
         const waitMs = Math.min(DIRECT_IMAGE_POLL_INTERVAL_MS, remainingTimeoutMs(startedAt, timeoutSeconds));
         await delay(waitMs);
-        const payload = await requestDirectJSON(directPollURL(config, provider, taskId), apiKey, "", undefined, remainingTimeoutMs(startedAt, timeoutSeconds));
-        const result = readDirectImagePoll(provider, payload);
+        const payload = await requestDirectJSON(protocol, directPollURL(config, protocol, taskId), apiKey, "", undefined, remainingTimeoutMs(startedAt, timeoutSeconds));
+        const result = protocol.readImagePoll(payload);
         if (result.error) throw new Error(result.error);
         if (result.urls.length) return directImageResponse(result.urls);
         if (result.done) throw new Error("图片任务已完成但没有返回图片地址");
@@ -34,48 +36,23 @@ export async function requestDirectImages(config: AiConfig, provider: DirectAIPr
 }
 
 export async function createDirectVideoTask(config: AiConfig, provider: DirectAIProvider, body: DirectRequestBody): Promise<DirectVideoResponse> {
-    const { plan, requestBody, apiKey } = await prepareDirectRequest(config, provider, "/videos", body);
-    const payload = await requestDirectJSON(plan.url, apiKey, plan.contentType, requestBody);
-    const taskId = readDirectTaskId(provider, payload);
-    if (!taskId) throw new Error(readDirectError(payload) || "视频接口没有返回任务 ID");
+    const { plan, requestBody, apiKey, protocol } = await prepareDirectRequest(config, provider, "/videos", body);
+    const payload = await requestDirectJSON(protocol, plan.url, apiKey, plan.contentType, requestBody);
+    const taskId = protocol.readTaskId(payload);
+    if (!taskId) throw new Error(protocol.readError(payload) || "视频接口没有返回任务 ID");
     return {
         id: taskId,
         task_id: taskId,
-        status: normalizeDirectStatus(provider === "kie" ? "processing" : readString(readPath(payload, "data.0.status"))),
+        status: protocol.readCreatedVideoStatus(payload),
         model: config.model || config.videoModel,
     };
 }
 
 export async function pollDirectVideoTask(config: AiConfig, provider: DirectAIProvider, pollId: string): Promise<DirectVideoResponse> {
     const channel = requireDirectChannel(config);
-    const payload = await requestDirectJSON(directPollURL(config, provider, pollId), channel.apiKey, "", undefined);
-    if (provider === "kie") {
-        const data = asRecord(readPath(payload, "data"));
-        const error = firstString(data.failMsg, data.failCode, readDirectError(payload));
-        const videoUrl = firstHTTPURL(parseJSONValue(data.resultJson));
-        return {
-            id: firstString(data.taskId, pollId),
-            task_id: firstString(data.taskId, pollId),
-            status: normalizeDirectStatus(firstString(data.state, videoUrl ? "completed" : "processing")),
-            progress: readNumber(data.progress),
-            ...(videoUrl ? { video_url: videoUrl, url: videoUrl } : {}),
-            ...(error ? { error: { message: error } } : {}),
-            model: config.model || config.videoModel,
-        };
-    }
-
-    const data = asRecord(readPath(payload, "data"));
-    const error = firstString(readPath(data, "error.message"), readDirectError(payload));
-    const videoUrl = firstHTTPURL(data.result);
-    return {
-        id: firstString(data.id, pollId),
-        task_id: firstString(data.id, pollId),
-        status: normalizeDirectStatus(firstString(data.status, videoUrl ? "completed" : "processing")),
-        progress: readNumber(data.progress),
-        ...(videoUrl ? { video_url: videoUrl, url: videoUrl } : {}),
-        ...(error ? { error: { message: error } } : {}),
-        model: config.model || config.videoModel,
-    };
+    const protocol = directProtocolAdapters[provider];
+    const payload = await requestDirectJSON(protocol, directPollURL(config, protocol, pollId), channel.apiKey, "", undefined);
+    return protocol.readVideoPoll(payload, pollId, config.model || config.videoModel);
 }
 
 async function prepareDirectRequest(config: AiConfig, provider: DirectAIProvider, endpoint: "/images/generations" | "/images/edits" | "/videos", body: DirectRequestBody) {
@@ -89,8 +66,9 @@ async function prepareDirectRequest(config: AiConfig, provider: DirectAIProvider
         body: serialized.body,
     });
     if (plan.provider !== provider) throw new Error("前后端渠道识别结果不一致");
-    const requestBody = await uploadAndReplaceReferences(plan, serialized.references, channel.apiKey);
-    return { plan, requestBody, apiKey: channel.apiKey };
+    const protocol = directProtocolAdapters[provider];
+    const requestBody = await uploadAndReplaceReferences(protocol, plan, serialized.references, channel.apiKey);
+    return { plan, requestBody, apiKey: channel.apiKey, protocol };
 }
 
 function requireDirectChannel(config: AiConfig) {
@@ -183,10 +161,6 @@ function isBlob(value: unknown): value is Blob {
     return typeof Blob !== "undefined" && value instanceof Blob;
 }
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-    return Boolean(value) && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype;
-}
-
 function isMediaDataURL(value: string) {
     return /^data:(image|video|audio)\//i.test(value);
 }
@@ -218,28 +192,28 @@ function assertSafeDirectBody(value: unknown) {
     if (isPlainRecord(value)) Object.values(value).forEach(assertSafeDirectBody);
 }
 
-async function uploadAndReplaceReferences(plan: DirectRequestPlan, references: DirectReference[], apiKey: string) {
+async function uploadAndReplaceReferences(protocol: DirectProtocolAdapter, plan: DirectRequestPlan, references: DirectReference[], apiKey: string) {
     const retained = references.filter((reference) => containsDirectMarker(plan.body, reference.marker));
     const uploaded = new Map<string, string>();
     await Promise.all(retained.map(async (reference) => {
         const spec = plan.uploads?.[reference.kind];
         if (!spec) throw new Error(`${plan.provider} 不支持上传本地${directReferenceKindName(reference.kind)}`);
-        uploaded.set(reference.marker, await uploadDirectReference(spec, reference.file, apiKey));
+        uploaded.set(reference.marker, await uploadDirectReference(protocol, spec, reference.file, apiKey));
     }));
     const replaced = replaceDirectMarkers(plan.body, uploaded);
     if (containsAnyDirectMarker(replaced)) throw new Error("参考素材地址替换失败");
     return replaced;
 }
 
-async function uploadDirectReference(spec: DirectUploadSpec, file: File, apiKey: string) {
+async function uploadDirectReference(protocol: DirectProtocolAdapter, spec: DirectUploadSpec, file: File, apiKey: string) {
     const formData = new FormData();
     formData.append(spec.fileField, file, file.name);
     if (spec.fileNameField) formData.append(spec.fileNameField, file.name);
     Object.entries(spec.extraFields || {}).forEach(([key, value]) => formData.append(key, value));
     const response = await fetch(spec.url, { method: "POST", headers: { Authorization: `Bearer ${apiKey}` }, body: formData });
     const payload = await readDirectResponse(response);
-    if (!response.ok) throw new Error(readDirectError(payload) || `参考素材上传失败：${response.status}`);
-    const error = readDirectError(payload);
+    if (!response.ok) throw new Error(protocol.readError(payload) || `参考素材上传失败：${response.status}`);
+    const error = protocol.readError(payload);
     if (error) throw new Error(error);
     for (const path of spec.responsePaths) {
         const value = readString(readPath(payload, path));
@@ -275,7 +249,7 @@ function replaceDirectMarkers(value: unknown, uploaded: Map<string, string>): un
     return value;
 }
 
-async function requestDirectJSON(url: string, apiKey: string, contentType: string, body?: unknown, timeoutMs?: number) {
+async function requestDirectJSON(protocol: DirectProtocolAdapter, url: string, apiKey: string, contentType: string, body?: unknown, timeoutMs?: number) {
     const controller = new AbortController();
     const timeout = timeoutMs ? window.setTimeout(() => controller.abort(), timeoutMs) : 0;
     try {
@@ -289,8 +263,8 @@ async function requestDirectJSON(url: string, apiKey: string, contentType: strin
             signal: controller.signal,
         });
         const payload = await readDirectResponse(response);
-        if (!response.ok) throw new Error(readDirectError(payload) || `上游请求失败：${response.status}`);
-        const error = readDirectError(payload);
+        if (!response.ok) throw new Error(protocol.readError(payload) || `上游请求失败：${response.status}`);
+        const error = protocol.readError(payload);
         if (error) throw new Error(error);
         return payload;
     } finally {
@@ -308,126 +282,13 @@ async function readDirectResponse(response: Response): Promise<unknown> {
     }
 }
 
-function directPollURL(config: AiConfig, provider: DirectAIProvider, taskId: string) {
+function directPollURL(config: AiConfig, protocol: DirectProtocolAdapter, taskId: string) {
     const channel = requireDirectChannel(config);
-    return provider === "kie"
-        ? buildApiUrl(channel.baseUrl, `/jobs/recordInfo?taskId=${encodeURIComponent(taskId)}`)
-        : buildApiUrl(channel.baseUrl, `/tasks/${encodeURIComponent(taskId)}?language=zh`);
-}
-
-function readDirectTaskId(provider: DirectAIProvider, payload: unknown) {
-    return provider === "kie"
-        ? readString(readPath(payload, "data.taskId"))
-        : firstString(readPath(payload, "data.0.task_id"), readPath(payload, "data.task_id"), readPath(payload, "data.id"));
-}
-
-function readDirectImageURLs(provider: DirectAIProvider, payload: unknown) {
-    if (provider === "apimart") {
-        const data = readPath(payload, "data");
-        if (Array.isArray(data)) return uniqueHTTPURLs(data.flatMap((item) => collectHTTPURLs(asRecord(item).url)));
-    }
-    return [];
-}
-
-function readDirectImagePoll(provider: DirectAIProvider, payload: unknown) {
-    if (provider === "kie") {
-        const data = asRecord(readPath(payload, "data"));
-        const urls = uniqueHTTPURLs(collectHTTPURLs(parseJSONValue(data.resultJson)));
-        const status = normalizeDirectStatus(firstString(data.state, urls.length ? "completed" : "processing"));
-        return { urls, done: status === "completed", error: status === "failed" ? firstString(data.failMsg, data.failCode, readDirectError(payload), "图片生成失败") : "" };
-    }
-    const data = asRecord(readPath(payload, "data"));
-    const urls = uniqueHTTPURLs(collectHTTPURLs(data.result));
-    const status = normalizeDirectStatus(firstString(data.status, urls.length ? "completed" : "processing"));
-    return { urls, done: status === "completed", error: status === "failed" ? firstString(readPath(data, "error.message"), readDirectError(payload), "图片生成失败") : "" };
+    return buildApiUrl(channel.baseUrl, protocol.pollPath(taskId));
 }
 
 function directImageResponse(urls: string[]): DirectImageResponse {
     return { created: Math.floor(Date.now() / 1000), data: urls.map((url) => ({ url })) };
-}
-
-function readDirectError(payload: unknown) {
-    const code = readNumber(readPath(payload, "code"));
-    const explicitError = firstString(readPath(payload, "error.message"), readPath(payload, "data.error.message"), readPath(payload, "data.failMsg"), readPath(payload, "data.failCode"));
-    if (explicitError) return explicitError;
-    if (code !== undefined && code !== 0 && code !== 200) return firstString(readPath(payload, "msg"), readPath(payload, "message"), `上游请求失败：${code}`);
-    return "";
-}
-
-function normalizeDirectStatus(value: string) {
-    switch (value.trim().toLowerCase()) {
-        case "success":
-        case "succeeded":
-        case "completed":
-            return "completed";
-        case "fail":
-        case "failed":
-        case "cancelled":
-        case "canceled":
-            return "failed";
-        default:
-            return "processing";
-    }
-}
-
-function collectHTTPURLs(value: unknown, depth = 0): string[] {
-    if (value === null || value === undefined || depth > 8) return [];
-    if (typeof value === "string") {
-        const text = value.trim();
-        if (/^https?:\/\//i.test(text)) return [text];
-        const parsed = parseJSONValue(text);
-        return parsed === text ? [] : collectHTTPURLs(parsed, depth + 1);
-    }
-    if (Array.isArray(value)) return value.flatMap((item) => collectHTTPURLs(item, depth + 1));
-    if (isPlainRecord(value)) return Object.values(value).flatMap((item) => collectHTTPURLs(item, depth + 1));
-    return [];
-}
-
-function firstHTTPURL(value: unknown) {
-    return uniqueHTTPURLs(collectHTTPURLs(value))[0] || "";
-}
-
-function uniqueHTTPURLs(values: string[]) {
-    return [...new Set(values.filter((value) => /^https?:\/\//i.test(value)))];
-}
-
-function parseJSONValue(value: unknown): unknown {
-    if (typeof value !== "string") return value;
-    const text = value.trim();
-    if (!text || !["{", "["].includes(text[0])) return value;
-    try {
-        return JSON.parse(text);
-    } catch {
-        return value;
-    }
-}
-
-function readPath(value: unknown, path: string): unknown {
-    return path.split(".").reduce<unknown>((current, key) => {
-        if (Array.isArray(current)) return current[Number(key)];
-        return isPlainRecord(current) ? current[key] : undefined;
-    }, value);
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-    return isPlainRecord(value) ? value : {};
-}
-
-function readString(value: unknown) {
-    return typeof value === "string" ? value.trim() : "";
-}
-
-function readNumber(value: unknown) {
-    const number = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
-    return Number.isFinite(number) ? number : undefined;
-}
-
-function firstString(...values: unknown[]) {
-    for (const value of values) {
-        const text = readString(value);
-        if (text) return text;
-    }
-    return "";
 }
 
 function directReferenceKindName(kind: DirectReferenceKind) {
