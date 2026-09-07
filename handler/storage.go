@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -214,26 +215,44 @@ func ProxyImage(w http.ResponseWriter, r *http.Request) {
 		FailWithStatus(w, http.StatusBadGateway, "代理图片请求失败: "+resp.Status)
 		return
 	}
-	contentType := resp.Header.Get("Content-Type")
-	isImage := strings.HasPrefix(contentType, "image/")
-	var data []byte
-	if isImage {
-		data, err = io.ReadAll(resp.Body)
-		if err != nil {
-			FailWithStatus(w, http.StatusBadGateway, "代理图片请求失败")
-			return
-		}
+	if err := writeProxyImageResponse(w, resp); err != nil {
+		log.Printf("proxy image stream failed: %v", err)
 	}
+}
+
+func writeProxyImageResponse(w http.ResponseWriter, resp *http.Response) error {
+	contentType := resp.Header.Get("Content-Type")
 	if contentType != "" {
 		w.Header().Set("Content-Type", contentType)
 	} else {
 		w.Header().Set("Content-Type", "application/octet-stream")
 	}
+	copyProxyResponseHeader(w.Header(), resp.Header, "Content-Length")
+	copyProxyResponseHeader(w.Header(), resp.Header, "ETag")
+	copyProxyResponseHeader(w.Header(), resp.Header, "Last-Modified")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.WriteHeader(resp.StatusCode)
-	if isImage {
-		_, _ = w.Write(data)
-		return
+	writer := io.Writer(w)
+	if flusher, ok := w.(http.Flusher); ok {
+		writer = &flushResponseWriter{writer: w, flusher: flusher}
 	}
-	_, _ = io.Copy(w, resp.Body)
+	_, err := io.Copy(writer, resp.Body)
+	return err
+}
+
+type flushResponseWriter struct {
+	writer  io.Writer
+	flusher http.Flusher
+}
+
+func (w *flushResponseWriter) Write(data []byte) (int, error) {
+	written, err := w.writer.Write(data)
+	w.flusher.Flush()
+	return written, err
+}
+
+func copyProxyResponseHeader(target http.Header, source http.Header, key string) {
+	if value := source.Get(key); value != "" {
+		target.Set(key, value)
+	}
 }

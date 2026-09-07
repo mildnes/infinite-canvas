@@ -8,7 +8,7 @@ import { ChevronLeft, ChevronRight, Download, Globe2, Home, ImageIcon, Images, L
 import { saveAs } from "file-saver";
 
 import { deleteCanvasProjects, deleteCanvasTasks } from "@/services/api/canvas-tasks";
-import { batchCanvasImageTaskStatus, createCanvasImageTask, pollCanvasImageTaskStatus, requestImageQuestion, type CanvasImageTask } from "@/services/api/image";
+import { batchCanvasImageTaskStatus, createCanvasImageTask, requestImageQuestion, type CanvasImageTask } from "@/services/api/image";
 import { createCanvasAudioTask, pollCanvasAudioTaskStatus, type CanvasAudioTask } from "@/services/api/audio";
 import { createVideoGenerationTask, pollVideoGenerationTaskStatus, VIDEO_POLL_INTERVAL_MS, type VideoResponse } from "@/services/api/video";
 import { channelProtocolForConfig, defaultConfig, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
@@ -125,6 +125,10 @@ const CONNECTION_NODE_HIT_PADDING = 32;
 const NODE_STATUS_LOADING = "loading" as const;
 const NODE_STATUS_SUCCESS = "success" as const;
 const NODE_STATUS_ERROR = "error" as const;
+const IMAGE_TASK_FAST_POLL_INTERVAL_MS = 1000;
+const IMAGE_TASK_SLOW_POLL_INTERVAL_MS = 3000;
+const IMAGE_TASK_FAST_POLL_WINDOW_MS = 15_000;
+const IMAGE_TASK_POLL_TIMEOUT_MS = 10_000;
 const AGENT_PRIMARY_SCRIPT_NODE_SIZE = { width: 550, height: 600 };
 const VIDEO_PREVIEW_CONTROL_CLASS = "flex size-9 items-center justify-center rounded-lg text-white transition-colors hover:bg-white/10";
 const IMAGE_PROMPT_REVERSE_PRESET = `请根据参考图片反推一段适合用于 AI 生图的提示词。
@@ -582,7 +586,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
     useEffect(() => {
         if (!projectLoaded) return;
-        const pollCanvasTasks = () => {
+        const pollCanvasMediaTasks = () => {
             const videoTargets = nodesRef.current.filter((node) => node.type === CanvasNodeType.Video && node.metadata?.status === NODE_STATUS_LOADING && !node.metadata.content && canvasVideoTaskId(node.metadata));
             videoTargets.forEach((node) => {
                 if (pollingVideoNodeIdsRef.current.has(node.id)) return;
@@ -599,20 +603,6 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         pollingVideoNodeIdsRef.current.delete(node.id);
                     });
             });
-            const imageTargets = nodesRef.current.filter((node) => isCanvasImageNodeType(node.type) && node.metadata?.status === NODE_STATUS_LOADING && !node.metadata.content && node.metadata.imageTaskId);
-            imageTargets.forEach((node) => {
-                if (pollingImageNodeIdsRef.current.has(node.id) || !node.metadata?.imageTaskId) return;
-                pollingImageNodeIdsRef.current.add(node.id);
-                void pollCanvasImageTaskStatus(node.metadata.imageTaskId)
-                    .then((task) => {
-                        void applyAndPersistCanvasImageTaskUpdate(nodesRef.current, node.id, task, node.metadata?.startedAt || Date.now(), { width: node.width, height: node.height }).then((next) => setNodes(next));
-                        setConnections((prev) => applyCanvasImageTaskConnections(prev, node.id, task));
-                    })
-                    .catch(() => undefined)
-                    .finally(() => {
-                        pollingImageNodeIdsRef.current.delete(node.id);
-                    });
-            });
             const audioTargets = nodesRef.current.filter((node) => node.type === CanvasNodeType.Audio && node.metadata?.status === NODE_STATUS_LOADING && !node.metadata.content && node.metadata.audioTaskId);
             audioTargets.forEach((node) => {
                 if (pollingAudioNodeIdsRef.current.has(node.id) || !node.metadata?.audioTaskId) return;
@@ -627,9 +617,64 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     });
             });
         };
-        pollCanvasTasks();
-        const timer = window.setInterval(pollCanvasTasks, VIDEO_POLL_INTERVAL_MS);
-        return () => window.clearInterval(timer);
+        let disposed = false;
+        const imagePollControllers = new Set<AbortController>();
+        const pollCanvasImageTasks = async () => {
+            const imageTargets = nodesRef.current.filter((node) => isPendingCanvasImageTaskNode(node) && !pollingImageNodeIdsRef.current.has(node.id));
+            if (!imageTargets.length) return;
+            imageTargets.forEach((node) => pollingImageNodeIdsRef.current.add(node.id));
+            const controller = new AbortController();
+            imagePollControllers.add(controller);
+            const timeout = window.setTimeout(() => controller.abort(), IMAGE_TASK_POLL_TIMEOUT_MS);
+            try {
+                const tasks = await batchCanvasImageTaskStatus(undefined, imageTargets.map((node) => node.metadata?.imageTaskId || ""), controller.signal);
+                if (disposed) return;
+                const taskById = new Map(tasks.map((task) => [task.id, task]));
+                const updates = imageTargets.flatMap((node) => {
+                    const task = taskById.get(node.metadata?.imageTaskId || "");
+                    return task ? [{ node, task }] : [];
+                });
+                if (!updates.length) return;
+                const candidateIds: string[] = [];
+                updates.forEach(({ node, task }) => {
+                    candidateIds.push(node.id, ...canvasImageTaskChildIds(node.id, task));
+                });
+                const applyUpdates = (source: CanvasNodeData[]) => updates.reduce((current, { node, task }) => {
+                    const target = current.find((item) => item.id === node.id);
+                    if (!target || target.metadata?.imageTaskId !== node.metadata?.imageTaskId) return current;
+                    return applyCanvasImageTaskUpdate(current, node.id, task, target.metadata?.startedAt || Date.now(), { width: target.width, height: target.height });
+                }, source);
+                const updatedSnapshot = applyUpdates(nodesRef.current);
+                setNodes((prev) => applyUpdates(prev));
+                setConnections((prev) => updates.reduce((current, { node, task }) => applyCanvasImageTaskConnections(current, node.id, task), prev));
+                void persistGeneratedImageNodes(updatedSnapshot, candidateIds).then(({ nodes: persisted }) => {
+                    if (disposed) return;
+                    setNodes((prev) => mergePersistedCanvasImageNodes(prev, updatedSnapshot, persisted, candidateIds));
+                });
+            } catch {
+                // Keep pending nodes for the next polling round.
+            } finally {
+                window.clearTimeout(timeout);
+                imagePollControllers.delete(controller);
+                imageTargets.forEach((node) => pollingImageNodeIdsRef.current.delete(node.id));
+            }
+        };
+        let imageTimer = 0;
+        const runImagePolling = async () => {
+            await pollCanvasImageTasks();
+            if (disposed) return;
+            imageTimer = window.setTimeout(runImagePolling, canvasImageTaskPollDelay(nodesRef.current));
+        };
+        pollCanvasMediaTasks();
+        void runImagePolling();
+        const mediaTimer = window.setInterval(pollCanvasMediaTasks, VIDEO_POLL_INTERVAL_MS);
+        return () => {
+            disposed = true;
+            imagePollControllers.forEach((controller) => controller.abort());
+            imagePollControllers.clear();
+            window.clearTimeout(imageTimer);
+            window.clearInterval(mediaTimer);
+        };
     }, [effectiveConfig, isAiConfigReady, projectLoaded]);
 
     useEffect(() => {
@@ -5054,6 +5099,17 @@ function canvasImageTaskURLs(task: CanvasImageTask) {
     return [...new Set([...(task.image_urls || []), task.image_url || task.url || ""].map((url) => url.trim()).filter(Boolean))];
 }
 
+function isPendingCanvasImageTaskNode(node: CanvasNodeData) {
+    return isCanvasImageNodeType(node.type) && node.metadata?.status === NODE_STATUS_LOADING && !node.metadata.content && Boolean(node.metadata.imageTaskId);
+}
+
+function canvasImageTaskPollDelay(nodes: CanvasNodeData[], now = Date.now()) {
+    const pending = nodes.filter(isPendingCanvasImageTaskNode);
+    if (!pending.length) return IMAGE_TASK_FAST_POLL_INTERVAL_MS;
+    const hasRecentTask = pending.some((node) => !node.metadata?.startedAt || now - node.metadata.startedAt < IMAGE_TASK_FAST_POLL_WINDOW_MS);
+    return hasRecentTask ? IMAGE_TASK_FAST_POLL_INTERVAL_MS : IMAGE_TASK_SLOW_POLL_INTERVAL_MS;
+}
+
 function canvasImageTaskChildIds(nodeId: string, task: CanvasImageTask) {
     return canvasImageTaskURLs(task).map((_, index) => `${nodeId}-result-${index}`);
 }
@@ -5091,6 +5147,33 @@ async function persistGeneratedImageNodes(nodes: CanvasNodeData[], candidateIds?
         }),
     );
     return { nodes: next };
+}
+
+function mergePersistedCanvasImageNodes(current: CanvasNodeData[], source: CanvasNodeData[], persisted: CanvasNodeData[], candidateIds: string[]) {
+    const candidateIdSet = new Set(candidateIds);
+    const sourceById = new Map(source.filter((node) => candidateIdSet.has(node.id)).map((node) => [node.id, node]));
+    const persistedById = new Map(persisted.filter((node) => candidateIdSet.has(node.id)).map((node) => [node.id, node]));
+    return current.map((node) => {
+        const before = sourceById.get(node.id);
+        const after = persistedById.get(node.id);
+        if (!before?.metadata || !after?.metadata) return node;
+        if (node.metadata?.imageTaskId !== before.metadata.imageTaskId || node.metadata?.content !== before.metadata.content) return node;
+        if (after.metadata.content === before.metadata.content && after.metadata.storageKey === before.metadata.storageKey) return node;
+        return {
+            ...node,
+            metadata: {
+                ...node.metadata,
+                content: after.metadata.content,
+                storageKey: after.metadata.storageKey,
+                naturalWidth: after.metadata.naturalWidth,
+                naturalHeight: after.metadata.naturalHeight,
+                bytes: after.metadata.bytes,
+                mimeType: after.metadata.mimeType,
+                mediaStatus: after.metadata.mediaStatus,
+                mediaError: after.metadata.mediaError,
+            },
+        };
+    });
 }
 
 async function applyAndPersistCanvasImageTaskUpdate(

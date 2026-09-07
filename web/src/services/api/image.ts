@@ -1555,7 +1555,7 @@ export async function listCanvasImageTasks(config: AiConfig, sources: Array<"ima
     return payload.data;
 }
 
-export async function batchCanvasImageTaskStatus(config: AiConfig | undefined, ids: string[]) {
+export async function batchCanvasImageTaskStatus(config: AiConfig | undefined, ids: string[], signal?: AbortSignal) {
     const taskIds = Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean)));
     if ((config && !usesAccountProxy(config)) || !taskIds.length) return [];
     const token = useUserStore.getState().token;
@@ -1564,6 +1564,7 @@ export async function batchCanvasImageTaskStatus(config: AiConfig | undefined, i
         method: "POST",
         headers: config ? aiHeaders(config, "application/json") : { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ ids: taskIds }),
+        signal,
     });
     if (!response.ok) {
         const error = await fetchErrorDetail(response, "读取图片任务失败");
