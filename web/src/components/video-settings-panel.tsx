@@ -266,7 +266,8 @@ function SeedanceVideoSettingsPanel({ config, modelName, onConfigChange, theme, 
     const model = modelName || config.model || config.videoModel;
     const resolution = normalizeSeedanceResolution(config.vquality, model);
     const ratio = normalizeSeedanceRatio(config.size);
-    const duration = normalizeSeedanceDuration(config.videoSeconds);
+    const maxSeconds = modelKey(model).includes("seedance-2-5") ? 30 : 15;
+    const duration = normalizeSeedanceDuration(config.videoSeconds, maxSeconds);
     const watermark = boolConfig(config.videoWatermark, false);
     const audioGenerationEnabled = supportsVideoAudioGeneration(model);
     const generateAudio = boolConfig(config.videoGenerateAudio, false);
@@ -310,13 +311,13 @@ function SeedanceVideoSettingsPanel({ config, modelName, onConfigChange, theme, 
                     <>
                         <SettingGroup title="时长" color={theme.node.muted}>
                             <div className="grid grid-cols-4 gap-2.5">
-                                {seedanceDurationOptions.map((value) => (
+                                {seedanceDurationOptions.filter((value) => value <= maxSeconds).map((value) => (
                                     <OptionPill key={value} selected={duration === value} theme={theme} onClick={() => onConfigChange("videoSeconds", String(value))}>
                                         {value === -1 ? "智能" : `${value}s`}
                                     </OptionPill>
                                 ))}
                             </div>
-                            <NumberInput value={String(duration)} min={-1} max={15} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />
+                            <NumberInput value={config.videoSeconds} min={-1} max={maxSeconds} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />
                         </SettingGroup>
                         {audioGenerationEnabled ? <AudioGenerationSetting checked={generateAudio} theme={theme} onChange={(checked) => onConfigChange("videoGenerateAudio", String(checked))} /> : null}
                         <SettingGroup title="输出" color={theme.node.muted}>

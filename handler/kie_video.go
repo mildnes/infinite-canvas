@@ -1027,6 +1027,7 @@ type kieInputConfig struct {
 	durationKind    string
 	durationMin     int
 	durationMax     int
+	allowAuto       bool
 	hasResolution   bool
 	resolutionField string
 	resolutionKind  string
@@ -1051,7 +1052,7 @@ func kieModelInputConfig(modelName string) kieInputConfig {
 		"bytedance/seedance-2":                 {aspectField: "aspect_ratio", durationKind: "number", hasResolution: true, imageRefField: "reference_image_urls", imageRefKind: "array", videoRefField: "reference_video_urls", videoRefKind: "array", audioRefField: "reference_audio_urls", audioRefKind: "array"},
 		"bytedance/seedance-2-fast":            {aspectField: "aspect_ratio", durationKind: "number", hasResolution: true, imageRefField: "reference_image_urls", imageRefKind: "array", videoRefField: "reference_video_urls", videoRefKind: "array", audioRefField: "reference_audio_urls", audioRefKind: "array"},
 		"bytedance/seedance-2-mini":            {aspectField: "aspect_ratio", durationKind: "number", hasResolution: true, imageRefField: "reference_image_urls", imageRefKind: "array", videoRefField: "reference_video_urls", videoRefKind: "array", audioRefField: "reference_audio_urls", audioRefKind: "array"},
-		"bytedance/seedance-2-5":               {aspectField: "aspect_ratio", durationKind: "number", durationMin: 4, durationMax: 30, hasResolution: true, resolutionKind: "seedance_2_5_video", imageRefField: "reference_image_urls", imageRefKind: "array", videoRefField: "reference_video_urls", videoRefKind: "array", audioRefField: "reference_audio_urls", audioRefKind: "array"},
+		"bytedance/seedance-2-5":               {aspectField: "aspect_ratio", durationKind: "number", durationMin: 4, durationMax: 30, allowAuto: true, hasResolution: true, resolutionKind: "seedance_2_5_video", imageRefField: "reference_image_urls", imageRefKind: "array", videoRefField: "reference_video_urls", videoRefKind: "array", audioRefField: "reference_audio_urls", audioRefKind: "array"},
 		"bytedance/v1-lite-image-to-video":     {durationKind: "string", hasResolution: true, imageRefField: "image_url", imageRefKind: "single"},
 		"bytedance/v1-lite-text-to-video":      {aspectField: "aspect_ratio", durationKind: "string", hasResolution: true},
 		"bytedance/v1-pro-fast-image-to-video": {durationKind: "string", hasResolution: true, imageRefField: "image_url", imageRefKind: "single"},
@@ -1182,6 +1183,9 @@ func normalizeKIEDurationInput(value any, config kieInputConfig) any {
 	}
 	duration, ok := readKIEDurationInt(normalized)
 	if !ok {
+		return normalized
+	}
+	if config.allowAuto && duration == -1 {
 		return normalized
 	}
 	if config.durationMin > 0 && duration < config.durationMin {

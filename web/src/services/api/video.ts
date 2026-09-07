@@ -4,7 +4,7 @@ import { dataUrlToFile, readFileAsDataUrl } from "@/lib/image-utils";
 import { isMiniMaxH3Config, normalizeMiniMaxH3Duration, normalizeMiniMaxH3Ratio, normalizeMiniMaxH3Resolution } from "@/lib/minimax-video";
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, geminiOperationUrl, isGeminiConfig, isGeminiVideoModel } from "@/lib/gemini";
 import { isGeminiVeo31Model, normalizeGeminiVideoDuration, normalizeGeminiVideoRatio, normalizeGeminiVideoResolution } from "@/lib/gemini-video";
-import { boolConfig, isSeedanceVideoConfig, normalizeSeedanceRatio } from "@/lib/seedance-video";
+import { boolConfig, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio } from "@/lib/seedance-video";
 import { isKIEGrokVideoModel, isKIEKlingV3Config, kieKlingOmniVariant } from "@/components/video-settings-panel";
 import { isAgnesVideoV25Model, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
 import { resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
@@ -340,7 +340,12 @@ async function createVideoRequestBody(config: AiConfig, model: string, prompt: s
     } else if (apimartMotionControl) {
         body.append("mode", normalizeAPIMartKlingMotionControlMode(config.vquality));
     } else {
-        if (!kieMotionControl && !isGeminiOmniFlashVideoModel(model)) body.append("seconds", normalizeVideoSecondsForModel(model, config.videoSeconds));
+        if (!kieMotionControl && !isGeminiOmniFlashVideoModel(model)) {
+            const seconds = isSeedanceVideoConfig(config)
+                ? String(normalizeSeedanceDuration(config.videoSeconds, modelKey(model).includes("seedance-2-5") ? 30 : 15))
+                : normalizeVideoSecondsForModel(model, config.videoSeconds);
+            body.append("seconds", seconds);
+        }
         if (isSeedanceVideoConfig(config)) body.append("size", normalizeSeedanceRatio(config.size));
         else if (size) body.append("size", size);
         body.append("resolution_name", normalizeVideoResolution(config.vquality));
