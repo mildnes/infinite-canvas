@@ -3,17 +3,17 @@ import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, gemini
 import { aiApiUrl, aiHeaders, refreshRemoteUser } from "@/services/api/image";
 import { imageToDataUrl } from "@/services/image-storage";
 import { localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
-import type { CanvasAgentProtocolMessage, CanvasAgentToolCall } from "@/app/(user)/canvas/types";
+import type { CanvasAgentProtocolMessage, CanvasAgentToolCall, CanvasAgentToolMode } from "@/app/(user)/canvas/types";
 import type { CanvasAgentToolDefinition } from "@/app/(user)/canvas/agent/canvas-agent-tools";
 import { calibrateCanvasAgentTokenEstimate } from "@/app/(user)/canvas/agent/canvas-agent-memory";
-import { responseItemsOf } from "@/app/(user)/canvas/agent/canvas-agent-compat";
 
 export type CanvasAgentModelTurn = {
     content: string;
     reasoningContent?: string;
     responseItems?: unknown[];
     toolCalls: CanvasAgentToolCall[];
-    usedJsonFallback: boolean;
+    toolError?: string;
+    toolMode: CanvasAgentToolMode;
 };
 
 type RequestCanvasAgentTurnInput = {
@@ -21,7 +21,7 @@ type RequestCanvasAgentTurnInput = {
     systemPrompt: string;
     messages: CanvasAgentProtocolMessage[];
     tools: CanvasAgentToolDefinition[];
-    allowTools: boolean;
+    toolMode: CanvasAgentToolMode;
     signal?: AbortSignal;
 };
 
@@ -34,24 +34,26 @@ type AiErrorPayload = {
 type ChatCompletionPayload = AiErrorPayload & {
     usage?: { prompt_tokens?: number };
     choices?: Array<{
+        finish_reason?: string | null;
         message?: {
             content?: string | null;
             reasoning_content?: string | null;
             tool_calls?: Array<{
                 id?: string;
-                function?: { name?: string; arguments?: string | Record<string, unknown> };
+                function?: { name?: string; arguments?: unknown };
             }>;
         };
     }>;
     data?: {
         usage?: { prompt_tokens?: number };
         choices?: Array<{
+            finish_reason?: string | null;
             message?: {
                 content?: string | null;
                 reasoning_content?: string | null;
                 tool_calls?: Array<{
                     id?: string;
-                    function?: { name?: string; arguments?: string | Record<string, unknown> };
+                    function?: { name?: string; arguments?: unknown };
                 }>;
             };
         }>;
@@ -63,12 +65,14 @@ type ResponsesOutputItem = Record<string, unknown> & {
     id?: string;
     call_id?: string;
     name?: string;
-    arguments?: string | Record<string, unknown>;
+    arguments?: unknown;
     content?: Array<{ type?: string; text?: string }>;
 };
 
 type ResponsesResult = {
     id?: string;
+    status?: string;
+    incomplete_details?: { reason?: string } | null;
     output_text?: string;
     output?: ResponsesOutputItem[];
     usage?: { input_tokens?: number };
@@ -95,16 +99,18 @@ export async function requestCanvasAgentTurn(input: RequestCanvasAgentTurnInput)
         activeChannelId: input.config.textChannelId || input.config.activeChannelId,
         textChannelId: input.config.textChannelId,
     };
-    const systemPrompt = canvasAgentSystemPrompt(requestConfig, input.systemPrompt);
     let messages = input.messages;
-    let tools = input.allowTools ? input.tools : [];
-    let usedJsonFallback = !input.allowTools;
+    let toolMode = input.toolMode;
     let requestError: unknown;
 
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 4; attempt++) {
         try {
-            const message = await requestCompletion(requestConfig, systemPrompt, messages, tools, input.signal);
-            return { ...message, usedJsonFallback };
+            const tools = toolMode === "native" ? input.tools : [];
+            const jsonTools = toolMode === "native" ? [] : input.tools;
+            const systemPrompt = canvasAgentSystemPrompt(requestConfig, input.systemPrompt, jsonTools, toolMode === "native");
+            const jsonSchema = toolMode === "structured-json" && jsonTools.length ? canvasAgentJsonSchema(jsonTools) : undefined;
+            const message = await requestCompletion(requestConfig, systemPrompt, messages, tools, jsonSchema, input.signal);
+            return { ...message, toolMode };
         } catch (error) {
             requestError = error;
             if (isCanvasAgentContextLimitError(error)) throw error;
@@ -112,9 +118,12 @@ export async function requestCanvasAgentTurn(input: RequestCanvasAgentTurnInput)
                 messages = stripImageContent(messages);
                 continue;
             }
-            if (requestConfig.apiMode !== "responses" && tools.length && isToolCompatibilityError(error)) {
-                tools = [];
-                usedJsonFallback = true;
+            if (toolMode === "native" && isToolCompatibilityError(error, "tools")) {
+                toolMode = "structured-json";
+                continue;
+            }
+            if (toolMode === "structured-json" && isToolCompatibilityError(error, "structured-json")) {
+                toolMode = "prompt-json";
                 continue;
             }
             throw error;
@@ -123,8 +132,13 @@ export async function requestCanvasAgentTurn(input: RequestCanvasAgentTurnInput)
     throw requestError;
 }
 
-export function canvasAgentSystemPrompt(config: AiConfig, prompt: string) {
+export const CANVAS_AGENT_JSON_FALLBACK_SIGNAL = "__CANVAS_AGENT_JSON_FALLBACK__";
+const MISSING_TOOL_NAME_ERROR = "工具调用缺少名称";
+
+export function canvasAgentSystemPrompt(config: AiConfig, prompt: string, jsonTools: CanvasAgentToolDefinition[] = [], nativeTools = false) {
     const configured = (config.systemPrompts.text || config.systemPrompt).trim();
+    if (nativeTools) prompt += "\n\n【原生工具回退信号】\n需要执行任何画布操作时必须返回原生工具调用；若本轮无法返回任何原生工具调用，只输出 " + CANVAS_AGENT_JSON_FALLBACK_SIGNAL + "，不得附加文字、Markdown 或声称已完成。仅咨询、解释、分析且无需执行画布操作时正常文字回答，禁止输出此信号。";
+    if (jsonTools.length) prompt += "\n\n【JSON 工具定义】\n当前画布执行器会解析并执行回复中的 actions。需要操作画布时必须直接返回合法的 actions JSON；接口没有原生 Tool Calling 不代表没有画布执行能力，不得因此拒绝执行或要求用户手动提交。所有工具参数都放在对应 action 的 arguments 中。\n" + JSON.stringify(jsonTools.map(({ function: tool }) => tool));
     return configured ? configured + "\n\n" + prompt : prompt;
 }
 
@@ -140,15 +154,15 @@ export async function requestCanvasAgentCheckpoint(input: { config: AiConfig; pr
             },
         ],
         tools: [],
-        allowTools: false,
+        toolMode: "prompt-json",
         signal: input.signal,
     });
     return turn.content.trim();
 }
 
-async function requestCompletion(config: AiConfig, systemPrompt: string, messages: CanvasAgentProtocolMessage[], tools: CanvasAgentToolDefinition[], signal?: AbortSignal) {
-    if (config.apiMode === "responses") return requestResponsesCompletion(config, systemPrompt, messages, tools, signal);
-    if (isGeminiConfig(config)) return requestGeminiCompletion(config, systemPrompt, messages, tools, signal);
+async function requestCompletion(config: AiConfig, systemPrompt: string, messages: CanvasAgentProtocolMessage[], tools: CanvasAgentToolDefinition[], jsonSchema?: Record<string, unknown>, signal?: AbortSignal) {
+    if (config.apiMode === "responses") return requestResponsesCompletion(config, systemPrompt, messages, tools, jsonSchema, signal);
+    if (isGeminiConfig(config)) return requestGeminiCompletion(config, systemPrompt, messages, tools, jsonSchema, signal);
     const body: Record<string, unknown> = {
         model: config.model,
         messages: [{ role: "system", content: systemPrompt }, ...messages.map(toRequestMessage)],
@@ -158,6 +172,7 @@ async function requestCompletion(config: AiConfig, systemPrompt: string, message
         body.tools = tools;
         body.tool_choice = "auto";
     }
+    if (jsonSchema) body.response_format = { type: "json_schema", json_schema: { name: "canvas_agent_actions", schema: jsonSchema } };
 
     const response = await fetch(aiApiUrl(config, "/chat/completions"), {
         method: "POST",
@@ -166,11 +181,13 @@ async function requestCompletion(config: AiConfig, systemPrompt: string, message
         signal,
     });
     const { payload, rawText } = await readResponsePayload<ChatCompletionPayload>(response);
-    const message = payload.choices?.[0]?.message || payload.data?.choices?.[0]?.message;
+    const choice = payload.choices?.[0] || payload.data?.choices?.[0];
+    const message = choice?.message;
     if (!response.ok || (typeof payload.code === "number" && payload.code !== 0) || (typeof payload.code === "string" && payload.code !== "0" && !message)) {
         throw new CanvasAgentRequestError(readError(payload, response.status, rawText), response.status, readErrorCode(payload));
     }
     if (!message) throw new CanvasAgentRequestError(readError(payload, response.status) || "文本模型没有返回内容", response.status);
+    if (choice?.finish_reason && /^(?:length|content_filter|max_tokens)$/i.test(choice.finish_reason)) throw new CanvasAgentRequestError("文本模型输出未完成：" + choice.finish_reason, response.status);
     const normalizedModel = config.model.trim().toLowerCase();
     const preservesReasoningContent = normalizedModel.startsWith("glm-") || mimoTextModels.some((model) => model === normalizedModel);
     const reasoningContent = preservesReasoningContent && typeof message.reasoning_content === "string" ? message.reasoning_content : undefined;
@@ -178,24 +195,24 @@ async function requestCompletion(config: AiConfig, systemPrompt: string, message
     const inputTokens = payload.usage?.prompt_tokens || payload.data?.usage?.prompt_tokens;
     calibrateCanvasAgentTokenEstimate(canvasAgentTokenCalibrationKey(config), { systemPrompt, messages, tools }, inputTokens);
     refreshRemoteUser(config);
+    let toolError: string | undefined;
+    const toolCalls = (message.tool_calls || []).flatMap((toolCall, index) => {
+        const name = toolCall.function?.name?.trim();
+        if (!name) {
+            toolError = MISSING_TOOL_NAME_ERROR;
+            return [];
+        }
+        return [{ id: toolCall.id || "tool-call-" + index, name, ...parseToolArguments(toolCall.function?.arguments) }];
+    });
     return {
         content: typeof message.content === "string" ? message.content : "",
         ...(reasoningContent !== undefined ? { reasoningContent } : {}),
-        toolCalls: (message.tool_calls || []).flatMap((toolCall, index) => {
-            const name = toolCall.function?.name?.trim();
-            if (!name) return [];
-            return [
-                {
-                    id: toolCall.id || "tool-call-" + index,
-                    name,
-                    arguments: parseToolArguments(toolCall.function?.arguments),
-                },
-            ];
-        }),
+        ...(toolError ? { toolError } : {}),
+        toolCalls,
     };
 }
 
-async function requestResponsesCompletion(config: AiConfig, systemPrompt: string, messages: CanvasAgentProtocolMessage[], tools: CanvasAgentToolDefinition[], signal?: AbortSignal) {
+async function requestResponsesCompletion(config: AiConfig, systemPrompt: string, messages: CanvasAgentProtocolMessage[], tools: CanvasAgentToolDefinition[], jsonSchema?: Record<string, unknown>, signal?: AbortSignal) {
     const body: Record<string, unknown> = {
         model: config.model,
         instructions: systemPrompt,
@@ -207,6 +224,7 @@ async function requestResponsesCompletion(config: AiConfig, systemPrompt: string
         body.tools = tools.map((tool) => ({ type: "function", ...tool.function }));
         body.tool_choice = "auto";
     }
+    if (jsonSchema) body.text = { format: { type: "json_schema", name: "canvas_agent_actions", schema: jsonSchema } };
 
     const response = await fetch(aiApiUrl(config, "/responses"), {
         method: "POST",
@@ -220,11 +238,29 @@ async function requestResponsesCompletion(config: AiConfig, systemPrompt: string
         throw new CanvasAgentRequestError(readError(payload, response.status, rawText), response.status, readErrorCode(payload));
     }
     if (!result) throw new CanvasAgentRequestError(readError(payload, response.status) || "文本模型没有返回内容", response.status);
+    const responseStatus = result.status?.toLowerCase();
+    const incompleteReason = result.incomplete_details?.reason;
+    if (incompleteReason || (responseStatus && ["incomplete", "failed", "cancelled", "in_progress", "queued"].includes(responseStatus))) {
+        throw new CanvasAgentRequestError("文本模型输出未完成：" + (responseStatus || incompleteReason) + (responseStatus && incompleteReason ? "（" + incompleteReason + "）" : ""), response.status);
+    }
 
     const output = result.output || [];
     const inputTokens = result.usage?.input_tokens;
     calibrateCanvasAgentTokenEstimate(canvasAgentTokenCalibrationKey(config), { systemPrompt, messages, tools }, inputTokens);
     refreshRemoteUser(config);
+    const toolCalls: CanvasAgentToolCall[] = [];
+    let toolError: string | undefined;
+    const responseItems = output.flatMap((item, index) => {
+        if (item.type !== "function_call") return [item];
+        const name = typeof item.name === "string" ? item.name.trim() : "";
+        if (!name) {
+            toolError = MISSING_TOOL_NAME_ERROR;
+            return [];
+        }
+        const parsedArguments = parseToolArguments(item.arguments);
+        toolCalls.push({ id: item.call_id || item.id || `response-tool-${index}`, name, ...parsedArguments });
+        return [parsedArguments.argumentsError || typeof item.arguments !== "string" ? { ...item, arguments: JSON.stringify(parsedArguments.arguments) } : item];
+    });
     return {
         content:
             typeof result.output_text === "string"
@@ -233,12 +269,13 @@ async function requestResponsesCompletion(config: AiConfig, systemPrompt: string
                       .flatMap((item) => (item.type === "message" ? item.content || [] : []))
                       .map((item) => (item.type === "output_text" && typeof item.text === "string" ? item.text : ""))
                       .join(""),
-        responseItems: output,
-        toolCalls: output.flatMap((item, index) => (item.type === "function_call" && typeof item.name === "string" ? [{ id: item.call_id || item.id || `response-tool-${index}`, name: item.name, arguments: parseToolArguments(item.arguments) }] : [])),
+        responseItems,
+        toolCalls,
+        ...(toolError ? { toolError } : {}),
     };
 }
 
-async function requestGeminiCompletion(config: AiConfig, systemPrompt: string, messages: CanvasAgentProtocolMessage[], tools: CanvasAgentToolDefinition[], signal?: AbortSignal) {
+async function requestGeminiCompletion(config: AiConfig, systemPrompt: string, messages: CanvasAgentProtocolMessage[], tools: CanvasAgentToolDefinition[], jsonSchema?: Record<string, unknown>, signal?: AbortSignal) {
     const contents = await Promise.all(
         messages
             .filter((message) => message.role !== "system")
@@ -268,6 +305,7 @@ async function requestGeminiCompletion(config: AiConfig, systemPrompt: string, m
         systemInstruction: { parts: [{ text: systemPrompt }, ...extraSystemParts] },
         contents,
         ...(tools.length ? { tools: [{ functionDeclarations: tools.map((tool) => tool.function) }] } : {}),
+        ...(jsonSchema ? { generationConfig: { responseFormat: { text: { mimeType: "application/json", schema: jsonSchema } } } } : {}),
     };
     const proxy = Boolean(aiApiUrl(config, "/chat/completions").startsWith("/api/"));
     const channel = localChannelForActiveModel(config);
@@ -281,6 +319,8 @@ async function requestGeminiCompletion(config: AiConfig, systemPrompt: string, m
     const { payload, rawText } = await readResponsePayload<Record<string, unknown>>(response);
     if (!response.ok) throw new CanvasAgentRequestError(geminiErrorMessage(payload, rawText || "文本模型请求失败"), response.status, geminiErrorCode(payload));
     const candidates = Array.isArray(payload.candidates) ? (payload.candidates as Array<Record<string, unknown>>) : [];
+    const incompleteReason = candidates.map((candidate) => candidate.finishReason).find((reason) => typeof reason === "string" && /^(?:MAX_TOKENS|SAFETY|RECITATION|BLOCKLIST|PROHIBITED_CONTENT|SPII|MALFORMED_FUNCTION_CALL|UNEXPECTED_TOOL_CALL|TOO_MANY_TOOL_CALLS)$/i.test(reason));
+    if (typeof incompleteReason === "string") throw new CanvasAgentRequestError("文本模型输出未完成：" + incompleteReason, response.status);
     const parts = candidates.flatMap((candidate) => {
         const content = candidate.content && typeof candidate.content === "object" ? (candidate.content as Record<string, unknown>) : {};
         return Array.isArray(content.parts) ? (content.parts as Array<Record<string, unknown>>) : [];
@@ -290,13 +330,45 @@ async function requestGeminiCompletion(config: AiConfig, systemPrompt: string, m
     const inputTokens = typeof usageMetadata.promptTokenCount === "number" ? usageMetadata.promptTokenCount : undefined;
     calibrateCanvasAgentTokenEstimate(canvasAgentTokenCalibrationKey(config), { systemPrompt, messages, tools }, inputTokens);
     refreshRemoteUser(config);
+    let toolError: string | undefined;
+    const toolCalls = parts.flatMap((part, index) => {
+            const call = part.functionCall && typeof part.functionCall === "object" ? (part.functionCall as Record<string, unknown>) : null;
+            if (!call) return [];
+            const name = typeof call.name === "string" ? call.name.trim() : "";
+            if (!name) {
+                toolError = MISSING_TOOL_NAME_ERROR;
+                return [];
+            }
+            return [{ id: `gemini-tool-${index}`, name, ...parseToolArguments(call.args) }];
+        });
     return {
         content: parts.map((part) => (typeof part.text === "string" ? part.text : "")).join(""),
-        toolCalls: parts.flatMap((part, index) => {
-            const call = part.functionCall && typeof part.functionCall === "object" ? (part.functionCall as Record<string, unknown>) : null;
-            const name = typeof call?.name === "string" ? call.name.trim() : "";
-            return name ? [{ id: `gemini-tool-${index}`, name, arguments: call?.args && typeof call.args === "object" ? (call.args as Record<string, unknown>) : {} }] : [];
-        }),
+        ...(toolError ? { toolError } : {}),
+        toolCalls,
+    };
+}
+
+function canvasAgentJsonSchema(tools: CanvasAgentToolDefinition[]): Record<string, unknown> {
+    return {
+        type: "object",
+        properties: {
+            actions: {
+                type: "array",
+                maxItems: 12,
+                items: {
+                    type: "object",
+                    properties: {
+                        tool: { type: "string", enum: tools.map(({ function: tool }) => tool.name) },
+                        arguments: { type: "object", additionalProperties: true },
+                    },
+                    required: ["tool", "arguments"],
+                    additionalProperties: false,
+                },
+            },
+            reply: { type: "string" },
+        },
+        required: ["actions", "reply"],
+        additionalProperties: false,
     };
 }
 
@@ -339,8 +411,7 @@ function toRequestMessage(message: CanvasAgentProtocolMessage) {
 
 function toResponsesInput(message: CanvasAgentProtocolMessage): unknown[] {
     if (message.role === "assistant") {
-        const responseItems = responseItemsOf(message);
-        if (responseItems?.length) return responseItems;
+        if (message.responseItems?.length) return message.responseItems;
         return [
             ...(message.content ? [{ role: "assistant", content: message.content }] : []),
             ...(message.toolCalls || []).map((toolCall) => ({ type: "function_call", call_id: toolCall.id, name: toolCall.name, arguments: JSON.stringify(toolCall.arguments) })),
@@ -355,14 +426,15 @@ function toResponsesInput(message: CanvasAgentProtocolMessage): unknown[] {
     ];
 }
 
-function parseToolArguments(value: string | Record<string, unknown> | undefined) {
-    if (!value) return {};
-    if (typeof value === "object") return value;
+function parseToolArguments(value: unknown): Pick<CanvasAgentToolCall, "arguments" | "argumentsError"> {
+    if (value === undefined) return { arguments: {} };
     try {
-        const parsed = JSON.parse(value);
-        return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+        const parsed = typeof value === "string" ? JSON.parse(value) : value;
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+            ? { arguments: parsed as Record<string, unknown> }
+            : { arguments: {}, argumentsError: "工具 arguments 必须是 JSON 对象" };
     } catch {
-        return {};
+        return { arguments: {}, argumentsError: "工具 arguments 不是合法 JSON" };
     }
 }
 
@@ -409,9 +481,18 @@ function isImageCompatibilityError(error: unknown) {
     return error instanceof CanvasAgentRequestError && /image_url|image input|vision|multimodal|content.*array|unsupported.*image|不支持.*图片|图像输入/i.test(error.message);
 }
 
-function isToolCompatibilityError(error: unknown) {
+function isToolCompatibilityError(error: unknown, mode: "tools" | "structured-json") {
     if (!(error instanceof CanvasAgentRequestError)) return false;
-    return error.status === 400 || error.status === 422 || /tools?|tool_choice|function.?call|unknown field|unsupported|not support|不支持|未知字段/i.test(error.message);
+    if ([401, 403, 408, 409, 429].includes(error.status) || error.status >= 500) return false;
+    const detail = `${error.code || ""} ${error.message}`.replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+    const target = mode === "tools"
+        ? String.raw`\btools?\b|\btool[\s.]*(?:choice|calls?|calling)\b|\bfunction[\s.]*(?:calls?|calling|declarations?)\b|工具调用|函数调用`
+        : String.raw`\bresponse[\s.]*format\b|\bjson[\s.]*schema\b|\btext[\s.]*format\b|\bresponse[\s.]*mime[\s.]*type\b|\bstructured output\b|结构化输出`;
+    if (!new RegExp(target, "i").test(detail)) return false;
+    if (mode === "tools" && /\btools?\s*\[\s*\d+\s*\].*\b(?:parameters?|properties|required|additional\s*properties|schema)\b|\binvalid schema for function\b/i.test(detail)) return false;
+    if (mode === "structured-json" && /\binvalid (?:json )?schema\b|\bschema (?:validation|violation)\b|\b(?:properties|required|additional\s*properties)\b/i.test(detail)) return false;
+    const issue = String.raw`\bunsupported\b|\b(?:does\s+not|doesn't|do\s+not|don't|not)\s+support(?:ed|s|ing)?\b|\b(?:not allowed|not permitted|must be none|unavailable|disabled|not\s+(?:available|enabled|implemented))\b|\b(?:unknown|unrecognized|invalid)\s+(?:(?:request|input)\s+)?(?:field|parameter|argument)\b|不支持|不允许|不可用|未启用|未实现|未知(?:字段|参数)`;
+    return new RegExp(`(?:${target}).{0,80}(?:${issue})|(?:${issue}).{0,80}(?:${target})`, "i").test(detail);
 }
 
 export function isCanvasAgentContextLimitError(error: unknown) {

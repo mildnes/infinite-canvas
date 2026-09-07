@@ -150,6 +150,7 @@ export type CanvasAssistantReference = {
     id: string;
     type: CanvasNodeType;
     title: string;
+    label?: string;
     dataUrl?: string;
     url?: string;
     storageKey?: string;
@@ -163,6 +164,14 @@ export type CanvasAgentSkillReference = {
     description?: string;
     source: "builtin" | "admin";
 };
+
+export type CanvasAgentSkillSelection = {
+    id: string;
+    name: string;
+    source: "system" | "user";
+};
+
+export const MAX_CANVAS_AGENT_SKILLS = 5;
 
 export type InsertAssetPayload =
     | { kind: "text"; content: string; title: string; assetId?: string; source?: "asset" | "library" }
@@ -219,6 +228,7 @@ export type CanvasAgentToolCall = {
     id: string;
     name: string;
     arguments: Record<string, unknown>;
+    argumentsError?: string;
 };
 
 export type CanvasAgentProtocolMessage =
@@ -245,10 +255,16 @@ export type CanvasAssistantSession = {
     messages: CanvasAssistantMessage[];
     agentState: CanvasAgentState;
     protocolMessages: CanvasAgentProtocolMessage[];
+    jsonToolFallbackKey?: string;
+    jsonToolFallbackMode?: CanvasAgentJsonFallbackMode;
+    activeSkills?: CanvasAgentSkillSelection[];
     contextCheckpoint?: string;
     createdAt: string;
     updatedAt: string;
 };
+
+export type CanvasAgentJsonFallbackMode = "structured-json" | "prompt-json";
+export type CanvasAgentToolMode = "native" | CanvasAgentJsonFallbackMode;
 
 export type ConnectionHandle = {
     nodeId: string;

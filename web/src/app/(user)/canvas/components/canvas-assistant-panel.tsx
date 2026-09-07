@@ -282,6 +282,7 @@ export function CanvasAssistantPanel({
             activeChannelId: effectiveConfig.textChannelId || effectiveConfig.activeChannelId,
             textChannelId: effectiveConfig.textChannelId,
         };
+        const jsonToolFallbackKey = [requestConfig.apiMode || "chat", requestConfig.textChannelId || requestConfig.activeChannelId || requestConfig.baseUrl, requestConfig.model].join("|");
         if (!isAiConfigReady(requestConfig, requestConfig.model)) {
             updateMessage(session.id, assistantId, {
                 text: "全局文本模型尚未配置完成。请先从应用原有的全局配置入口选择文本模型和渠道，然后再继续。",
@@ -314,6 +315,7 @@ export function CanvasAssistantPanel({
                 skillReferences: skills.filter((skill): skill is CanvasAgentSkillReference => skill.source === "builtin" || skill.source === "admin"),
                 activeSkillContents,
                 contextCheckpoint: (session as CanvasAssistantSessionCompat).contextCheckpoint,
+                preferredJsonMode: session.jsonToolFallbackKey === jsonToolFallbackKey ? session.jsonToolFallbackMode : undefined,
                 getContext: getAgentContext,
                 executeAction: async (action) => {
                     if (action.name !== "delete_node") return onExecuteAction(action, messageReferenceNodeIds);
@@ -338,6 +340,8 @@ export function CanvasAssistantPanel({
                                 agentState: checkpoint.state,
                                 protocolMessages: checkpoint.protocolMessages,
                                 contextCheckpoint: checkpoint.contextCheckpoint,
+                                jsonToolFallbackKey: checkpoint.jsonFallbackMode ? jsonToolFallbackKey : undefined,
+                                jsonToolFallbackMode: checkpoint.jsonFallbackMode,
                                 updatedAt: new Date().toISOString(),
                             }) as CanvasAssistantSession,
                     ),
@@ -350,6 +354,8 @@ export function CanvasAssistantPanel({
                         agentState: result.state,
                         protocolMessages: result.protocolMessages,
                         contextCheckpoint: result.contextCheckpoint,
+                        jsonToolFallbackKey: result.jsonFallbackMode ? jsonToolFallbackKey : undefined,
+                        jsonToolFallbackMode: result.jsonFallbackMode,
                         messages: current.messages.map((message) => (message.id === assistantId ? { ...message, text: result.reply, status: "success", activity: undefined } : message)),
                         updatedAt: new Date().toISOString(),
                     }) as CanvasAssistantSession,
