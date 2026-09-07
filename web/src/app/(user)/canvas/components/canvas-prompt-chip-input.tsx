@@ -172,8 +172,13 @@ export function CanvasPromptChipInput({ value, references = [], skills = [], onS
                 aria-label={placeholder}
                 className={`${className || ""} overflow-y-auto whitespace-pre-wrap break-words outline-none`}
                 style={{ ...style, cursor: "text" }}
-                onInput={() => {
-                    if (!composingRef.current) syncFromEditor();
+                onInput={(event) => {
+                    if (composingRef.current) return;
+                    const selection = window.getSelection();
+                    const node = selection?.anchorNode;
+                    // 浏览器在末行光标前保留的独立换行节点只是占位。
+                    if (selection?.isCollapsed && selection.anchorOffset === 0 && node instanceof Text && node.data === "\n" && node === event.currentTarget.lastChild) node.data = "\uFEFF";
+                    syncFromEditor();
                 }}
                 onPaste={(event) => {
                     const imageFile = Array.from(event.clipboardData.files || []).find((item) => item.type.startsWith("image/"));
@@ -455,30 +460,41 @@ function serializePromptEditor(editor: HTMLElement) {
     return serializePromptNodes(editor.childNodes).replace(/\uFEFF/g, "");
 }
 
-function serializePromptNodes(nodes: NodeListOf<ChildNode>) {
-    let result = "";
+function serializePromptNodes(nodes: NodeListOf<ChildNode>, state = { text: "", emptyLine: true, pendingBr: false }, group = { hasContent: false, afterBlock: false }) {
+    // BR 延后到下一段行内内容再输出，块边界负责换行并丢弃行末占位 BR。
     nodes.forEach((node) => {
-        if (node.nodeType === Node.TEXT_NODE) {
-            result += node.textContent || "";
+        const element = node instanceof HTMLElement ? node : null;
+        const text = node.nodeType === Node.TEXT_NODE ? node.textContent || "" : element?.dataset.refLabel;
+        const block = element?.tagName === "DIV" || element?.tagName === "P";
+        const br = element?.tagName === "BR";
+        if (!text && !block && !br) {
+            if (element) serializePromptNodes(element.childNodes, state, group);
             return;
         }
-        if (!(node instanceof HTMLElement)) return;
-        const referenceLabel = node.dataset.refLabel;
-        if (referenceLabel) {
-            result += referenceLabel;
-            return;
+        if (block || group.afterBlock) {
+            if (group.hasContent && (state.emptyLine || !state.text.endsWith("\n"))) state.text += "\n";
+            state.pendingBr = false;
+            state.emptyLine = true;
+            group.afterBlock = false;
         }
-        if (node.tagName === "BR") {
-            result += "\n";
-            return;
+        if (block) {
+            serializePromptNodes(element!.childNodes, state);
+            state.pendingBr = false;
+            group.afterBlock = true;
+        } else {
+            if (state.pendingBr) {
+                state.text += "\n";
+                state.emptyLine = true;
+            }
+            state.pendingBr = br;
+            if (text) {
+                state.text += text;
+                state.emptyLine = false;
+            }
         }
-        const content = serializePromptNodes(node.childNodes);
-        const isBlock = node.tagName === "DIV" || node.tagName === "P";
-        if (isBlock && result && !result.endsWith("\n")) result += "\n";
-        result += content;
-        if (isBlock && !content) result += "\n";
+        group.hasContent = true;
     });
-    return result;
+    return state.text;
 }
 
 function removeActiveMention() {
