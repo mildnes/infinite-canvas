@@ -70,6 +70,15 @@ func TestStorageProviderConfigured(t *testing.T) {
 	}
 }
 
+func TestNormalizePrivateStorageSettingPreservesAutoSyncFlag(t *testing.T) {
+	if normalizePrivateStorageSetting(model.PrivateStorageSetting{}).AutoSyncAllAssets {
+		t.Fatal("auto sync should be disabled by default")
+	}
+	if !normalizePrivateStorageSetting(model.PrivateStorageSetting{AutoSyncAllAssets: true}).AutoSyncAllAssets {
+		t.Fatal("auto sync flag should survive storage normalization")
+	}
+}
+
 func TestCleanStoragePath(t *testing.T) {
 	if got, err := cleanStoragePath("/infinite-canvas/user/file.png/"); err != nil || got != "infinite-canvas/user/file.png" {
 		t.Fatalf("cleanStoragePath() = %q, %v", got, err)

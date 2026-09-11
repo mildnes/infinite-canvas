@@ -8,8 +8,7 @@ import { ModelPicker } from "@/components/model-picker";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
-import { CanvasNodeType, type CanvasAgentConfig, type CanvasAgentSkillReference, type CanvasAssistantReference } from "../types";
-import type { CanvasAgentConfigCompat, CanvasAgentSkillSelection } from "../agent/canvas-agent-compat";
+import { CanvasNodeType, type CanvasAgentConfig, type CanvasAgentSkillReference, type CanvasAgentSkillSelection, type CanvasAssistantReference } from "../types";
 import type { CanvasResourceReference } from "../utils/canvas-resource-references";
 import { isCanvasImageNodeType } from "../utils/canvas-panorama";
 import { CanvasImageSettingsPopover } from "./canvas-image-settings-popover";
@@ -26,7 +25,7 @@ export type CanvasAssistantComposerProps = {
     skills?: CanvasAgentSkillReference[];
     selectedSkills?: CanvasAgentSkillSelection[];
     onSelectSkill?: (skill: CanvasAgentSkillReference) => void;
-    onRemoveSkill?: (id: string) => void;
+    onRemoveSkill?: (id: string, source: CanvasAgentSkillSelection["source"]) => void;
     onSelectLibrarySkill?: (skill: CanvasAgentSkillSelection) => void;
     onRemoveLibrarySkill?: (id: string, source: CanvasAgentSkillSelection["source"]) => void;
     agentConfig: CanvasAgentConfig;
@@ -71,7 +70,7 @@ export function CanvasAssistantComposer({
         [agentConfig.imageQuality, agentConfig.imageSize, effectiveConfig, selectedImageChannelId, selectedImageModel],
     );
     const videoConfig = useMemo(() => ({ ...effectiveConfig, vquality: agentConfig.videoQuality, size: agentConfig.videoSize }), [agentConfig.videoQuality, agentConfig.videoSize, effectiveConfig]);
-    const compatConfig = agentConfig as CanvasAgentConfigCompat;
+    const reasoningEnabled = agentConfig.textReasoningEnabled === true;
 
     return (
         <div className="px-2 pb-2" onWheelCapture={(event) => event.stopPropagation()}>
@@ -86,13 +85,13 @@ export function CanvasAssistantComposer({
                 <div className="thin-scrollbar mb-1.5 flex max-w-full gap-1.5 overflow-x-auto px-1 pb-1">
                     {selectedSkills.map((skill) => (
                         <div
-                            key={skill.id}
+                            key={`${skill.source}:${skill.id}`}
                             className="group/skill inline-flex h-8 max-w-[190px] shrink-0 items-center gap-1.5 rounded-lg border px-2 text-xs"
                             style={{ color: theme.node.text, background: theme.toolbar.panel, borderColor: theme.node.stroke }}
                         >
                             <Sparkles className="size-3.5 shrink-0" />
                             <span className="truncate">{skill.name}</span>
-                            <button type="button" className="grid size-4 shrink-0 place-items-center rounded-full opacity-60 hover:opacity-100" onClick={() => onRemoveSkill?.(skill.id)} aria-label={`移除技能 ${skill.name}`}>
+                            <button type="button" className="grid size-4 shrink-0 place-items-center rounded-full opacity-60 hover:opacity-100" onClick={() => onRemoveSkill?.(skill.id, skill.source)} aria-label={`移除技能 ${skill.name}`}>
                                 <X className="size-3" />
                             </button>
                         </div>
@@ -162,28 +161,17 @@ export function CanvasAssistantComposer({
                         />
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
-                        <Dropdown
-                            trigger={["click"]}
-                            placement="topRight"
-                            menu={{
-                                selectable: true,
-                                selectedKeys: [compatConfig.textApiMode || "chat"],
-                                items: [
-                                    { key: "chat", label: "Chat" },
-                                    { key: "responses", label: "Responses" },
-                                ],
-                                onClick: ({ key }) => onAgentConfigChange({ textApiMode: key } as Partial<CanvasAgentConfig>),
-                            }}
-                        >
-                            <Button
-                                type="text"
-                                shape="circle"
-                                className="!h-8 !w-8 !min-w-8"
-                                style={{ color: theme.node.text }}
-                                icon={<Brain className="size-4" />}
-                                aria-label={`文本接口：${compatConfig.textApiMode === "responses" ? "Responses" : "Chat"}`}
-                            />
-                        </Dropdown>
+                        <Button
+                            type="text"
+                            shape="circle"
+                            className="!h-8 !w-8 !min-w-8"
+                            style={{ color: theme.node.text, background: reasoningEnabled ? theme.toolbar.activeBg : undefined }}
+                            icon={<Brain className="size-4" />}
+                            title={reasoningEnabled ? "推理已开启" : "推理已关闭"}
+                            aria-label={reasoningEnabled ? "关闭推理" : "开启推理"}
+                            aria-pressed={reasoningEnabled}
+                            onClick={() => onAgentConfigChange({ textReasoningEnabled: !reasoningEnabled })}
+                        />
                         <Button
                             type="primary"
                             shape="circle"

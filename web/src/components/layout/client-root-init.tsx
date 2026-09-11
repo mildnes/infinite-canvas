@@ -6,7 +6,8 @@ import { usePathname } from "next/navigation";
 import { App } from "antd";
 
 import { fetchUserConfig } from "@/services/api/user-config";
-import { defaultUserStorageProvider, defaultUserWebDAVStorageProvider, saveUserStorageProvider, saveUserWebDAVStorageProvider } from "@/services/image-storage";
+import { clearStorageConfigCache as clearImageStorageConfigCache, defaultUserStorageProvider, defaultUserWebDAVStorageProvider, saveUserStorageProvider, saveUserWebDAVStorageProvider, STORAGE_SYNC_COMPLETED_EVENT, STORAGE_SYNC_FAILED_EVENT } from "@/services/image-storage";
+import { clearStorageConfigCache as clearFileStorageConfigCache } from "@/services/file-storage";
 import { useConfigStore, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
@@ -27,6 +28,36 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     useEffect(() => {
         void loadPublicSettings();
     }, [loadPublicSettings]);
+
+    useEffect(() => {
+        clearImageStorageConfigCache();
+        clearFileStorageConfigCache();
+    }, [token]);
+
+    useEffect(() => {
+        const handleSyncFailure = (event: Event) => {
+            const detail = event instanceof CustomEvent && typeof event.detail === "string" ? event.detail.trim() : "";
+            message.open({ key: "storage-sync-failed", type: "warning", content: detail ? `云端同步失败，已保留原始素材：${detail}` : "云端同步失败，已保留原始素材" });
+        };
+        const handleSyncCompleted = (event: Event) => {
+            const detail = event instanceof CustomEvent ? event.detail as { storageKey?: string; url?: string; ownerToken?: string } : null;
+            if (!detail?.storageKey) return;
+            const ownerToken = detail.ownerToken ?? useUserStore.getState().token;
+            window.setTimeout(() => {
+                void import("@/stores/use-asset-store").then(({ useAssetStore }) => {
+                    const keys = new Map<string, string>([[detail.storageKey!, detail.storageKey!]]);
+                    if (detail.url) keys.set(detail.url, detail.storageKey!);
+                    useAssetStore.getState().cleanupImages(undefined, keys, ownerToken);
+                });
+            }, 2000);
+        };
+        window.addEventListener(STORAGE_SYNC_FAILED_EVENT, handleSyncFailure);
+        window.addEventListener(STORAGE_SYNC_COMPLETED_EVENT, handleSyncCompleted);
+        return () => {
+            window.removeEventListener(STORAGE_SYNC_FAILED_EVENT, handleSyncFailure);
+            window.removeEventListener(STORAGE_SYNC_COMPLETED_EVENT, handleSyncCompleted);
+        };
+    }, [message]);
 
     useEffect(() => {
         if (!isLoginPage) void hydrateUser();
@@ -63,6 +94,8 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
                         type: "webdav",
                     });
                 }
+                clearImageStorageConfigCache();
+                clearFileStorageConfigCache();
             })
             .catch(() => {});
     }, [token, updateConfig, user?.id]);

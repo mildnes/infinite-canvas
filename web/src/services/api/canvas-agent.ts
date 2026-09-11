@@ -1,8 +1,9 @@
 import { mimoTextModels } from "@/lib/mimo-tts";
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig } from "@/lib/gemini";
 import { aiApiUrl, aiHeaders, refreshRemoteUser } from "@/services/api/image";
+import { applyCanvasAgentReasoning } from "@/services/api/canvas-agent-reasoning";
 import { imageToDataUrl } from "@/services/image-storage";
-import { localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
+import { channelProtocolForConfig, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
 import type { CanvasAgentProtocolMessage, CanvasAgentToolCall, CanvasAgentToolMode } from "@/app/(user)/canvas/types";
 import type { CanvasAgentToolDefinition } from "@/app/(user)/canvas/agent/canvas-agent-tools";
 import { calibrateCanvasAgentTokenEstimate } from "@/app/(user)/canvas/agent/canvas-agent-memory";
@@ -17,7 +18,7 @@ export type CanvasAgentModelTurn = {
 };
 
 type RequestCanvasAgentTurnInput = {
-    config: AiConfig;
+    config: CanvasAgentAiConfig;
     systemPrompt: string;
     messages: CanvasAgentProtocolMessage[];
     tools: CanvasAgentToolDefinition[];
@@ -92,6 +93,12 @@ class CanvasAgentRequestError extends Error {
     }
 }
 
+type CanvasAgentAiConfig = AiConfig & { textReasoningEnabled?: boolean };
+
+function applyReasoning(body: Record<string, unknown>, config: CanvasAgentAiConfig, mode: "chat" | "responses" | "gemini") {
+    applyCanvasAgentReasoning(body, { enabled: config.textReasoningEnabled === true, mode, model: config.model, protocol: channelProtocolForConfig(config) });
+}
+
 export async function requestCanvasAgentTurn(input: RequestCanvasAgentTurnInput): Promise<CanvasAgentModelTurn> {
     const requestConfig = {
         ...input.config,
@@ -142,7 +149,7 @@ export function canvasAgentSystemPrompt(config: AiConfig, prompt: string, jsonTo
     return configured ? configured + "\n\n" + prompt : prompt;
 }
 
-export async function requestCanvasAgentCheckpoint(input: { config: AiConfig; previousCheckpoint?: string; messages: unknown; signal?: AbortSignal }) {
+export async function requestCanvasAgentCheckpoint(input: { config: CanvasAgentAiConfig; previousCheckpoint?: string; messages: unknown; signal?: AbortSignal }) {
     const turn = await requestCanvasAgentTurn({
         config: input.config,
         systemPrompt:
@@ -160,7 +167,7 @@ export async function requestCanvasAgentCheckpoint(input: { config: AiConfig; pr
     return turn.content.trim();
 }
 
-async function requestCompletion(config: AiConfig, systemPrompt: string, messages: CanvasAgentProtocolMessage[], tools: CanvasAgentToolDefinition[], jsonSchema?: Record<string, unknown>, signal?: AbortSignal) {
+async function requestCompletion(config: CanvasAgentAiConfig, systemPrompt: string, messages: CanvasAgentProtocolMessage[], tools: CanvasAgentToolDefinition[], jsonSchema?: Record<string, unknown>, signal?: AbortSignal) {
     if (config.apiMode === "responses") return requestResponsesCompletion(config, systemPrompt, messages, tools, jsonSchema, signal);
     if (isGeminiConfig(config)) return requestGeminiCompletion(config, systemPrompt, messages, tools, jsonSchema, signal);
     const body: Record<string, unknown> = {
@@ -173,6 +180,7 @@ async function requestCompletion(config: AiConfig, systemPrompt: string, message
         body.tool_choice = "auto";
     }
     if (jsonSchema) body.response_format = { type: "json_schema", json_schema: { name: "canvas_agent_actions", schema: jsonSchema } };
+    applyReasoning(body, config, "chat");
 
     const response = await fetch(aiApiUrl(config, "/chat/completions"), {
         method: "POST",
@@ -212,7 +220,7 @@ async function requestCompletion(config: AiConfig, systemPrompt: string, message
     };
 }
 
-async function requestResponsesCompletion(config: AiConfig, systemPrompt: string, messages: CanvasAgentProtocolMessage[], tools: CanvasAgentToolDefinition[], jsonSchema?: Record<string, unknown>, signal?: AbortSignal) {
+async function requestResponsesCompletion(config: CanvasAgentAiConfig, systemPrompt: string, messages: CanvasAgentProtocolMessage[], tools: CanvasAgentToolDefinition[], jsonSchema?: Record<string, unknown>, signal?: AbortSignal) {
     const body: Record<string, unknown> = {
         model: config.model,
         instructions: systemPrompt,
@@ -225,6 +233,7 @@ async function requestResponsesCompletion(config: AiConfig, systemPrompt: string
         body.tool_choice = "auto";
     }
     if (jsonSchema) body.text = { format: { type: "json_schema", name: "canvas_agent_actions", schema: jsonSchema } };
+    applyReasoning(body, config, "responses");
 
     const response = await fetch(aiApiUrl(config, "/responses"), {
         method: "POST",
@@ -275,7 +284,7 @@ async function requestResponsesCompletion(config: AiConfig, systemPrompt: string
     };
 }
 
-async function requestGeminiCompletion(config: AiConfig, systemPrompt: string, messages: CanvasAgentProtocolMessage[], tools: CanvasAgentToolDefinition[], jsonSchema?: Record<string, unknown>, signal?: AbortSignal) {
+async function requestGeminiCompletion(config: CanvasAgentAiConfig, systemPrompt: string, messages: CanvasAgentProtocolMessage[], tools: CanvasAgentToolDefinition[], jsonSchema?: Record<string, unknown>, signal?: AbortSignal) {
     const contents = await Promise.all(
         messages
             .filter((message) => message.role !== "system")
@@ -307,6 +316,7 @@ async function requestGeminiCompletion(config: AiConfig, systemPrompt: string, m
         ...(tools.length ? { tools: [{ functionDeclarations: tools.map((tool) => tool.function) }] } : {}),
         ...(jsonSchema ? { generationConfig: { responseFormat: { text: { mimeType: "application/json", schema: jsonSchema } } } } : {}),
     };
+    applyReasoning(body, config, "gemini");
     const proxy = Boolean(aiApiUrl(config, "/chat/completions").startsWith("/api/"));
     const channel = localChannelForActiveModel(config);
     const { model: _model, stream: _stream, ...nativeBody } = body;

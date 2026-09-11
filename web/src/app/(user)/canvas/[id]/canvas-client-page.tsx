@@ -22,6 +22,7 @@ import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { isKIEKlingV3Config, kieKlingOmniVariant } from "@/components/video-settings-panel";
 import { useAssetStore } from "@/stores/use-asset-store";
+import { useUserStore } from "@/stores/use-user-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { cropDataUrl, splitDataUrl, upscaleDataUrl } from "../utils/canvas-image-data";
 import { fitNodeSize, nodeSizeFromRatio } from "../utils/canvas-node-size";
@@ -51,6 +52,8 @@ import { CanvasNodeSplitDialog, type CanvasImageSplitParams } from "../component
 import { CanvasNodeUpscaleDialog, type CanvasImageUpscaleParams } from "../components/canvas-node-upscale-dialog";
 import { buildNodeChatMessages, buildNodeGenerationContext, buildNodeGenerationInputs, hydrateNodeGenerationContext, type NodeGenerationContext, type NodeGenerationInput } from "../components/canvas-node-generation";
 import { CanvasNodeHoverToolbar, CanvasNodeInfoModal } from "../components/canvas-node-hover-toolbar";
+import { CanvasAudioTrimDialog } from "../components/canvas-audio-trim-dialog";
+import { extractCanvasAudioFile, type CanvasAudioTrim } from "../components/canvas-media-tools";
 import { InfiniteCanvas } from "../components/infinite-canvas";
 import { Minimap } from "../components/canvas-mini-map";
 import { CanvasNode } from "../components/canvas-node";
@@ -68,6 +71,7 @@ import type { CanvasAgentAction, CanvasAgentToolResult } from "../agent/canvas-a
 import {
     CanvasNodeType,
     type CanvasAgentConfig,
+    type CanvasAgentSkillSelection,
     type CanvasAgentState,
     type CanvasAssistantImage,
     type CanvasAssistantReference,
@@ -318,6 +322,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const historyRef = useRef<{ past: CanvasHistoryEntry[]; future: CanvasHistoryEntry[] }>({ past: [], future: [] });
     const lastHistoryRef = useRef<CanvasHistoryEntry | null>(null);
     const historyCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const historyCleanupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const historyCleanupKeysRef = useRef(new Map<string, string>());
+    const historyOwnerTokenRef = useRef("");
     const viewportSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const sidePanelSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const focusAnimationRef = useRef<number | null>(null);
@@ -364,7 +371,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const [chatSessions, setChatSessions] = useState<CanvasAssistantSession[]>([]);
     const [activeChatId, setActiveChatId] = useState<string | null>(null);
     const [agentConfig, setAgentConfig] = useState<CanvasAgentConfig | null>(null);
-    const [initialAgentRequest, setInitialAgentRequest] = useState<{ prompt: CanvasPendingAgentRequest["prompt"]; references: CanvasAssistantReference[] } | null>(null);
+    const [initialAgentRequest, setInitialAgentRequest] = useState<{ prompt: CanvasPendingAgentRequest["prompt"]; references: CanvasAssistantReference[]; skills: CanvasAgentSkillSelection[] } | null>(null);
     const [viewport, setViewport] = useState<ViewportTransform>({ x: 0, y: 0, k: 1 });
     const [canvasTool, setCanvasTool] = useState<"select" | "pan">("select");
     const [size, setSize] = useState({ width: 1200, height: 720 });
@@ -396,6 +403,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const [editRequestNonce, setEditRequestNonce] = useState(0);
     const [infoNodeId, setInfoNodeId] = useState<string | null>(null);
     const [cropNodeId, setCropNodeId] = useState<string | null>(null);
+    const [audioTrimNodeId, setAudioTrimNodeId] = useState<string | null>(null);
+    const [audioTrimSourceUrl, setAudioTrimSourceUrl] = useState("");
+    const [trimmingAudio, setTrimmingAudio] = useState(false);
     const [maskEditNodeId, setMaskEditNodeId] = useState<string | null>(null);
     const [maskEditModel, setMaskEditModel] = useState("");
     const [maskEditChannelId, setMaskEditChannelId] = useState("");
@@ -417,8 +427,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const [canvasNow, setCanvasNow] = useState(Date.now());
     const resolvedAgentConfig = useMemo<CanvasAgentConfig>(() => {
         const imageSelection = resolveCanvasAgentImageSelection(effectiveConfig, agentConfig);
-        return agentConfig ? { ...agentConfig, ...imageSelection, textApiMode: agentConfig.textApiMode || "chat", autoGenerateMedia: agentConfig.autoGenerateMedia ?? false } : {
+        return agentConfig ? { ...agentConfig, ...imageSelection, textApiMode: agentConfig.textApiMode || "chat", textReasoningEnabled: agentConfig.textReasoningEnabled ?? false, autoGenerateMedia: agentConfig.autoGenerateMedia ?? false } : {
                 textApiMode: "chat",
+                textReasoningEnabled: false,
                 autoGenerateMedia: false,
                 ...imageSelection,
                 imageQuality: effectiveConfig.quality,
@@ -457,8 +468,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     );
 
     const cleanupCanvasFiles = useCallback(
-        (extra?: unknown) => {
-            cleanupAssetImages({ extra, history: historyRef.current, lastHistory: lastHistoryRef.current });
+        (extra?: unknown, storageKeys?: ReadonlyMap<string, string>) => {
+            cleanupAssetImages({ extra, history: historyRef.current, lastHistory: lastHistoryRef.current }, storageKeys, historyOwnerTokenRef.current);
         },
         [cleanupAssetImages],
     );
@@ -494,6 +505,18 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         return () => window.removeEventListener("keydown", handlePreviewKeyDown);
     }, [previewNodeId, getBatchGroupNodes]);
 
+    useEffect(() => () => {
+        const storageKeys = historyCleanupKeysRef.current;
+        collectImageStorageKeys([historyRef.current, lastHistoryRef.current], new Set(), undefined, storageKeys).forEach((key) => storageKeys.set(key, key));
+        historyCleanupKeysRef.current = new Map<string, string>();
+        if (historyCleanupTimerRef.current) {
+            clearTimeout(historyCleanupTimerRef.current);
+            historyCleanupTimerRef.current = null;
+        }
+        const usedKeys = collectImageStorageKeys(nodesRef.current, new Set(), storageKeys);
+        if (Array.from(storageKeys.values()).some((key) => !usedKeys.has(key))) cleanupAssetImages({ nodes: nodesRef.current }, storageKeys, historyOwnerTokenRef.current);
+    }, [cleanupAssetImages, projectId]);
+
     useEffect(() => {
         if (!hydrated) return;
         setProjectLoaded(false);
@@ -505,6 +528,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             router.replace("/canvas");
             return;
         }
+        historyOwnerTokenRef.current = useUserStore.getState().token;
 
         const restore = async () => {
             const hideRepair = message.loading("正在恢复媒体…", 0);
@@ -564,11 +588,22 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             const current = createHistoryEntry();
             const last = lastHistoryRef.current;
             if (!last) return;
+            const historyDropped = historyRef.current.past.length >= 50 || historyRef.current.future.length > 0;
+            if (historyDropped) collectImageStorageKeys([historyRef.current.past.slice(0, -49), historyRef.current.future], new Set(), undefined, historyCleanupKeysRef.current).forEach((key) => historyCleanupKeysRef.current.set(key, key));
             historyRef.current.past = [...historyRef.current.past.slice(-49), last];
             historyRef.current.future = [];
             setHistoryState({ canUndo: true, canRedo: false });
             lastHistoryRef.current = current;
             historyCommitTimerRef.current = null;
+            if (historyDropped) {
+                if (historyCleanupTimerRef.current) clearTimeout(historyCleanupTimerRef.current);
+                historyCleanupTimerRef.current = setTimeout(() => {
+                    historyCleanupTimerRef.current = null;
+                    const storageKeys = historyCleanupKeysRef.current;
+                    historyCleanupKeysRef.current = new Map<string, string>();
+                    cleanupCanvasFiles(undefined, storageKeys);
+                }, 2000);
+            }
         }, 180);
 
         return () => {
@@ -577,7 +612,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 historyCommitTimerRef.current = null;
             }
         };
-    }, [backgroundMode, connections, createHistoryEntry, nodes, projectLoaded, showImageInfo]);
+    }, [backgroundMode, cleanupCanvasFiles, connections, createHistoryEntry, nodes, projectLoaded, showImageInfo]);
 
     useEffect(() => {
         if (!projectLoaded || historyPausedRef.current) return;
@@ -879,6 +914,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const toolbarNode = toolbarNodeId ? nodeById.get(toolbarNodeId) || null : null;
     const infoNode = infoNodeId ? nodeById.get(infoNodeId) || null : null;
     const cropNode = cropNodeId ? nodeById.get(cropNodeId) || null : null;
+    const audioTrimNode = audioTrimNodeId ? nodeById.get(audioTrimNodeId) || null : null;
     const maskEditNode = maskEditNodeId ? nodeById.get(maskEditNodeId) || null : null;
     const maskEditConfig = maskEditNode ? buildGenerationConfig(effectiveConfig, maskEditNode, "image") : null;
     const currentMaskEditModel = maskEditModel || maskEditConfig?.model || "";
@@ -1068,7 +1104,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             const removedNodes = nodesRef.current.filter((node) => allIds.has(node.id));
             const remainingNodes = nodesRef.current.filter((node) => !allIds.has(node.id));
             const removedKeys = collectImageStorageKeys(removedNodes);
-            const usedKeys = collectImageStorageKeys({ nodes: remainingNodes, assets: useAssetStore.getState().assets });
+            const usedKeys = collectImageStorageKeys({ nodes: remainingNodes, assets: useAssetStore.getState().assets, history: historyRef.current, lastHistory: lastHistoryRef.current });
             const disposableKeys = [...removedKeys].filter((key) => !usedKeys.has(key));
             setChatSessions((sessions) => sessions.map((session) => ({
                 ...session,
@@ -1116,6 +1152,11 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             setEditingNodeId((current) => (current && allIds.has(current) ? null : current));
             setInfoNodeId((current) => (current && allIds.has(current) ? null : current));
             setCropNodeId((current) => (current && allIds.has(current) ? null : current));
+            setAudioTrimNodeId((current) => {
+                if (!current || !allIds.has(current)) return current;
+                setAudioTrimSourceUrl("");
+                return null;
+            });
             setMaskEditNodeId((current) => (current && allIds.has(current) ? null : current));
             setAngleNodeId((current) => (current && allIds.has(current) ? null : current));
             setPreviewNodeId((current) => (current && allIds.has(current) ? null : current));
@@ -1153,6 +1194,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         setConnections([]);
         setInfoNodeId(null);
         setCropNodeId(null);
+        setAudioTrimNodeId(null);
+        setAudioTrimSourceUrl("");
         setMaskEditNodeId(null);
         setAngleNodeId(null);
         setPreviewNodeId(null);
@@ -1683,10 +1726,10 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         }
     }, [message]);
 
-    const createAudioFileNode = useCallback(async (file: File, position: Position) => {
+    const createAudioFileNode = useCallback(async (file: File, position: Position, syncId?: string) => {
         const hideLoading = message.loading("正在上传音频...", 0);
         try {
-            const audio = await uploadMediaFile(file, "audio");
+            const audio = await uploadMediaFile(file, "audio", syncId);
             const spec = NODE_DEFAULT_SIZE[CanvasNodeType.Audio];
             const id = `audio-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
             setNodes((prev) => [
@@ -1703,11 +1746,50 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             ]);
             setSelectedNodeIds(new Set([id]));
             setSelectedConnectionId(null);
+            return id;
         } catch (error) {
             console.error("Upload audio node failed:", error);
             message.error("音频上传失败");
+            return null;
         } finally {
             hideLoading();
+        }
+    }, [message]);
+
+    const extractingAudioNodeIdsRef = useRef(new Set<string>());
+    const extractAudio = useCallback(async (node: CanvasNodeData, trim?: CanvasAudioTrim) => {
+        if ((node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) || !node.metadata?.content || extractingAudioNodeIdsRef.current.has(node.id)) return null;
+        extractingAudioNodeIdsRef.current.add(node.id);
+        if (trim) setTrimmingAudio(true);
+        const hideLoading = message.loading(trim ? "正在截取音频..." : "正在分离音频...", 0);
+        try {
+            const file = await extractCanvasAudioFile({ content: node.metadata.content, storageKey: node.metadata.storageKey, title: node.title, trim });
+            hideLoading();
+            const audioWidth = NODE_DEFAULT_SIZE[CanvasNodeType.Audio].width;
+            const audioNodeId = await createAudioFileNode(file, {
+                x: node.position.x + node.width + 96 + audioWidth / 2,
+                y: node.position.y + node.height / 2,
+            }, `canvas-audio:${projectId}:${node.id}:${trim ? `${trim.start}-${trim.end}` : "full"}`);
+            if (audioNodeId) setConnections((current) => [...current, { id: nanoid(), fromNodeId: node.id, toNodeId: audioNodeId }]);
+            return audioNodeId;
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "音频处理失败");
+            return null;
+        } finally {
+            extractingAudioNodeIdsRef.current.delete(node.id);
+            hideLoading();
+            if (trim) setTrimmingAudio(false);
+        }
+    }, [createAudioFileNode, message, projectId]);
+
+    const openAudioTrim = useCallback(async (node: CanvasNodeData) => {
+        try {
+            const sourceUrl = await resolveMediaUrl(node.metadata?.storageKey, node.metadata?.content || "");
+            if (!sourceUrl) throw new Error("找不到可截取的音频");
+            setAudioTrimSourceUrl(sourceUrl);
+            setAudioTrimNodeId(node.id);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "音频加载失败");
         }
     }, [message]);
 
@@ -3850,7 +3932,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 );
             }
             updateProject(projectId, { pendingAgentRequest: undefined });
-            setInitialAgentRequest({ prompt: request.prompt, references });
+            setInitialAgentRequest({ prompt: request.prompt, references, skills: request.skills || [] });
         })().catch((error) => {
             consumedAgentRequestProjectRef.current = null;
             message.error(error instanceof Error ? error.message : "首页素材插入失败");
@@ -4169,6 +4251,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     onToggleDialog={(node) => setDialogNodeId((current) => (current === node.id ? null : node.id))}
                     onGenerateImage={generateImageFromTextNode}
                     onUpload={(node) => handleUploadRequest(node.id)}
+                    onExtractAudio={(node) => void extractAudio(node)}
+                    onTrimAudio={(node) => void openAudioTrim(node)}
                     onDownload={downloadNodeImage}
                     onSaveAsset={(node) => void saveNodeAsset(node)}
                     onUploadMediaToCloud={(node) => void uploadNodeMediaToCloud(node)}
@@ -4287,6 +4371,25 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 <input ref={imageInputRef} type="file" accept="image/*,video/*,audio/mpeg,audio/wav,audio/x-wav,.mp3,.wav" className="hidden" onChange={handleImageInputChange} />
 
                 <CanvasNodeInfoModal node={infoNode} open={Boolean(infoNode)} onClose={() => setInfoNodeId(null)} />
+
+                <CanvasAudioTrimDialog
+                    open={Boolean(audioTrimNode)}
+                    sourceUrl={audioTrimSourceUrl}
+                    title={audioTrimNode?.title}
+                    confirmLoading={trimmingAudio}
+                    onClose={() => {
+                        setAudioTrimNodeId(null);
+                        setAudioTrimSourceUrl("");
+                    }}
+                    onConfirm={async (trim) => {
+                        if (!audioTrimNode) return;
+                        const audioNodeId = await extractAudio(audioTrimNode, trim);
+                        if (audioNodeId) {
+                            setAudioTrimNodeId(null);
+                            setAudioTrimSourceUrl("");
+                        }
+                    }}
+                />
 
                 {cropNode?.metadata?.content ? <CanvasNodeCropDialog dataUrl={cropNode.metadata.content} open={Boolean(cropNode)} onClose={() => setCropNodeId(null)} onConfirm={(crop) => cropImageNode(cropNode!, crop)} /> : null}
 
@@ -5073,7 +5176,8 @@ function applyCanvasVideoTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
             videoTaskVideoId: task.video_id || node.metadata?.videoTaskVideoId,
         };
         if (!completed || !url) return { ...node, metadata };
-        const taskSize = parseCanvasVideoTaskSize(task.size, fallbackSize);
+        const parsedTaskSize = parseCanvasVideoTaskSize(task.size, fallbackSize);
+        const taskSize = { width: task.width || parsedTaskSize.width, height: task.height || parsedTaskSize.height };
         const videoSize = fitNodeSize(taskSize.width, taskSize.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
         return {
             ...node,
@@ -5087,8 +5191,8 @@ function applyCanvasVideoTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
                 status: NODE_STATUS_SUCCESS,
                 naturalWidth: taskSize.width,
                 naturalHeight: taskSize.height,
-                bytes: 0,
-                mimeType: "video/mp4",
+                bytes: task.bytes || 0,
+                mimeType: task.mimeType || "video/mp4",
                 progress: 100,
             },
         };
@@ -5265,6 +5369,7 @@ function applyCanvasImageTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
     const childIds = canvasImageTaskChildIds(nodeId, task);
     const childNodes = urls.map((url, index): CanvasNodeData => {
         const id = childIds[index];
+        const stored = task.imageStorage?.[index];
         return {
             ...root,
             id,
@@ -5274,12 +5379,14 @@ function applyCanvasImageTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
             },
             metadata: {
                 ...root.metadata,
-                content: url,
+                content: stored?.url || url,
                 status: NODE_STATUS_SUCCESS,
                 progress: 100,
-                storageKey: "",
-                mimeType: "image/png",
-                bytes: 0,
+                storageKey: stored?.storageKey || (index === 0 ? task.storageKey || "" : ""),
+                naturalWidth: stored?.width || root.metadata?.naturalWidth,
+                naturalHeight: stored?.height || root.metadata?.naturalHeight,
+                mimeType: stored?.mimeType || task.mimeType || "image/png",
+                bytes: stored?.bytes || (index === 0 ? task.bytes || 0 : 0),
                 imageTaskId: undefined,
                 imageTaskResultId: task.id,
                 isBatchRoot: undefined,

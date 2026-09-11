@@ -24,6 +24,9 @@ func PublicSettings() (model.PublicSetting, error) {
 	settings, err := repository.GetSettings()
 	settings = normalizeSettings(settings)
 	settings.Public.ModelChannel.Channels = publicChannelInfos(settings.Private.Channels)
+	// Storage synchronization is intentionally exposed as a read-only public
+	// capability flag; provider credentials remain in the private settings.
+	settings.Public.Storage.AutoSyncAllAssets = settings.Private.Storage.AutoSyncAllAssets
 	settings.Public.Agent = model.PublicAgentSetting{Skills: []model.PublicAgentSkill{}, MCPServers: []model.PublicMCPServer{}}
 	if len(settings.Public.ModelChannel.AvailableModels) == 0 {
 		settings.Public.ModelChannel.AvailableModels = enabledChannelModels(settings.Private.Channels)

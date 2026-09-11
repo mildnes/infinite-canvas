@@ -4,14 +4,10 @@ import { type ReactNode, useState } from "react";
 import { ConfigProvider, Switch } from "antd";
 
 import { type CanvasTheme } from "@/lib/canvas-theme";
+import { IMAGE_QUALITY_OPTIONS, imageQualityLabel as formatImageQualityLabel } from "@/lib/image-quality";
 import type { AiConfig } from "@/stores/use-config-store";
 
-const qualityOptions = [
-    { value: "auto", label: "自动" },
-    { value: "high", label: "高" },
-    { value: "medium", label: "中" },
-    { value: "low", label: "低" },
-];
+export const imageQualityOptions = IMAGE_QUALITY_OPTIONS.map((item) => ({ ...item }));
 const DIMENSION_STEP = 16;
 
 const aspectOptions = [
@@ -82,8 +78,8 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                 {showTitle ? <div className="text-lg font-semibold">图像设置</div> : null}
                 <div className="space-y-2.5">
                     <SettingTitle color={theme.node.muted}>质量</SettingTitle>
-                    <div className="grid grid-cols-4 gap-2.5">
-                        {qualityOptions.map((item) => (
+                    <div className="grid grid-cols-3 gap-2.5">
+                        {imageQualityOptions.map((item) => (
                             <OptionPill key={item.value} selected={quality === item.value} theme={theme} onClick={() => onConfigChange("quality", item.value)}>
                                 {item.label}
                             </OptionPill>
@@ -162,7 +158,7 @@ export function ImageSettingsTheme({ theme, children }: { theme: CanvasTheme; ch
 }
 
 export function imageQualityLabel(value: string) {
-    return ({ auto: "自动", high: "高", medium: "中", low: "低" } as Record<string, string>)[value] || value;
+    return formatImageQualityLabel(value);
 }
 
 export function imageSizeLabel(size: string) {

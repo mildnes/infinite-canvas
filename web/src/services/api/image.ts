@@ -2,10 +2,11 @@ import axios from "axios";
 
 import { isMiniMaxChannel, miniMaxModels } from "@/lib/minimax-video";
 import { dataUrlToFile } from "@/lib/image-utils";
+import { normalizeImageQuality } from "@/lib/image-quality";
 import { isKIESeedreamLayerDecompositionModel } from "@/lib/kie-models";
 import { isMimoChannel, mimoModels } from "@/lib/mimo-tts";
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig, normalizeGeminiBaseUrl } from "@/lib/gemini";
-import { imageToDataUrl, resolveImageUrl } from "@/services/image-storage";
+import { autoSyncImage, imageToDataUrl, resolveImageUrl, type UploadedImage } from "@/services/image-storage";
 import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
@@ -37,7 +38,7 @@ type ChatImagesApiResponse = {
     msg?: string;
 };
 
-type GeneratedImage = { id: string; dataUrl: string; seed?: number };
+type GeneratedImage = { id: string; dataUrl: string; seed?: number } & Partial<UploadedImage>;
 export type CanvasImageTask = {
     id: string;
     parent_task_id?: string;
@@ -55,6 +56,7 @@ export type CanvasImageTask = {
     url?: string;
     image_url?: string;
     image_urls?: string[];
+    imageStorage?: Array<UploadedImage | null>;
     storageKey?: string;
     width?: number;
     height?: number;
@@ -97,23 +99,21 @@ const QUALITY_BASE: Record<string, number> = {
     low: 1024,
     medium: 2048,
     high: 2880,
+    // xhigh/max retain the current high quality dimension baseline when
+    // only an aspect ratio is selected; the protocol value remains distinct.
+    xhigh: 2880,
+    max: 2880,
     standard: 1024,
     hd: 2048,
-};
-const QUALITY_ALIASES: Record<string, string> = {
-    "1k": "low",
-    "2k": "medium",
-    "4k": "high",
 };
 const IMAGE_MIME = "image/png";
 const IMAGE_REQUEST_TIMEOUT_SECONDS = 600;
 const PROMPT_REWRITE_GUARD_PREFIX = "Use the following text as the complete prompt. Do not rewrite it:";
 
+export { normalizeImageQuality };
+
 function normalizeQuality(quality: string) {
-    const value = quality.trim().toLowerCase();
-    if (!value || value === "auto") return "auto";
-    const normalized = QUALITY_ALIASES[value] || value;
-    return QUALITY_BASE[normalized] ? normalized : "auto";
+    return normalizeImageQuality(quality);
 }
 
 function normalizeBoundedInteger(value: string | number, fallback: number, min: number, max: number) {
@@ -164,7 +164,9 @@ function createImageRequestParams(config: AiConfig): ImageRequestParams {
     return {
         n: normalizeBoundedInteger(config.count, 1, 1, 15),
         quality,
-        size: resolveRequestSize(quality, config.size),
+        // Use the canonical quality for ratio-derived dimensions even when a
+        // provider maps it to its own enum (for example zhipu hd/standard).
+        size: resolveRequestSize(normalizedQuality, config.size),
         timeoutSeconds: IMAGE_REQUEST_TIMEOUT_SECONDS,
         streamPartialImages: normalizeBoundedInteger(config.streamPartialImages, 1, 0, 3),
     };
@@ -231,7 +233,7 @@ function isZhipuImageModel(model: string) {
 function normalizeZhipuImageQuality(model: string, quality: string) {
     if (model.trim().toLowerCase() === "glm-image") return "hd";
     if (quality === "auto") return quality;
-    return quality === "high" || quality === "hd" ? "hd" : "standard";
+    return quality === "high" || quality === "xhigh" || quality === "max" || quality === "hd" ? "hd" : "standard";
 }
 
 function applyImageGenerationParams(body: Record<string, unknown>, config: AiConfig, params: ImageRequestParams, operation: "generation" | "edit" = "generation") {
@@ -1014,11 +1016,38 @@ async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?
     return references.length ? requestImageEditSingle(config, prompt, references, params) : requestImageGenerationSingle(config, prompt, params);
 }
 
+async function syncGeneratedImages(images: GeneratedImage[]) {
+    return Promise.all(images.map(async (image) => {
+        const stored = await autoSyncImage(image.dataUrl, image.id, image.storageKey);
+        return stored
+            ? { id: image.id, dataUrl: stored.url, seed: image.seed, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType }
+            : image;
+    }));
+}
+
+async function syncCanvasImageTask(task: CanvasImageTask, resultId = task.started_at): Promise<CanvasImageTask> {
+    const status = (task.status || "").toLowerCase();
+    if (status && !["completed", "complete", "done", "succeeded", "success"].includes(status)) return task;
+    const urls = [...new Set([...(task.image_urls || []), task.image_url || task.url || ""].map((url) => url.trim()).filter(Boolean))];
+    const imageStorage = await Promise.all(urls.map((url, index) => autoSyncImage(url, `${task.id}:${resultId || "result"}:${index}`, index === 0 ? task.storageKey : undefined)));
+    if (!imageStorage.some(Boolean)) return task;
+    const syncedUrls = urls.map((url, index) => imageStorage[index]?.url || url);
+    const stored = imageStorage[0];
+    return {
+        ...task,
+        ...(stored ? { storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType } : {}),
+        url: syncedUrls[0],
+        image_url: syncedUrls[0],
+        ...(task.image_urls?.length ? { image_urls: syncedUrls } : {}),
+        imageStorage,
+    };
+}
+
 export async function requestGeneration(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string) {
     try {
         const images = await requestImages(config, prompt, []);
         refreshRemoteUser(config);
-        return images;
+        return syncGeneratedImages(images);
     } catch (error) {
         if (error instanceof ImageRequestError) throw error;
         throw new Error(error instanceof Error ? error.message : "请求失败");
@@ -1029,7 +1058,7 @@ export async function requestEdit(config: AiConfig & { seedIndex?: number; seedC
     try {
         const images = await requestImages(config, prompt, references);
         refreshRemoteUser(config);
-        return images;
+        return syncGeneratedImages(images);
     } catch (error) {
         if (error instanceof ImageRequestError) throw error;
         throw new Error(error instanceof Error ? error.message : "请求失败");
@@ -1041,7 +1070,7 @@ export async function createCanvasImageTask(config: AiConfig & { seedIndex?: num
         const images = await requestImages({ ...config, count: "1" }, prompt, references);
         const [image] = images;
         if (!image) throw new Error("接口没有返回图片");
-        return {
+        return syncCanvasImageTask({
             id: options.clientTaskId || nanoid(),
             source: options.source || "canvas",
             source_id: options.sourceId || "",
@@ -1052,7 +1081,7 @@ export async function createCanvasImageTask(config: AiConfig & { seedIndex?: num
             progress: 100,
             image_url: image.dataUrl,
             ...(isKIESeedreamLayerDecompositionModel(config.model) ? { image_urls: images.map((item) => item.dataUrl) } : {}),
-        };
+        }, image.id);
     }
     const params = createImageRequestParams({ ...config, count: "1" });
     const request = await createCanvasImageTaskRequest({ ...config, count: "1" }, prompt, references, params, options);
@@ -1064,7 +1093,7 @@ export async function createCanvasImageTask(config: AiConfig & { seedIndex?: num
     const payload = (await response.json()) as { code?: number; msg?: string; data?: CanvasImageTask };
     if (payload.code !== 0 || !payload.data) throw new ImageRequestError(payload.msg || "图片任务创建失败", payload);
     refreshRemoteUser(config);
-    return payload.data;
+    return syncCanvasImageTask(payload.data);
 }
 
 export async function pollCanvasImageTaskStatus(taskId: string): Promise<CanvasImageTask> {
@@ -1079,7 +1108,7 @@ export async function pollCanvasImageTaskStatus(taskId: string): Promise<CanvasI
     }
     const payload = (await response.json()) as { code?: number; msg?: string; data?: CanvasImageTask };
     if (payload.code !== 0 || !payload.data) throw new ImageRequestError(payload.msg || "读取图片任务失败", payload);
-    return payload.data;
+    return syncCanvasImageTask(payload.data);
 }
 
 async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[], params: ImageRequestParams, options: CanvasImageTaskOptions): Promise<RequestInit> {
@@ -1325,7 +1354,7 @@ function geminiImageSettings(model: string, quality: string, size: string, resol
     const aspectRatio = normalizeGeminiImageRatio(size);
     const normalizedQuality = quality.trim().toLowerCase();
     const preset = `${size} ${resolvedSize || ""}`.toLowerCase();
-    const imageSize = normalizedQuality === "low" ? "1K" : normalizedQuality === "medium" ? "2K" : normalizedQuality === "high" ? "4K" : preset.includes("6272x2688") || preset.includes("3840x2160") || preset.includes("2160x3840") ? "4K" : preset.includes("2048x") || preset.includes("3136x1344") ? "2K" : "";
+    const imageSize = normalizedQuality === "low" ? "1K" : normalizedQuality === "medium" ? "2K" : normalizedQuality === "high" || normalizedQuality === "xhigh" || normalizedQuality === "max" ? "4K" : preset.includes("6272x2688") || preset.includes("3840x2160") || preset.includes("2160x3840") ? "4K" : preset.includes("2048x") || preset.includes("3136x1344") ? "2K" : "";
     return {
         ...(aspectRatio ? { aspectRatio } : {}),
         ...(!model.toLowerCase().includes("2.5") && imageSize ? { imageSize } : {}),
@@ -1472,6 +1501,8 @@ function applyAgnesImageSize(
         low: "2K",
         medium: "3K",
         high: "4K",
+        xhigh: "4K",
+        max: "4K",
     } as Record<string, string>)[params.quality] || "1K";
     body.ratio = normalizeAgnesImage21Ratio(config.size);
 }

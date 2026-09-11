@@ -1,13 +1,7 @@
-import type { CanvasAgentConfig, CanvasAgentProtocolMessage, CanvasAssistantSession } from "../types";
+import { MAX_CANVAS_AGENT_SKILLS, type CanvasAgentConfig, type CanvasAgentProtocolMessage, type CanvasAgentSkillSelection, type CanvasAssistantSession } from "../types";
 
-export const MAX_CANVAS_AGENT_SKILLS = 5;
-
-export type CanvasAgentSkillSelection = {
-    id: string;
-    name: string;
-    description?: string;
-    source: "system" | "user" | "builtin" | "admin";
-};
+export { MAX_CANVAS_AGENT_SKILLS };
+export type { CanvasAgentSkillSelection };
 
 export type CanvasAgentConfigCompat = CanvasAgentConfig & {
     textApiMode?: "chat" | "responses";

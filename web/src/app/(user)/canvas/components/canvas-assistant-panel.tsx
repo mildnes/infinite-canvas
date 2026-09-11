@@ -2,7 +2,7 @@
 
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { History, Bot, Copy, PanelRightClose, Plus, RotateCcw, Settings2, Sparkles, Trash2, Video, X } from "lucide-react";
-import { App, Button, Modal, Switch, Tooltip } from "antd";
+import { App, Button, Modal, Segmented, Switch, Tooltip } from "antd";
 import { motion } from "motion/react";
 import { nanoid } from "nanoid";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -49,7 +49,7 @@ type CanvasAssistantPanelProps = {
     onExecuteAction: (action: CanvasAgentAction, messageReferenceNodeIds: string[]) => Promise<CanvasAgentToolResult>;
     onCollapseStart: () => void;
     onCollapse: () => void;
-    initialRequest?: { prompt: string; references: CanvasAssistantReference[] } | null;
+    initialRequest?: { prompt: string; references: CanvasAssistantReference[]; skills?: CanvasAgentSkillSelection[] } | null;
     onInitialRequestConsumed?: () => void;
 };
 
@@ -279,6 +279,7 @@ export function CanvasAssistantPanel({
             ...effectiveConfig,
             model: effectiveConfig.textModel || effectiveConfig.model,
             apiMode: compatConfig.textApiMode || "chat",
+            textReasoningEnabled: agentConfig.textReasoningEnabled === true,
             activeChannelId: effectiveConfig.textChannelId || effectiveConfig.activeChannelId,
             textChannelId: effectiveConfig.textChannelId,
         };
@@ -377,7 +378,7 @@ export function CanvasAssistantPanel({
         if (!initialRequest || consumedInitialRequestRef.current === initialRequest) return;
         consumedInitialRequestRef.current = initialRequest;
         onInitialRequestConsumed?.();
-        void sendMessage(initialRequest.prompt, initialRequest.references);
+        void sendMessage(initialRequest.prompt, initialRequest.references, initialRequest.skills);
     }, [initialRequest, onInitialRequestConsumed]);
 
     const submit = async () => {
@@ -534,7 +535,7 @@ export function CanvasAssistantPanel({
                             skills={skillOptions}
                             selectedSkills={selectedSkills}
                             onSelectSkill={selectSkill}
-                            onRemoveSkill={(id) => setSelectedSkills((current) => current.filter((skill) => skill.id !== id))}
+                            onRemoveSkill={(id, source) => setSelectedSkills((current) => current.filter((skill) => skill.id !== id || skill.source !== source))}
                             onSelectLibrarySkill={selectSkill}
                             onRemoveLibrarySkill={(id, source) => setSelectedSkills((current) => current.filter((skill) => skill.id !== id || skill.source !== source))}
                             agentConfig={agentConfig}
@@ -568,6 +569,17 @@ export function CanvasAssistantPanel({
                         </Button>
                     }
                 >
+                    <div className="flex items-center justify-between gap-6 py-2">
+                        <div className="min-w-0">
+                            <div className="text-sm font-medium">文本接口</div>
+                            <div className="mt-1 text-xs leading-5 opacity-55">选择使用 Chat Completions 或 Responses 接口</div>
+                        </div>
+                        <Segmented
+                            value={compatConfig.textApiMode || "chat"}
+                            options={[{ label: "Chat", value: "chat" }, { label: "Responses", value: "responses" }]}
+                            onChange={(textApiMode) => onAgentConfigChange({ textApiMode: textApiMode as CanvasAgentConfig["textApiMode"] })}
+                        />
+                    </div>
                     <div className="flex items-center justify-between gap-6 py-2">
                         <div className="min-w-0">
                             <div className="text-sm font-medium">自动生成图片/视频/音频</div>

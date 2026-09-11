@@ -8,6 +8,7 @@ import { localForageStorage } from "@/lib/localforage-storage";
 import { cleanupUnusedImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { cleanupUnusedMedia, resolveMediaUrl } from "@/services/file-storage";
 import { fetchUserAssetData, syncUserAssetData } from "@/services/api/user-config";
+import { useUserStore } from "@/stores/use-user-store";
 
 export type AssetKind = "text" | "image" | "video" | "audio";
 export type TextAsset = AssetBase<"text"> & { data: { content: string } };
@@ -37,7 +38,7 @@ type AssetStore = {
     hydrateAccountAssets: (token: string, syncEnabled?: boolean) => Promise<void>;
     syncAccountAssets: (token: string) => Promise<void>;
     stopAccountAssetSync: () => void;
-    cleanupImages: (extra?: unknown) => void;
+    cleanupImages: (extra?: unknown, storageKeys?: ReadonlyMap<string, string>, ownerToken?: string) => void;
 };
 
 const ASSET_STORE_KEY = "infinite-canvas:asset_store";
@@ -200,9 +201,11 @@ export const useAssetStore = create<AssetStore>()(
                 if (syncTimer) window.clearTimeout(syncTimer);
                 syncTimer = null;
             },
-            cleanupImages: (extra) => {
+            cleanupImages: (extra, storageKeys, ownerToken) => {
+                const cleanupOwnerToken = ownerToken === undefined ? useUserStore.getState().token : ownerToken;
                 window.setTimeout(async () => {
                     const { useCanvasStore } = await import("@/app/(user)/canvas/stores/use-canvas-store");
+                    const { useAgentSkillStore } = await import("@/stores/use-agent-skill-store");
                     const logKeys: string[] = [];
                     try {
                         const localforage = (await import("localforage")).default;
@@ -238,8 +241,19 @@ export const useAssetStore = create<AssetStore>()(
                         console.error("Error gathering log keys in cleanupImages", e);
                     }
 
-                    await cleanupUnusedImages({ assets: get().assets, projects: useCanvasStore.getState().projects, extra, logKeys });
-                    await cleanupUnusedMedia({ assets: get().assets, projects: useCanvasStore.getState().projects, extra, logKeys });
+                    try {
+                        await useAgentSkillStore.getState().loadSkills();
+                        const skillStore = useAgentSkillStore.getState();
+                        const skills = [...skillStore.systemSkills, ...skillStore.userSkills];
+                        const cleanupData = { assets: get().assets, projects: useCanvasStore.getState().projects, skills, extra, logKeys };
+                        await cleanupUnusedImages(cleanupData, storageKeys, cleanupOwnerToken);
+                        // Cloud keys are provider-agnostic and are deleted by the
+                        // first pass. The media pass still sweeps local video/audio
+                        // stores, but must not issue a duplicate cloud DELETE.
+                        await cleanupUnusedMedia(cleanupData, new Map(), cleanupOwnerToken);
+                    } catch (error) {
+                        console.error("Error gathering Skill keys in cleanupImages", error);
+                    }
                 }, 0);
             },
         }),

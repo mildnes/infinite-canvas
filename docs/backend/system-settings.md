@@ -111,6 +111,7 @@ description: settings 表中 public 和 private 配置结构说明
 | `channels` | object[] | 模型渠道列表 |
 | `promptSync` | object | GitHub 远程提示词定时同步配置 |
 | `agent.mcpServers` | object[] | MCP 服务私有配置，包含传输和密钥；仅管理员接口可读 |
+| `storage.autoSyncAllAssets` | boolean | 是否自动把新上传和生成的媒体同步到可用云存储，默认关闭；同步失败保留原始素材 |
 
 `channels` 每项字段：
 

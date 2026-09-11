@@ -731,6 +731,8 @@ function VideoNodeContent(props: NodeContentRendererProps) {
     const videoRef = useRef<HTMLVideoElement>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [mediaDurationMs, setMediaDurationMs] = useState(0);
+    const [videoTime, setVideoTime] = useState(0);
+    const videoDuration = mediaDurationMs / 1000;
     const togglePlayback = () => {
         const video = videoRef.current;
         if (!video) return;
@@ -759,7 +761,7 @@ function VideoNodeContent(props: NodeContentRendererProps) {
     };
     return (
         <div className="relative h-full w-full overflow-hidden rounded-[18px] bg-black" data-canvas-no-zoom>
-            <video ref={videoRef} src={mediaPlaybackUrl(node.metadata.content)} tabIndex={-1} playsInline preload="metadata" className="h-full w-full object-contain outline-none" onLoadedMetadata={(event) => setMediaDurationMs(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration * 1000 : 0)} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} onKeyDown={(event) => { if (isSelected && event.code === "Space") { event.preventDefault(); event.stopPropagation(); togglePlayback(); } }} />
+            <video ref={videoRef} src={mediaPlaybackUrl(node.metadata.content)} tabIndex={-1} playsInline preload="metadata" className="h-full w-full object-contain outline-none" onLoadStart={() => { setVideoTime(0); setMediaDurationMs(0); }} onLoadedMetadata={(event) => setMediaDurationMs(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration * 1000 : 0)} onTimeUpdate={(event) => setVideoTime(event.currentTarget.currentTime)} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} onKeyDown={(event) => { if (isSelected && event.code === "Space") { event.preventDefault(); event.stopPropagation(); togglePlayback(); } }} />
             {mediaDurationMs > 0 ? <span className="pointer-events-none absolute left-2 top-2 z-20 flex h-7 items-center justify-center rounded-md px-2 text-[11px] font-medium opacity-70 backdrop-blur" style={controlStyle}>{new Date(mediaDurationMs).toISOString().slice(mediaDurationMs >= 3_600_000 ? 11 : 14, 19)}</span> : null}
             <button type="button" title={isPlaying ? "暂停" : "播放"} aria-label={isPlaying ? "暂停" : "播放"} className={`${controlClassName} left-2`} style={controlStyle} onClick={(event) => { event.stopPropagation(); togglePlayback(); }} onMouseDown={keepVideoFocus} onDoubleClick={(event) => event.stopPropagation()}>
                 {isPlaying ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
@@ -767,6 +769,26 @@ function VideoNodeContent(props: NodeContentRendererProps) {
             <button type="button" title="放大预览" aria-label="放大预览" className={`${controlClassName} right-2`} style={controlStyle} onClick={(event) => { event.stopPropagation(); videoRef.current?.pause(); onViewImage?.(node); }} onMouseDown={keepVideoFocus} onDoubleClick={(event) => event.stopPropagation()}>
                 <Maximize2 className="size-3.5" />
             </button>
+            <div className="absolute bottom-2 left-11 right-11 z-20 flex h-7 items-center" onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()}>
+                <input
+                    type="range"
+                    min={0}
+                    max={videoDuration}
+                    step="0.01"
+                    value={Math.min(videoTime, videoDuration)}
+                    disabled={videoDuration <= 0}
+                    aria-label="视频进度"
+                    onChange={(event) => {
+                        if (!videoRef.current) return;
+                        const time = event.currentTarget.valueAsNumber;
+                        videoRef.current.currentTime = time;
+                        setVideoTime(time);
+                    }}
+                    onPointerUp={() => videoRef.current?.focus({ preventScroll: true })}
+                    className="pointer-events-auto block h-1 w-full cursor-pointer appearance-none rounded-full focus-visible:outline-none [&::-moz-range-thumb]:size-3 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-white [&::-webkit-slider-thumb]:size-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
+                    style={{ background: `linear-gradient(to right, ${theme.toolbar.item} ${videoDuration > 0 ? Math.min(videoTime / videoDuration, 1) * 100 : 0}%, rgba(255,255,255,0.35) 0)` }}
+                />
+            </div>
             {node.metadata?.mediaStatus === "local-only" ? <LocalOnlyBadge /> : null}
         </div>
     );

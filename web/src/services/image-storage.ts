@@ -4,6 +4,8 @@ import localforage from "localforage";
 
 import { nanoid } from "nanoid";
 import { readImageMeta } from "@/lib/image-utils";
+import { storageKeyFromContentUrl } from "@/lib/storage-reference";
+import { StorageSyncDeduper } from "@/lib/storage-sync-deduper";
 import { deleteAnonymousStorageFile, uploadAnonymousStorageFile } from "@/services/anonymous-storage";
 import { apiGet } from "@/services/api/request";
 import { useUserStore } from "@/stores/use-user-store";
@@ -50,6 +52,7 @@ export type StorageConfig = {
     mode: string;
     allowUserProvider: boolean;
     allowUserGlobalProvider: boolean;
+    autoSyncAllAssets: boolean;
 };
 
 const store = localforage.createInstance({ name: "infinite-canvas", storeName: "image_files" });
@@ -58,10 +61,102 @@ const serverUrls = new Map<string, string>();
 export const USER_STORAGE_PROVIDER_KEY = "infinite-canvas:user_storage_provider";
 export const USER_WEBDAV_STORAGE_PROVIDER_KEY = "infinite-canvas:user_webdav_storage_provider";
 let storageConfigPromise: Promise<StorageConfig> | null = null;
+export const STORAGE_SYNC_FAILED_EVENT = "infinite-canvas:storage-sync-failed";
+export const STORAGE_SYNC_COMPLETED_EVENT = "infinite-canvas:storage-sync-completed";
+type AutoSyncResult = { storageKey: string; url?: string };
+const autoSyncRequests = new StorageSyncDeduper<AutoSyncResult>();
+const autoSyncBlobIds = new WeakMap<Blob, string>();
+let autoSyncBlobSequence = 0;
+let autoSyncOwner = "";
+
+function storageProviderIdentity(config: StorageConfig) {
+    const provider = config.allowUserProvider ? loadUserStorageProvider() : null;
+    return JSON.stringify({
+        mode: config.mode,
+        allowUserProvider: config.allowUserProvider,
+        allowUserGlobalProvider: config.allowUserGlobalProvider,
+        provider: provider?.type === "s3"
+            ? { type: provider.type, endpoint: provider.endpoint, region: provider.region, bucket: provider.bucket, publicBaseUrl: provider.publicBaseUrl, pathPrefix: provider.pathPrefix }
+            : provider
+                ? { type: provider.type, endpoint: provider.endpoint, pathPrefix: provider.pathPrefix, username: provider.username }
+                : null,
+    });
+}
+
+function autoSyncIdentity(config: StorageConfig) {
+    const token = useUserStore.getState().token || "anonymous";
+    return `${token}:${storageProviderIdentity(config)}`;
+}
+
+/**
+ * Upload a generated/derived result once when the administrator enables
+ * automatic cloud synchronization. The caller keeps its original local or
+ * remote media whenever this returns null.
+ */
+export async function autoSyncToCloud<T extends AutoSyncResult>(source: string | Blob, upload: () => Promise<T | null>): Promise<T | null> {
+    const config = await loadStorageConfig().catch(() => null);
+    if (!config?.autoSyncAllAssets || (!canUseGlobalStorage(config) && !(config.allowUserProvider && loadUserStorageProvider()))) return null;
+
+    const ownerToken = useUserStore.getState().token;
+    const owner = autoSyncIdentity(config);
+    if (autoSyncOwner !== owner) {
+        autoSyncRequests.clear();
+        autoSyncOwner = owner;
+    }
+    let sourceId: string;
+    if (typeof source === "string") {
+        sourceId = source;
+    } else {
+        sourceId = autoSyncBlobIds.get(source) || `blob:${++autoSyncBlobSequence}`;
+        autoSyncBlobIds.set(source, sourceId);
+    }
+    const key = `${owner}:${sourceId}`;
+    const result = await autoSyncRequests.run(key, () => upload().catch((error) => {
+        reportStorageSyncFailure(error);
+        return null;
+    }), typeof source === "string") as T | null;
+    if (result?.storageKey.startsWith("server:") && typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent(STORAGE_SYNC_COMPLETED_EVENT, { detail: { storageKey: result.storageKey, url: result.url || "", ownerToken } }));
+    }
+    return result;
+}
+
+export function clearAutoSyncCache(storageKey?: string) {
+    if (!storageKey) {
+        autoSyncRequests.clear();
+        autoSyncOwner = "";
+        return;
+    }
+    autoSyncRequests.deleteResult((result) => result.storageKey === storageKey);
+}
+
+function reportStorageSyncFailure(error: unknown) {
+    if (typeof window === "undefined") return;
+    const message = error instanceof Error ? error.message : "云端同步失败，已保留原始素材";
+    window.dispatchEvent(new CustomEvent(STORAGE_SYNC_FAILED_EVENT, { detail: message }));
+}
 
 export function canUseGlobalStorage(config: StorageConfig) {
     const user = useUserStore.getState().user;
     return config.mode === "server_sqlite_s3" && Boolean(user && user.role !== "guest" && (user.role === "admin" || config.allowUserGlobalProvider));
+}
+
+export async function autoSyncImage(url: string, resultId: string, storageKey?: string): Promise<UploadedImage | null> {
+    if (!url || storageKey) return null;
+    return autoSyncToCloud(`image:${resultId}`, async () => {
+        try {
+            return await uploadRemoteImageToServer(url, "image");
+        } catch (error) {
+            // Keep data/blob results usable even if the cloud provider rejects
+            // the upload. The caller receives a local IndexedDB reference.
+            if (url.startsWith("data:") || url.startsWith("blob:")) {
+                const local = await uploadImage(url, { localOnly: true });
+                reportStorageSyncFailure(error);
+                return local;
+            }
+            throw error;
+        }
+    });
 }
 
 function isLocalNetworkHost(hostname: string) {
@@ -182,6 +277,7 @@ export async function uploadRemoteImageToServer(url: string, filename: string): 
 
 export function clearStorageConfigCache() {
     storageConfigPromise = null;
+    clearAutoSyncCache();
 }
 
 export async function resolveImageUrl(storageKey?: string, fallback = "") {
@@ -354,7 +450,7 @@ export async function imageToDataUrl(image: { url?: string; dataUrl?: string; st
     throw new Error(lastError || "读取参考图失败");
 }
 
-export async function deleteStoredImages(keys: Iterable<string>) {
+export async function deleteStoredImages(keys: Iterable<string>, ownerToken?: string) {
     const { useAssetStore } = await import("@/stores/use-asset-store");
     const assetKeys = new Set(
         useAssetStore.getState().assets
@@ -363,7 +459,7 @@ export async function deleteStoredImages(keys: Iterable<string>) {
     );
     await Promise.all(
         Array.from(new Set(keys)).map(async (key) => {
-            if (assetKeys.has(key)) return;
+            if (assetKeys.has(key) || (ownerToken !== undefined && useUserStore.getState().token !== ownerToken)) return;
             if (key.startsWith("server:")) {
                 await deleteServerImage(key);
                 return;
@@ -372,27 +468,49 @@ export async function deleteStoredImages(keys: Iterable<string>) {
             if (url) URL.revokeObjectURL(url);
             objectUrls.delete(key);
             await store.removeItem(key);
+            clearAutoSyncCache(key);
         }),
     );
 }
 
-export async function cleanupUnusedImages(usedData: unknown) {
-    const usedKeys = collectImageStorageKeys(usedData);
-    const unused: string[] = [];
+export async function cleanupUnusedImages(usedData: unknown, storageKeys: ReadonlyMap<string, string> = new Map(), ownerToken?: string) {
+    const usedKeys = collectImageStorageKeys(usedData, new Set(), storageKeys);
+    const cloudUnused = Array.from(new Set(storageKeys.values())).filter((key) => key.startsWith("server:") && !usedKeys.has(key));
+    const localUnused: string[] = [];
     await store.iterate((_value, key) => {
-        if (!usedKeys.has(key)) unused.push(key);
+        if (!usedKeys.has(key)) localUnused.push(key);
     });
-    await deleteStoredImages(unused);
+    await deleteStoredImages(cloudUnused, ownerToken);
+    await Promise.all(Array.from(new Set(localUnused)).map(async (key) => {
+        const url = objectUrls.get(key);
+        if (url) URL.revokeObjectURL(url);
+        objectUrls.delete(key);
+        if (key.startsWith("server:")) serverUrls.delete(key.slice("server:".length));
+        await store.removeItem(key);
+        clearAutoSyncCache(key);
+    }));
 }
 
-export function collectImageStorageKeys(value: unknown, keys = new Set<string>()) {
+export function collectImageStorageKeys(value: unknown, keys = new Set<string>(), knownUrls?: ReadonlyMap<string, string>, capturedUrls?: Map<string, string>) {
     if (typeof value === "string") {
         if (value.startsWith("image:") || value.startsWith("server:")) keys.add(value);
+        const inferredKey = storageKeyFromContentUrl(value);
+        if (inferredKey) keys.add(inferredKey);
+        const referencedKey = knownUrls?.get(value);
+        if (referencedKey) keys.add(referencedKey);
         return keys;
     }
     if (!value || typeof value !== "object") return keys;
-    if ("storageKey" in value && typeof value.storageKey === "string" && (value.storageKey.startsWith("image:") || value.storageKey.startsWith("server:"))) keys.add(value.storageKey);
-    Object.values(value).forEach((item) => (Array.isArray(item) ? item.forEach((child) => collectImageStorageKeys(child, keys)) : collectImageStorageKeys(item, keys)));
+    if ("storageKey" in value && typeof value.storageKey === "string" && (value.storageKey.startsWith("image:") || value.storageKey.startsWith("server:"))) {
+        keys.add(value.storageKey);
+        if (capturedUrls) {
+            for (const field of ["content", "url", "dataUrl"]) {
+                const url = (value as Record<string, unknown>)[field];
+                if (typeof url === "string" && url) capturedUrls.set(url, value.storageKey);
+            }
+        }
+    }
+    Object.values(value).forEach((item) => (Array.isArray(item) ? item.forEach((child) => collectImageStorageKeys(child, keys, knownUrls, capturedUrls)) : collectImageStorageKeys(item, keys, knownUrls, capturedUrls)));
     return keys;
 }
 
@@ -454,10 +572,12 @@ export function loadUserStorageProvider(): UserStorageProvider | null {
 
 export function saveUserStorageProvider(provider: UserS3StorageProvider) {
     window.localStorage.setItem(USER_STORAGE_PROVIDER_KEY, JSON.stringify({ ...defaultUserStorageProvider(), ...provider, type: "s3" }));
+    clearAutoSyncCache();
 }
 
 export function saveUserWebDAVStorageProvider(provider: UserWebDAVStorageProvider) {
     window.localStorage.setItem(USER_WEBDAV_STORAGE_PROVIDER_KEY, JSON.stringify({ ...defaultUserWebDAVStorageProvider(), ...provider, type: "webdav" }));
+    clearAutoSyncCache();
 }
 
 function validS3Provider(provider: UserS3StorageProvider) {
@@ -504,6 +624,7 @@ async function deleteServerImage(storageKey: string) {
     if (provider?.type === "webdav") {
         const direct = await import("@/services/webdav-direct-storage");
         if (await direct.deletePersistedDirectWebDAV(provider, storageKey)) {
+            clearAutoSyncCache(storageKey);
             const url = objectUrls.get(storageKey);
             if (url) URL.revokeObjectURL(url);
             objectUrls.delete(storageKey);
@@ -514,6 +635,7 @@ async function deleteServerImage(storageKey: string) {
     if (!token) {
         if (!provider) return;
         await deleteAnonymousStorageFile(id, toProviderPayload(provider));
+        clearAutoSyncCache(storageKey);
         const url = objectUrls.get(storageKey);
         if (url) URL.revokeObjectURL(url);
         objectUrls.delete(storageKey);
@@ -527,6 +649,7 @@ async function deleteServerImage(storageKey: string) {
     });
     const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string } | null;
     if (!response.ok || payload?.code !== 0) throw new Error(payload?.msg || "删除服务端图片失败");
+    clearAutoSyncCache(storageKey);
 }
 
 function blobToDataUrl(blob: Blob) {

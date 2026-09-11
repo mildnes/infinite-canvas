@@ -5,6 +5,14 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
+- 图片工作台、画布节点配置和 Agent 图片设置应统一显示低、中、高、极高、最高、自动六档；生成、重试和恢复后保留原选择。
+- 通用图片接口应分别收到 `low`、`medium`、`high`、`xhigh`、`max`、`auto`；Gemini、智谱、Agnes、Grok2API/xAI 等固定枚举渠道应映射为合法最高档，`xhigh/max` 不得退回 `auto`。
+- 首页通过 `/` 或 Skill 弹窗选择 builtin/admin/system/user Skill 后进入画布，首轮 Agent 请求应继续使用所选 Skill；旧项目没有 `skills` 字段时仍可打开。
+- Agent 推理关闭时请求体保持原样；开启后验证 Chat、Responses、Gemini、MiMo 的推理参数，并确认 Grok2API/xAI 渠道、模型和路由不变。
+- 视频节点进度条应支持点击和拖动定位且不拖动画布；媒体源替换后进度归零。含音轨视频可生成并连接 WAV 音频节点，无音轨时不得生成空节点。
+- 音频截取范围不得短于 0.5 秒，试听到选定终点自动停止；本地、`server:`、WebDAV 和远程媒体均可处理，失败后不残留加载状态或错误连线。
+- 自动同步关闭时保持现有行为；开启后图片、视频、音频和派生 WAV 只上传一次并保留云端元数据，同步失败时原始 URL、Blob、Base64 或本地键仍可用且只提示一次。
+- 媒体恢复不应产生重复上传；仍被撤销/重做历史、其他画布、素材库、生成日志、Skill 或 Agent 会话引用的文件不得删除。redo 覆盖、历史超过 50 步、离开画布、账号切换及迟到同步时只清理真正无引用的文件。
 - 配置 `grok2api` 或 `xai` 渠道后，画布用 grok-imagine-image / grok-imagine-video 系列模型生成图片、视频，确认路由、字段和轮询结果识别正常。
 - 管理端/本地渠道协议下拉可选 `Grok2API`、`xAI`，保存后渠道协议字段正确落库。
 - grok2api 渠道经 `/api/v1/tts` 调用 TTS，确认 `language` 缺省为 `en`；`/audio/speech` 保持 OpenAI 字段透传；音色列表可从 `/tts/voices` 拉取。

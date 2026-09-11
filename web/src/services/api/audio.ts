@@ -6,7 +6,8 @@ import { isGrok2APITtsConfig, normalizeGrokTtsFormat, normalizeGrokTtsLanguage, 
 import { isMimoPresetTtsModel, isMimoTtsModel, isMimoVoiceCloneModel, isMimoVoiceDesignModel, normalizeMimoTtsFormat, normalizeMimoTtsVoice } from "@/lib/mimo-tts";
 import { geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig, isGeminiTtsModel } from "@/lib/gemini";
 import { geminiPcmBase64ToWav, normalizeGeminiTtsVoice } from "@/lib/gemini-tts";
-import { resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
+import { resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer, type UploadedFile } from "@/services/file-storage";
+import { autoSyncToCloud } from "@/services/image-storage";
 import { buildApiUrl, channelIdForActiveModel, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceAudio } from "@/types/media";
@@ -121,9 +122,9 @@ export async function requestAudioGeneration(config: AiConfig, prompt: string, r
     }
 }
 
-export async function storeGeneratedAudio(blob: Blob, format = "mp3"): Promise<UploadedFile> {
+export async function storeGeneratedAudio(blob: Blob, format = "mp3", syncId?: string): Promise<UploadedFile> {
     const audio = blob.type.startsWith("audio/") ? blob : new Blob([blob], { type: audioMimeType(format) });
-    return uploadMediaFile(audio, "audio");
+    return uploadMediaFile(audio, "audio", syncId);
 }
 
 export async function createCanvasAudioTask(config: AiConfig, prompt: string, options: CanvasAudioTaskOptions = {}, referenceAudio?: ReferenceAudio): Promise<CanvasAudioTask> {
@@ -131,12 +132,13 @@ export async function createCanvasAudioTask(config: AiConfig, prompt: string, op
     assertAudioConfig(config, model);
 
     if (!usesAccountProxy(config) || isGeminiTtsModel(model) && isGeminiConfig(config, model)) {
+        const localTaskId = options.clientTaskId || `local_audio_task_${nanoid()}`;
         const blob = await requestAudioGeneration(config, prompt, referenceAudio);
         const format = audioResponseFormat(config, model);
-        const stored = await storeGeneratedAudio(blob, format);
+        const stored = await storeGeneratedAudio(blob, format, `audio:${localTaskId}`);
         const now = new Date().toISOString();
         return {
-            id: options.clientTaskId || `local_audio_task_${nanoid()}`,
+            id: localTaskId,
             status: "completed",
             progress: 100,
             url: stored.url,
@@ -168,7 +170,7 @@ export async function createCanvasAudioTask(config: AiConfig, prompt: string, op
     const payload = (await response.json()) as { code?: number; msg?: string; data?: CanvasAudioTask };
     if (payload.code !== 0 || !payload.data) throw new Error(payload.msg || "音频任务创建失败");
     refreshRemoteUser(config);
-    return payload.data;
+    return syncGeneratedAudio(payload.data);
 }
 
 export async function pollCanvasAudioTaskStatus(taskId: string): Promise<CanvasAudioTask> {
@@ -180,7 +182,15 @@ export async function pollCanvasAudioTaskStatus(taskId: string): Promise<CanvasA
     if (!response.ok) throw new Error(await readFetchError(response, "读取音频任务失败"));
     const payload = (await response.json()) as { code?: number; msg?: string; data?: CanvasAudioTask };
     if (payload.code !== 0 || !payload.data) throw new Error(payload.msg || "读取音频任务失败");
-    return payload.data;
+    return syncGeneratedAudio(payload.data);
+}
+
+async function syncGeneratedAudio(task: CanvasAudioTask, resultId = task.started_at): Promise<CanvasAudioTask> {
+    const url = task.audio_url || task.url || "";
+    const status = (task.status || "").toLowerCase();
+    if ((status && !["completed", "complete", "done", "succeeded", "success"].includes(status)) || !url || task.storageKey) return task;
+    const media = await autoSyncToCloud(`audio:${task.id}:${resultId || "result"}`, () => uploadRemoteMediaToServer(url, "audio"));
+    return media ? { ...task, url: media.url, audio_url: media.url, storageKey: media.storageKey, bytes: media.bytes, mimeType: media.mimeType } : task;
 }
 
 async function buildAudioSpeechRequest(config: AiConfig, model: string, prompt: string, referenceAudio?: ReferenceAudio) {

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { App, Modal, Segmented, Tooltip } from "antd";
-import { Download, Ellipsis, FolderPlus, Image as ImageIcon, Info, MessageSquare, Minus, Music2, Pencil, Plus, RefreshCw, Settings2, Trash2, Upload, Video } from "lucide-react";
+import { Download, Ellipsis, FolderPlus, Image as ImageIcon, Info, MessageSquare, Minus, Music2, Pencil, Plus, RefreshCw, Scissors, Settings2, Trash2, Upload, Video } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes, getDataUrlByteSize } from "@/lib/image-utils";
@@ -25,6 +25,8 @@ type CanvasNodeHoverToolbarProps = {
     onToggleDialog: (node: CanvasNodeData) => void;
     onGenerateImage: (node: CanvasNodeData) => void;
     onUpload: (node: CanvasNodeData) => void;
+    onExtractAudio?: (node: CanvasNodeData) => void;
+    onTrimAudio?: (node: CanvasNodeData) => void;
     onDownload: (node: CanvasNodeData) => void;
     onSaveAsset: (node: CanvasNodeData) => void;
     onUploadMediaToCloud: (node: CanvasNodeData) => void;
@@ -64,6 +66,8 @@ export function CanvasNodeHoverToolbar({
     onToggleDialog,
     onGenerateImage,
     onUpload,
+    onExtractAudio,
+    onTrimAudio,
     onDownload,
     onSaveAsset,
     onUploadMediaToCloud,
@@ -128,8 +132,8 @@ export function CanvasNodeHoverToolbar({
     const isVideo = node.type === CanvasNodeType.Video;
     const isAudio = node.type === CanvasNodeType.Audio;
     const hasImage = isImage && Boolean(node.metadata?.content);
-    const hasVideo = isVideo && Boolean(node.metadata?.content);
-    const hasAudio = isAudio && Boolean(node.metadata?.content);
+    const hasVideo = isVideo && node.metadata?.mediaStatus !== "broken" && Boolean(node.metadata?.content);
+    const hasAudio = isAudio && node.metadata?.mediaStatus !== "broken" && Boolean(node.metadata?.content);
     const canUploadImageToCloud = isImage && !String(node.metadata?.storageKey || "").startsWith("server:") && Boolean(node.metadata?.content || node.metadata?.storageKey);
     const canUploadMediaToCloud = (isVideo || isAudio) && !String(node.metadata?.storageKey || "").startsWith("server:") && Boolean(node.metadata?.content || node.metadata?.storageKey);
     const isText = node.type === CanvasNodeType.Text;
@@ -163,6 +167,8 @@ export function CanvasNodeHoverToolbar({
         ...(hasImage || hasVideo || isText ? [{ id: "saveAsset", title: "加入我的素材", label: "存素材", icon: <FolderPlus className="size-4" />, onClick: () => onSaveAsset(node) }] : []),
         ...(canUploadMediaToCloud ? [{ id: "uploadMediaToCloud", title: "上传至云存储", label: "上传至云存储", icon: <Upload className="size-4" />, onClick: () => onUploadMediaToCloud(node) }] : []),
         ...(canUploadImageToCloud ? [{ id: "uploadImageToCloud", title: "上传至云存储", label: "上传至云存储", icon: <Upload className="size-4" />, onClick: () => onUploadImageToCloud(node) }] : []),
+        ...(hasVideo && onExtractAudio ? [{ id: "extractAudio", title: "分离音频", label: "分离音频", icon: <Music2 className="size-4" />, onClick: () => onExtractAudio(node) }] : []),
+        ...(hasAudio && onTrimAudio ? [{ id: "trimAudio", title: "截取音频", label: "截取", icon: <Scissors className="size-4" />, onClick: () => onTrimAudio(node) }] : []),
         ...(hasImage || hasVideo || hasAudio ? [{ id: "download", title: hasAudio ? "下载音频" : hasVideo ? "下载视频" : "下载图片", label: "下载", icon: <Download className="size-4" />, onClick: () => onDownload(node) }] : []),
         ...(canOpenDialog ? [{ id: "edit", title: "编辑", label: "编辑", icon: <MessageSquare className="size-4" />, onClick: () => onToggleDialog(node) }] : []),
         ...(isText ? [{ id: "editText", title: "编辑文本", label: "编辑文字", icon: <Pencil className="size-4" />, onClick: () => onEditText(node) }] : []),

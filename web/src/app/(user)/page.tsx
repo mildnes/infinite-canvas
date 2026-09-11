@@ -1,24 +1,30 @@
 "use client";
 
 import { ArrowRight } from "lucide-react";
-import { type ChangeEvent, useEffect, useRef, useState } from "react";
+import { type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { App, Button, Image, Tag } from "antd";
 import { nanoid } from "nanoid";
 import { useRouter } from "next/navigation";
 
 import { fetchPrompts, type Prompt } from "@/services/api/prompts";
+import { fetchAgentSettings } from "@/services/api/agent";
 import { cn } from "@/lib/utils";
 import { uploadAssetMediaFile } from "@/services/file-storage";
 import { uploadImage } from "@/services/image-storage";
 import { useEffectiveConfig } from "@/stores/use-config-store";
+import { useUserStore } from "@/stores/use-user-store";
 import { AssetPickerModal } from "./canvas/components/asset-picker-modal";
 import { CanvasAssistantComposer } from "./canvas/components/canvas-assistant-composer";
+import { BUILTIN_CANVAS_AGENT_SKILLS } from "./canvas/agent/canvas-agent-skills";
 import { resolveCanvasAgentImageSelection } from "./canvas/agent/canvas-agent-image-model";
 import { useCanvasStore } from "./canvas/stores/use-canvas-store";
 import { HomeBannerCarousel, type HomeBanner } from "./home-banner-carousel";
 import {
     CanvasNodeType,
+    MAX_CANVAS_AGENT_SKILLS,
     type CanvasAgentConfig,
+    type CanvasAgentSkillReference,
+    type CanvasAgentSkillSelection,
     type CanvasAssistantReference,
     type InsertAssetPayload,
     type PendingAgentAsset,
@@ -51,6 +57,7 @@ export default function IndexPage() {
     const { message } = App.useApp();
     const router = useRouter();
     const effectiveConfig = useEffectiveConfig();
+    const authToken = useUserStore((state) => state.token);
     const createProject = useCanvasStore((state) => state.createProject);
     const hydrated = useCanvasStore((state) => state.hydrated);
     const [promptShowcase, setPromptShowcase] = useState<Prompt[]>([]);
@@ -58,10 +65,13 @@ export default function IndexPage() {
     const [previewOpen, setPreviewOpen] = useState(false);
     const [prompt, setPrompt] = useState("");
     const [pendingAssets, setPendingAssets] = useState<PendingAgentAsset[]>([]);
+    const [selectedSkills, setSelectedSkills] = useState<CanvasAgentSkillSelection[]>([]);
+    const [adminSkills, setAdminSkills] = useState<CanvasAgentSkillReference[]>([]);
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [agentConfig, setAgentConfig] = useState<CanvasAgentConfig>(() => ({
         textApiMode: "chat",
+        textReasoningEnabled: false,
         autoGenerateMedia: false,
         imageModel: effectiveConfig.imageModel,
         imageChannelId: effectiveConfig.imageChannelId,
@@ -71,6 +81,30 @@ export default function IndexPage() {
         videoSize: effectiveConfig.videoSize,
     }));
     const uploadInputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        let cancelled = false;
+        if (!authToken) {
+            setAdminSkills([]);
+            return;
+        }
+        void fetchAgentSettings(authToken)
+            .then((settings) => {
+                if (cancelled) return;
+                setAdminSkills(settings.skills.filter((skill) => skill.enabled).map(({ id, name, description }) => ({ id, name, description, source: "admin" as const })));
+            })
+            .catch(() => {
+                if (!cancelled) setAdminSkills([]);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [authToken]);
+
+    const skillOptions = useMemo<CanvasAgentSkillReference[]>(
+        () => [...BUILTIN_CANVAS_AGENT_SKILLS.map(({ prompt: _prompt, ...skill }) => skill), ...adminSkills],
+        [adminSkills],
+    );
 
     useEffect(() => {
         setAgentConfig((current) => ({ ...current, ...resolveCanvasAgentImageSelection(effectiveConfig, current) }));
@@ -122,9 +156,21 @@ export default function IndexPage() {
         for (let i = 1; titles.has(title); i++) title = `无限画布 ${i}`;
         const projectId = createProject(title, {
             agentConfig,
-            pendingAgentRequest: { prompt: text, assets: pendingAssets },
+            pendingAgentRequest: { prompt: text, assets: pendingAssets, skills: selectedSkills },
         });
         router.push(`/canvas/${projectId}`);
+    };
+
+    const selectSkill = (skill: CanvasAgentSkillSelection) => {
+        setSelectedSkills((current) => {
+            const existingIndex = current.findIndex((selected) => selected.id === skill.id && selected.source === skill.source);
+            if (existingIndex >= 0) return current.map((selected, index) => (index === existingIndex ? skill : selected));
+            if (current.length >= MAX_CANVAS_AGENT_SKILLS) {
+                message.warning(`最多选择 ${MAX_CANVAS_AGENT_SKILLS} 个 Skill`);
+                return current;
+            }
+            return [...current, skill];
+        });
     };
 
     return (
@@ -137,6 +183,12 @@ export default function IndexPage() {
                             prompt={prompt}
                             isRunning={false}
                             references={pendingAssets.map((asset) => asset.reference)}
+                            skills={skillOptions}
+                            selectedSkills={selectedSkills}
+                            onSelectSkill={(skill) => selectSkill(skill)}
+                            onRemoveSkill={(id, source) => setSelectedSkills((current) => current.filter((skill) => skill.id !== id || skill.source !== source))}
+                            onSelectLibrarySkill={selectSkill}
+                            onRemoveLibrarySkill={(id, source) => setSelectedSkills((current) => current.filter((skill) => skill.id !== id || skill.source !== source))}
                             agentConfig={agentConfig}
                             onAgentConfigChange={(patch) => setAgentConfig((current) => ({ ...current, ...patch }))}
                             onPromptChange={setPrompt}

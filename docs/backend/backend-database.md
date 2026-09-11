@@ -364,6 +364,7 @@ Skill 的附属目录与 Markdown/TXT 引用文件。Agent 按需读取，不会
 | `channels` | object[] | 模型渠道配置列表 |
 | `promptSync` | object | GitHub 远程提示词定时同步配置 |
 | `auth` | object | 私有登录配置 |
+| `storage` | object | 对象存储配置；`autoSyncAllAssets` 控制新媒体是否自动同步云存储，默认关闭 |
 
 `channels` 每项字段：
 

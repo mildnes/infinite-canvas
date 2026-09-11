@@ -144,6 +144,7 @@ type PublicStorageSetting struct {
 	Mode                    string `json:"mode"`
 	AllowUserProvider       bool   `json:"allowUserProvider"`
 	AllowUserGlobalProvider bool   `json:"allowUserGlobalProvider"`
+	AutoSyncAllAssets       bool   `json:"autoSyncAllAssets"`
 }
 
 type PublicAuthSetting struct {
@@ -180,6 +181,7 @@ type PrivateStorageSetting struct {
 	Mode                    string                      `json:"mode"`
 	AllowUserProvider       bool                        `json:"allowUserProvider"`
 	AllowUserGlobalProvider bool                        `json:"allowUserGlobalProvider"`
+	AutoSyncAllAssets       bool                        `json:"autoSyncAllAssets"`
 	Providers               []StorageProvider           `json:"providers"`
 	RoundRobinCursor        int                         `json:"roundRobinCursor"`
 	CapacityCheck           StorageCapacityCheckSetting `json:"capacityCheck"`

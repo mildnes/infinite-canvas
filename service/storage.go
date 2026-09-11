@@ -139,7 +139,12 @@ func PublicStorageConfig() (model.PublicStorageSetting, error) {
 		mode = "hybrid"
 	}
 
-	return model.PublicStorageSetting{Mode: mode, AllowUserProvider: storage.AllowUserProvider, AllowUserGlobalProvider: storage.AllowUserGlobalProvider}, nil
+	return model.PublicStorageSetting{
+		Mode:                    mode,
+		AllowUserProvider:       storage.AllowUserProvider,
+		AllowUserGlobalProvider: storage.AllowUserGlobalProvider,
+		AutoSyncAllAssets:       storage.AutoSyncAllAssets,
+	}, nil
 }
 
 // StorageObjectInfo 获取存储对象元数据。

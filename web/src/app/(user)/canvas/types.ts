@@ -168,7 +168,8 @@ export type CanvasAgentSkillReference = {
 export type CanvasAgentSkillSelection = {
     id: string;
     name: string;
-    source: "system" | "user";
+    description?: string;
+    source: "system" | "user" | "builtin" | "admin";
 };
 
 export const MAX_CANVAS_AGENT_SKILLS = 5;
@@ -188,6 +189,7 @@ export type PendingAgentAsset = {
 export type CanvasPendingAgentRequest = {
     prompt: string;
     assets: PendingAgentAsset[];
+    skills?: CanvasAgentSkillSelection[];
 };
 
 export type CanvasAssistantImage = {
@@ -202,6 +204,7 @@ export type CanvasAgentPhase = "intake" | "concept" | "script" | "breakdown" | "
 
 export type CanvasAgentConfig = {
     textApiMode: "chat" | "responses";
+    textReasoningEnabled?: boolean;
     autoGenerateMedia: boolean;
     imageModel?: string;
     imageChannelId?: string;
