@@ -413,13 +413,11 @@ func normalizeModelChannelBaseURL(baseURL string) string {
 }
 
 func isArkAgentPlanChannel(channel model.ModelChannel) bool {
+	if !IsArkChannel(channel) {
+		return false
+	}
 	baseURL := strings.ToLower(normalizeModelChannelBaseURL(channel.BaseURL))
 	return strings.HasSuffix(baseURL, "/api/plan/v3")
-}
-
-func isSeedanceModelName(modelName string) bool {
-	modelName = strings.ToLower(strings.TrimSpace(modelName))
-	return strings.Contains(modelName, "seedance") || strings.Contains(modelName, "doubao-seedance")
 }
 
 func enabledChannelModels(channels []model.ModelChannel) []string {

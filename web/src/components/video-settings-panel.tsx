@@ -250,9 +250,11 @@ function KlingV26VideoSettingsPanel({ config, modelName, onConfigChange, theme, 
 
 function SeedanceVideoSettingsPanel({ config, modelName, onConfigChange, theme, showTitle, className, visualOnly }: VideoSettingsPanelProps) {
     const model = modelName || config.model || config.videoModel;
-    const resolution = normalizeSeedanceResolution(config.vquality, model);
+    const modelId = modelKey(model);
+    const seedance20 = (modelId.includes("seedance-2-0") || modelId === "bytedance-seedance-2") && !isSeedanceFastOrMiniModel(model);
+    const resolution = seedance20 ? normalizeVideoResolutionValue(config.vquality) : normalizeSeedanceResolution(config.vquality, model);
     const ratio = normalizeSeedanceRatio(config.size);
-    const maxSeconds = modelKey(model).includes("seedance-2-5") ? 30 : 15;
+    const maxSeconds = modelId.includes("seedance-2-5") ? 30 : 15;
     const duration = normalizeSeedanceDuration(config.videoSeconds, maxSeconds);
     const watermark = boolConfig(config.videoWatermark, false);
     const audioGenerationEnabled = supportsVideoAudioGeneration(model);
@@ -264,7 +266,7 @@ function SeedanceVideoSettingsPanel({ config, modelName, onConfigChange, theme, 
                 {showTitle ? <div className="text-lg font-semibold">视频设置</div> : null}
                 <SettingGroup title="分辨率" color={theme.node.muted}>
                     <div className="grid grid-cols-3 gap-2.5">
-                        {seedanceResolutionOptions.map((item) => {
+                        {(seedance20 ? resolutionButtonOptions : seedanceResolutionOptions).map((item) => {
                             const disabled = item.value === "1080p" && isSeedanceFastOrMiniModel(model);
                             return (
                                 <OptionPill key={item.value} selected={resolution === item.value} disabled={disabled} theme={theme} onClick={() => onConfigChange("vquality", item.value)}>
@@ -272,6 +274,7 @@ function SeedanceVideoSettingsPanel({ config, modelName, onConfigChange, theme, 
                                 </OptionPill>
                             );
                         })}
+                        {seedance20 ? <ResolutionInput value={resolution} theme={theme} onChange={(value) => onConfigChange("vquality", value)} /> : null}
                     </div>
                     {isSeedanceFastOrMiniModel(model) ? <div className="text-[11px] leading-4 opacity-55">fast / mini 模型不支持 1080p，会自动使用 720p。</div> : null}
                 </SettingGroup>

@@ -18,6 +18,7 @@ const (
 	ModelChannelProtocolMetaso   = ModelChannelProtocolMiniMax
 	ModelChannelProtocolAPIMart  = "apimart"
 	ModelChannelProtocolKIE      = "kie"
+	ModelChannelProtocolArk      = "ark"
 )
 
 type modelProtocolAdapter struct {
@@ -43,6 +44,7 @@ var modelProtocolIDs = []string{
 	ModelChannelProtocolAPIMart,
 	ModelChannelProtocolKIE,
 	ModelChannelProtocolMiMo,
+	ModelChannelProtocolArk,
 }
 
 func init() {
@@ -109,7 +111,7 @@ func init() {
 
 	ark := compatible
 	ark.testModel = testArkSeedanceChannelModel
-	modelProtocolRegistry["model:ark-seedance"] = ark
+	modelProtocolRegistry[ModelChannelProtocolArk] = ark
 	glm := compatible
 	glm.testModel = testGLMTTSChannelModel
 	modelProtocolRegistry["model:glm-tts"] = glm
@@ -121,15 +123,14 @@ var modelDiscoveryRules = []modelProtocolRule{
 	{ModelChannelProtocolGemini, func(channel model.ModelChannel, _ string) bool { return IsGeminiChannel(channel) }},
 	{ModelChannelProtocolMetaso, func(channel model.ModelChannel, _ string) bool { return IsMiniMaxChannel(channel) }},
 	{ModelChannelProtocolMiMo, func(channel model.ModelChannel, _ string) bool { return IsMiMoChannel(channel) }},
+	{ModelChannelProtocolArk, func(channel model.ModelChannel, _ string) bool { return IsArkChannel(channel) }},
 	{ModelChannelProtocolKIE, func(channel model.ModelChannel, _ string) bool { return isKIEAdminChannel(channel) }},
 	{ModelChannelProtocolGrok2API, func(channel model.ModelChannel, _ string) bool { return isGrok2APIProtocolChannel(channel) }},
 }
 
 var modelConfigTestRules = []modelProtocolRule{
 	{ModelChannelProtocolMetaso, func(channel model.ModelChannel, _ string) bool { return IsMiniMaxChannel(channel) }},
-	{"model:ark-seedance", func(channel model.ModelChannel, modelName string) bool {
-		return isArkAgentPlanChannel(channel) || isSeedanceModelName(modelName)
-	}},
+	{ModelChannelProtocolArk, func(channel model.ModelChannel, _ string) bool { return IsArkChannel(channel) }},
 }
 
 var modelGenerationTestRules = []modelProtocolRule{
@@ -143,7 +144,7 @@ var modelGenerationTestRules = []modelProtocolRule{
 func isGrok2APIProtocolChannel(channel model.ModelChannel) bool {
 	protocol := strings.ToLower(strings.TrimSpace(channel.Protocol))
 	baseURL := strings.ToLower(strings.TrimSpace(channel.BaseURL))
-	if protocol == ModelChannelProtocolKIE || protocol == ModelChannelProtocolAPIMart || protocol == ModelChannelProtocolMetaso {
+	if protocol == ModelChannelProtocolKIE || protocol == ModelChannelProtocolAPIMart || protocol == ModelChannelProtocolMetaso || protocol == ModelChannelProtocolArk {
 		return false
 	}
 	return protocol == ModelChannelProtocolGrok2API || protocol == ModelChannelProtocolXAI ||
@@ -216,6 +217,10 @@ func modelProtocolForChannel(channel model.ModelChannel) modelProtocolAdapter {
 		return adapter
 	}
 	return modelProtocolRegistry[ModelChannelProtocolOpenAI]
+}
+
+func IsArkChannel(channel model.ModelChannel) bool {
+	return strings.EqualFold(strings.TrimSpace(channel.Protocol), ModelChannelProtocolArk)
 }
 
 func matchModelProtocol(rules []modelProtocolRule, channel model.ModelChannel, modelName string) (modelProtocolAdapter, bool) {

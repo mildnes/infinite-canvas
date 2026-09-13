@@ -1041,6 +1041,7 @@ export default function AdminSettingsPage() {
                                             { label: "APIMart", value: "apimart" },
                                             { label: "KIE", value: "kie" },
                                             { label: "MiMo", value: "mimo" },
+                                            { label: "火山方舟", value: "ark" },
                                         ]}
                                         onChange={(protocol: AdminModelChannel["protocol"]) => {
                                             channelForm.setFieldValue("baseUrl", modelChannelDefaultBaseUrls[protocol]);

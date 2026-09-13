@@ -9,6 +9,18 @@ export const SEEDANCE_REFERENCE_LIMITS = {
     imageMaxBytes: 30 * 1024 * 1024,
     videoMaxBytes: 50 * 1024 * 1024,
     audioMaxBytes: 15 * 1024 * 1024,
+    maxDurationMs: 15_000,
+    totalDurationMs: 15_000,
+};
+
+export const ARK_SEEDANCE_REFERENCE_LIMITS = {
+    ...SEEDANCE_REFERENCE_LIMITS,
+    images: 30,
+    videos: 10,
+    audios: 10,
+    videoMaxBytes: 200 * 1024 * 1024,
+    maxDurationMs: 30_000,
+    totalDurationMs: 30_000,
 };
 
 export const seedanceResolutionOptions = [
@@ -72,8 +84,8 @@ const seedancePixels = {
     },
 } as const;
 
-export function isSeedanceVideoConfig(config: Pick<AiConfig, "model" | "videoModel" | "baseUrl">) {
-    return isSeedanceVideoModel(config.model || config.videoModel) || isArkPlanBaseUrl(config.baseUrl);
+export function isSeedanceVideoConfig(config: Pick<AiConfig, "model" | "videoModel">) {
+    return isSeedanceVideoModel(config.model || config.videoModel);
 }
 
 export function isSeedanceVideoModel(model: string) {
@@ -84,10 +96,6 @@ export function isSeedanceVideoModel(model: string) {
 export function isSeedanceFastOrMiniModel(model: string) {
     const value = model.toLowerCase();
     return isSeedanceVideoModel(value) && (value.includes("fast") || value.includes("mini"));
-}
-
-export function isArkPlanBaseUrl(baseUrl: string) {
-    return baseUrl.toLowerCase().includes("ark.cn-beijing.volces.com/api/plan/v3") || baseUrl.toLowerCase().includes("/api/plan/v3");
 }
 
 export function normalizeSeedanceResolution(value: string, model = "") {
@@ -160,14 +168,14 @@ export function buildSeedancePromptText(prompt: string, images: ReferenceImage[]
     return `参考素材编号：${labels.join("、")}。请按这些编号理解提示词中的图片、视频和音频引用。\n\n${text}`;
 }
 
-export function seedanceVideoReferenceError(videos: ReferenceVideo[]) {
+export function seedanceVideoReferenceError(videos: ReferenceVideo[], limits = SEEDANCE_REFERENCE_LIMITS) {
     let totalDurationMs = 0;
     for (let index = 0; index < videos.length; index += 1) {
         const video = videos[index];
         const label = seedanceReferenceLabel("video", index);
-        if (video.bytes && video.bytes > SEEDANCE_REFERENCE_LIMITS.videoMaxBytes) return `${label} 超过 50MB，请压缩后再上传`;
+        if (video.bytes && video.bytes > limits.videoMaxBytes) return `${label} 超过 ${limits.videoMaxBytes / 1024 / 1024}MB，请压缩后再上传`;
         if (video.durationMs) {
-            if (video.durationMs < 2000 || video.durationMs > 15000) return `${label} 时长需要在 2-15 秒之间`;
+            if (video.durationMs < 2000 || video.durationMs > limits.maxDurationMs) return `${label} 时长需要在 2-${limits.maxDurationMs / 1000} 秒之间`;
             totalDurationMs += video.durationMs;
         }
         if (video.width && video.height) {
@@ -178,7 +186,7 @@ export function seedanceVideoReferenceError(videos: ReferenceVideo[]) {
             if (pixels < 640 * 640 || pixels > 2206 * 946) return `${label} 像素总量不符合 Seedance 要求，请转成 480p/720p/1080p 后再上传`;
         }
     }
-    if (totalDurationMs > 15000) return "Seedance 参考视频总时长不能超过 15 秒";
+    if (totalDurationMs > limits.totalDurationMs) return `Seedance 参考视频总时长不能超过 ${limits.totalDurationMs / 1000} 秒`;
     return "";
 }
 

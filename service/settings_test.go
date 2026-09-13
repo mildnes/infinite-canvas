@@ -42,8 +42,9 @@ func TestFetchAdminChannelModelsReportsArkPlanModelsUnsupported(t *testing.T) {
 	defer server.Close()
 
 	_, err := fetchAdminChannelModels(model.ModelChannel{
-		BaseURL: server.URL + "/api/plan/v3/contents/generations/tasks",
-		APIKey:  "test-key",
+		Protocol: ModelChannelProtocolArk,
+		BaseURL:  server.URL + "/api/plan/v3/contents/generations/tasks",
+		APIKey:   "test-key",
 	})
 	if err == nil {
 		t.Fatal("expected unsupported /models error")
@@ -54,7 +55,7 @@ func TestFetchAdminChannelModelsReportsArkPlanModelsUnsupported(t *testing.T) {
 }
 
 func TestBuildModelChannelURLNormalizesArkPlanTaskPath(t *testing.T) {
-	got := BuildModelChannelURL(model.ModelChannel{BaseURL: "https://ark.cn-beijing.volces.com/api/plan/v3/contents/generations/tasks?debug=1"}, "/models")
+	got := BuildModelChannelURL(model.ModelChannel{Protocol: ModelChannelProtocolArk, BaseURL: "https://ark.cn-beijing.volces.com/api/plan/v3/contents/generations/tasks?debug=1"}, "/models")
 	want := "https://ark.cn-beijing.volces.com/api/plan/v3/models"
 	if got != want {
 		t.Fatalf("BuildModelChannelURL = %q, want %q", got, want)

@@ -10,6 +10,7 @@ func TestModelProtocolAdapterRegistration(t *testing.T) {
 	want := map[string]bool{
 		"openai": true, "gemini": true, "grok2api": true, "xai": true,
 		"metaso": true, "apimart": true, "kie": true, "mimo": true,
+		"ark": true,
 	}
 	seen := map[string]bool{}
 	for _, adapter := range builtinAIProtocols {
@@ -36,6 +37,8 @@ func TestModelProtocolPathPrecedence(t *testing.T) {
 		{"Grok2API video", "grok2api", "", "future-model", "/videos", "/videos/generations"},
 		{"xAI video", "xai", "", "future-model", "/videos", "/videos/generations"},
 		{"xAI Base URL video", "openai", "https://api.x.ai", "custom-model", "/videos", "/videos/generations"},
+		{"Ark Seedance create", "ark", "https://ark.cn-beijing.volces.com/api/v3", "doubao-seedance-2.0", "/videos", "/contents/generations/tasks"},
+		{"Ark Seedance poll", "ark", "https://ark.cn-beijing.volces.com/api/plan/v3", "doubao-seedance-2.0", "/videos/task a?b", "/contents/generations/tasks/task a?b"},
 		{"OpenAI passthrough", "openai", "", "future-model", "/responses", "/responses"},
 	}
 	for _, test := range tests {

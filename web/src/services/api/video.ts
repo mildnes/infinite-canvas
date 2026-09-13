@@ -9,6 +9,7 @@ import { isKIEGrokVideoModel, isKIEKlingV3Config, kieKlingOmniVariant } from "./
 import { isAgnesVideoV25Model, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
 import { resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer } from "@/services/file-storage";
 import { autoSyncToCloud, imageToDataUrl, resolveImageUrl } from "@/services/image-storage";
+import { getStorageObjectInfo } from "@/services/api/storage";
 import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig, type VideoElementReference } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
@@ -296,6 +297,7 @@ async function createAgnesVideoV25RequestBody(config: AiConfig, model: string, p
 async function createVideoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
     const size = normalizeVideoSize(config.size);
     if (isGeminiVideoModel(model) && isGeminiConfig(config, model)) return createGeminiVeoRequestBody(config, model, prompt, input);
+    if (videoChannelProtocol(config, model) === "ark") return createArkSeedanceVideoRequestBody(config, model, prompt, input);
     if (isGrok2APIVideoConfig(config, model)) return createGrok2APIVideoRequestBody(config, model, prompt, input);
     if (isMiniMaxH3Config(config, model)) return createMiniMaxH3VideoRequestBody(config, model, prompt, input);
     if (isCogVideoX3Model(model)) return createCogVideoX3RequestBody(config, model, prompt, input);
@@ -379,6 +381,30 @@ async function createVideoRequestBody(config: AiConfig, model: string, prompt: s
     const audioFiles = kling ? [] : await Promise.all(input.audioReferences.map(mediaReferenceToFormValue));
     audioFiles.forEach((file) => body.append("audio_reference[]", file));
     return body;
+}
+
+async function createArkSeedanceVideoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
+    const [images, firstFrame, lastFrame] = await Promise.all([
+        Promise.all(input.references.map(imageToAgnesReference)),
+        input.firstFrame ? imageToAgnesReference(input.firstFrame) : "",
+        input.lastFrame ? imageToAgnesReference(input.lastFrame) : "",
+    ]);
+    const videos = await Promise.all(input.videoReferences.map((reference) => arkMediaReferenceUrl(reference)));
+    const audios = await Promise.all(input.audioReferences.map((reference) => arkMediaReferenceUrl(reference)));
+    return {
+        model,
+        prompt,
+        seconds: normalizeSeedanceDuration(config.videoSeconds, modelKey(model).includes("seedance-2-5") ? 30 : 15),
+        size: normalizeSeedanceRatio(config.size),
+        resolution_name: normalizeVideoResolution(config.vquality),
+        video_generate_audio: boolConfig(config.videoGenerateAudio, false),
+        video_watermark: boolConfig(config.videoWatermark, false),
+        ...(images.length ? { "input_reference[]": images } : {}),
+        ...(firstFrame ? { first_frame_url: firstFrame } : {}),
+        ...(lastFrame ? { last_frame_url: lastFrame } : {}),
+        ...(videos.length ? { "video_reference[]": videos } : {}),
+        ...(audios.length ? { "audio_reference[]": audios } : {}),
+    };
 }
 
 async function createMiniMaxH3VideoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
@@ -605,6 +631,19 @@ async function mediaReferenceToFormValue(media: ReferenceVideo | ReferenceAudio)
     const publicUrl = publicHttpUrl(resolvedUrl) || publicHttpUrl(media.url);
     if (publicUrl) return publicUrl;
     return mediaReferenceToFile(media);
+}
+
+async function arkMediaReferenceUrl(media: ReferenceVideo | ReferenceAudio) {
+    const directUrl = publicHttpUrl(media.url);
+    if (directUrl) return directUrl;
+    const storageKey = media.storageKey || "";
+    if (storageKey.startsWith("server:") && !storageKey.startsWith("server:webdav:")) {
+        const info = await getStorageObjectInfo(storageKey.slice("server:".length)).catch(() => null);
+        const publicUrl = publicHttpUrl(info?.publicUrl);
+        if (publicUrl) return publicUrl;
+    }
+    const label = media.type?.toLowerCase().startsWith("audio/") ? "音频" : "视频";
+    throw new VideoRequestError(`火山方舟参考${label}必须具有公网访问地址`);
 }
 
 async function imageToAgnesReference(image: ReferenceImage) {

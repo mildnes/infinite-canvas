@@ -16,3 +16,4 @@ description: 当前项目后续值得处理的事项
 - [x] 渠道协议静态模块：保留 OpenAI、Gemini、Grok2API/xAI、Metaso、KIE、APIMart、MiMo 的现有路由、鉴权、模型目录和任务适配。
 - [x] 画布 Agent 支持后台 Skill 工作流与 MCP 工具：Skill 追加系统提示，MCP 由后端 JSON-RPC 代理调用。
 - [x] 合并上游 v0.6.0 Agent、Skill、画布媒体与视频交互能力，保留 Grok/xAI、云端存储和 MCP 定制。
+- [x] 选择性合并上游 v0.7.1 画布媒体修复、Agent 节点交互和独立 Ark Seedance 协议，保留现有 Grok/xAI 与媒体恢复链路。

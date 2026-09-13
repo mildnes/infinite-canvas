@@ -10,7 +10,7 @@ import { useUserStore } from "@/stores/use-user-store";
 
 export type LocalModelChannel = {
     id: string;
-    protocol: "openai" | "gemini" | "grok2api" | "xai" | "metaso" | "apimart" | "kie" | "mimo";
+    protocol: "openai" | "gemini" | "grok2api" | "xai" | "metaso" | "apimart" | "kie" | "mimo" | "ark";
     name: string;
     baseUrl: string;
     apiKey: string;
@@ -499,7 +499,7 @@ export function normalizeLocalChannels(config: Partial<AiConfig>): LocalModelCha
     const channels = Array.isArray(config.localChannels) ? config.localChannels : [];
     const normalized: LocalModelChannel[] = channels.map((channel, index) => ({
         id: channel.id || `local-${index + 1}`,
-        protocol: channel.protocol === "gemini" || channel.protocol === "grok2api" || channel.protocol === "xai" || channel.protocol === "metaso" || channel.protocol === "apimart" || channel.protocol === "kie" || channel.protocol === "mimo" ? channel.protocol : "openai",
+        protocol: channel.protocol === "gemini" || channel.protocol === "grok2api" || channel.protocol === "xai" || channel.protocol === "metaso" || channel.protocol === "apimart" || channel.protocol === "kie" || channel.protocol === "mimo" || channel.protocol === "ark" ? channel.protocol : "openai",
         name: typeof channel.name === "string" ? channel.name : `本地渠道 ${index + 1}`,
         baseUrl: channel.baseUrl || "",
         apiKey: channel.apiKey || "",
@@ -544,9 +544,9 @@ export function channelProtocolForConfig(config: AiConfig): LocalModelChannel["p
     return channel?.protocol || "openai";
 }
 
-export type DirectAIProvider = "kie" | "apimart";
+export type DirectAIProvider = "kie" | "apimart" | "ark";
 
 export function directAIProviderForConfig(config: AiConfig): DirectAIProvider | null {
     const protocol = channelProtocolForConfig(config);
-    return protocol === "kie" || protocol === "apimart" ? protocol : null;
+    return protocol === "kie" || protocol === "apimart" || protocol === "ark" ? protocol : null;
 }

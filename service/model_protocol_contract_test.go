@@ -20,6 +20,7 @@ func TestModelProtocolRegistryContainsCurrentProtocols(t *testing.T) {
 		ModelChannelProtocolAPIMart,
 		ModelChannelProtocolKIE,
 		ModelChannelProtocolMiMo,
+		ModelChannelProtocolArk,
 	}
 	if !reflect.DeepEqual(modelProtocolIDs, want) {
 		t.Fatalf("protocol IDs = %v, want %v", modelProtocolIDs, want)
@@ -39,6 +40,7 @@ func TestModelProtocolAuthAndURLContracts(t *testing.T) {
 		{"openai", "openai", "https://api.example/", "/models", "https://api.example/v1/models", "Bearer key", "existing"},
 		{"grok2api", "grok2api", "https://api.example/v1", "/videos/generations", "https://api.example/v1/videos/generations", "Bearer key", "existing"},
 		{"xai", "xai", "https://api.x.ai", "/images/generations", "https://api.x.ai/v1/images/generations", "Bearer key", "existing"},
+		{"ark", "ark", "https://ark.cn-beijing.volces.com/api/v3", "/contents/generations/tasks", "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks", "Bearer key", "existing"},
 		{"metaso", "metaso", "https://api.example/", "/v2/video_generation", "https://api.example/v2/video_generation", "Bearer key", "existing"},
 		{"gemini", " GEMINI ", "https://api.example/v1beta", "/v1beta/models/test:generateContent", "https://api.example/v1beta/models/test:generateContent", "existing", "key"},
 	} {
@@ -70,6 +72,7 @@ func TestModelProtocolGrokAndProviderPrecedence(t *testing.T) {
 		{"kie wins URL inference", "kie", "https://api.x.ai", modelProtocolRegistry[ModelChannelProtocolKIE]},
 		{"apimart wins URL inference", "apimart", "https://api.x.ai", modelProtocolRegistry[ModelChannelProtocolAPIMart]},
 		{"metaso wins URL inference", "metaso", "https://api.x.ai", modelProtocolRegistry[ModelChannelProtocolMetaso]},
+		{"explicit ark wins URL inference", "ark", "https://api.x.ai", modelProtocolRegistry[ModelChannelProtocolArk]},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
