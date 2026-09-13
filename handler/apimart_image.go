@@ -52,6 +52,7 @@ func normalizeAPIMartImageParams(payload map[string]any, modelName string, chann
 	} else {
 		normalizeAPIMartReferenceInputs(payload, modelName, config, channel)
 	}
+	normalizeAPIMartGrokImage2OfficialParams(payload, modelName)
 	if err := validateAPIMartImageRequiredInputs(payload, modelName); err != nil {
 		payload["_apimart_reference_error"] = err.Error()
 	}
@@ -123,6 +124,12 @@ func apimartImageConfig(modelName string) apimartInputConfig {
 		config.maxResolution = "2K"
 		config.hasCount = false
 		config.imageRefField = ""
+	case model == "grok-imagine-image-2-0":
+		config.aspectField = "aspect_ratio"
+		config.resolutionCase = "lower"
+		config.maxResolution = "2K"
+		config.hasQuality = true
+		config.maxImageRefs = 3
 	case strings.Contains(model, "grok-imagine"):
 		config.hasResolution = false
 	case strings.Contains(model, "wan2-7"), strings.Contains(model, "wan2.7"):
@@ -152,6 +159,41 @@ func normalizeAPIMartImageQuality(payload map[string]any, config apimartInputCon
 		delete(payload, "output_format")
 	}
 	delete(payload, "format")
+}
+
+func normalizeAPIMartGrokImage2OfficialParams(payload map[string]any, modelName string) {
+	if normalizeAPIMartModelName(modelName) != "grok-imagine-image-2-0" {
+		return
+	}
+
+	switch strings.TrimSpace(strings.ToLower(toStringSafe(payload["aspect_ratio"]))) {
+	case "21:9":
+		payload["aspect_ratio"] = "20:9"
+	case "9:21":
+		payload["aspect_ratio"] = "9:20"
+	}
+
+	quality := strings.TrimSpace(strings.ToLower(toStringSafe(payload["quality"])))
+	if strings.TrimSpace(toStringSafe(payload["resolution"])) == "" {
+		switch quality {
+		case "low", "standard":
+			payload["resolution"] = "1k"
+		case "medium", "high", "xhigh", "max", "hd", "uhd":
+			payload["resolution"] = "2k"
+		}
+	}
+	if hasAPIMartImageReference(payload) {
+		delete(payload, "quality")
+		return
+	}
+	switch quality {
+	case "low", "standard":
+		payload["quality"] = "low"
+	case "medium", "high", "xhigh", "max", "hd", "uhd":
+		payload["quality"] = "medium"
+	default:
+		delete(payload, "quality")
+	}
 }
 
 func apimartImageReferenceExcluded(modelName string) bool {
