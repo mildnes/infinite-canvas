@@ -226,6 +226,9 @@ func UploadStorageObjectWithProvider(ctx context.Context, filename string, conte
 	if ext == "" {
 		ext = extensionForContentType(contentType)
 	}
+	if provider.Type == model.StorageProviderTypeWebDAV && ext == ".bin" && strings.HasPrefix(strings.ToLower(contentType), "video/mp4") {
+		ext = ".mp4"
+	}
 	userID := "anonymous"
 	if user, ok := UserFromContext(ctx); ok && user.ID != "" {
 		userID = user.ID

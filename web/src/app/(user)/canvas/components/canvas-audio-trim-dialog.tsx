@@ -74,7 +74,9 @@ export function CanvasAudioTrimDialog({ open, sourceUrl, title = "音频", confi
         if (!Array.isArray(value) || value.length < 2) return;
         const next = { start: Number(value[0]), end: Number(value[1]) };
         if (next.end - next.start < MIN_AUDIO_TRIM_SECONDS) return;
-        audioRef.current?.pause();
+        const audio = audioRef.current;
+        audio?.pause();
+        if (audio) audio.currentTime = next.start;
         setRange(next);
     };
 

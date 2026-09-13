@@ -740,6 +740,7 @@ function VideoNodeContent(props: NodeContentRendererProps) {
         else video.pause();
     };
     useEffect(() => {
+        if (!isSelected) videoRef.current?.pause();
         if (isSelected) videoRef.current?.focus({ preventScroll: true });
         else if (document.activeElement === videoRef.current) videoRef.current?.blur();
     }, [isSelected, node.metadata?.content]);

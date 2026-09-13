@@ -53,6 +53,7 @@ export function createDirectWebDAVObjectKey(provider: UserWebDAVStorageProvider,
 
 export async function persistDirectWebDAV(provider: UserWebDAVStorageProvider, blob: Blob, filename: string) {
     const { token, user } = useUserStore.getState();
+    if (blob.type === "video/mp4" && !filename.endsWith(".mp4")) filename += ".mp4";
     const objectKey = createDirectWebDAVObjectKey(provider, filename, token && user ? user.id : "anonymous");
     try {
         await uploadDirectWebDAV(provider, objectKey, blob);
