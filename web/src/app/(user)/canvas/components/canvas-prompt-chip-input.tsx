@@ -13,10 +13,12 @@ import type { CanvasResourceReference } from "../utils/canvas-resource-reference
 type CanvasPromptChipInputProps = {
     value: string;
     references?: CanvasResourceReference[];
+    pendingReferences?: CanvasResourceReference[];
+    onReferenceIdsChange?: (nodeIds: string[]) => void;
     skills?: CanvasAgentSkillReference[];
     onSelectSkill?: (skill: CanvasAgentSkillReference) => void;
     onChange: (value: string) => void;
-    onSubmit?: () => void;
+    onSubmit?: (value?: string, referenceIds?: string[]) => void;
     onPasteImage?: (file: File) => void;
     className?: string;
     style?: CSSProperties;
@@ -30,9 +32,10 @@ type MentionState = {
 
 type PromptToken = { type: "text"; value: string } | { type: "reference"; label: string };
 
-export function CanvasPromptChipInput({ value, references = [], skills = [], onSelectSkill, onChange, onSubmit, onPasteImage, className, style, placeholder }: CanvasPromptChipInputProps) {
+export function CanvasPromptChipInput({ value, references = [], pendingReferences = [], onReferenceIdsChange, skills = [], onSelectSkill, onChange, onSubmit, onPasteImage, className, style, placeholder }: CanvasPromptChipInputProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const editorRef = useRef<HTMLDivElement>(null);
+    const caretRangeRef = useRef<Range | null>(null);
     const composingRef = useRef(false);
     const lastEmittedRef = useRef(value);
     const [mention, setMention] = useState<MentionState | null>(null);
@@ -56,7 +59,7 @@ export function CanvasPromptChipInput({ value, references = [], skills = [], onS
         return skills.filter((skill) => `${skill.name} ${skill.description || ""}`.toLowerCase().includes(query));
     }, [skillMention, skills]);
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         const editor = editorRef.current;
         if (!editor) return;
         if (document.activeElement === editor && value === lastEmittedRef.current) return;
@@ -73,9 +76,27 @@ export function CanvasPromptChipInput({ value, references = [], skills = [], onS
         lastEmittedRef.current = value;
     }, [referenceByLabel, theme, tokens, value]);
 
+    useLayoutEffect(() => {
+        const editor = editorRef.current;
+        if (!editor) return;
+        editor.querySelectorAll<HTMLElement>("[data-pending-reference='true']").forEach(removeReferenceChip);
+        pendingReferences?.forEach((reference) => appendReferenceChip(editor, reference, theme, setImagePreview, true, caretRangeRef.current));
+    }, [pendingReferences, theme]);
+
     const emitChange = (nextValue: string) => {
         lastEmittedRef.current = nextValue;
         onChange(nextValue);
+        if (editorRef.current) onReferenceIdsChange?.(referenceIdsFromEditor(editorRef.current));
+    };
+
+    const commitPendingReferences = () => {
+        const editor = editorRef.current;
+        const pendingChips = editor?.querySelectorAll<HTMLElement>("[data-pending-reference='true']");
+        pendingChips?.forEach((chip) => delete chip.dataset.pendingReference);
+        const nextValue = editor ? serializePromptEditor(editor) : value;
+        const referenceIds = editor ? referenceIdsFromEditor(editor) : [];
+        if (pendingChips?.length) emitChange(nextValue);
+        return { value: nextValue, referenceIds };
     };
 
     const closeMention = () => {
@@ -89,6 +110,9 @@ export function CanvasPromptChipInput({ value, references = [], skills = [], onS
     };
 
     const syncMention = () => {
+        const selection = window.getSelection();
+        const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+        if (range?.collapsed && editorRef.current?.contains(range.startContainer)) caretRangeRef.current = range.cloneRange();
         const text = textBeforeCaret();
         const match = /@([^\s@]*)$/.exec(text);
         if (!match || !activeReferences.length) {
@@ -129,7 +153,7 @@ export function CanvasPromptChipInput({ value, references = [], skills = [], onS
         const chip = createReferenceChip(reference, theme, setImagePreview);
         const trailingSpace = document.createTextNode(" ");
         const selection = window.getSelection();
-        const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+        const range = selection?.rangeCount ? selection.getRangeAt(0) : caretRangeRef.current;
         if (range) {
             range.insertNode(trailingSpace);
             range.insertNode(chip);
@@ -138,6 +162,7 @@ export function CanvasPromptChipInput({ value, references = [], skills = [], onS
             range.collapse(true);
             selection?.removeAllRanges();
             selection?.addRange(range);
+            caretRangeRef.current = range.cloneRange();
         } else {
             editor.append(leadingSpace, chip, trailingSpace);
             placeCaretAtEnd(editor);
@@ -153,7 +178,7 @@ export function CanvasPromptChipInput({ value, references = [], skills = [], onS
         onSelectSkill?.(skill);
     };
 
-    const showPlaceholder = !value.trim();
+    const showPlaceholder = !value.trim() && !pendingReferences?.length;
 
     return (
         <div className="relative w-full">
@@ -172,6 +197,8 @@ export function CanvasPromptChipInput({ value, references = [], skills = [], onS
                 aria-label={placeholder}
                 className={`${className || ""} overflow-y-auto whitespace-pre-wrap break-words outline-none`}
                 style={{ ...style, cursor: "text" }}
+                onFocus={commitPendingReferences}
+                onPointerDown={commitPendingReferences}
                 onInput={(event) => {
                     if (composingRef.current) return;
                     const selection = window.getSelection();
@@ -216,6 +243,8 @@ export function CanvasPromptChipInput({ value, references = [], skills = [], onS
                 }}
                 onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
                     event.stopPropagation();
+
+                    const committed = commitPendingReferences();
 
                     const nativeEvent = event.nativeEvent;
                     const isComposing = composingRef.current || nativeEvent.isComposing || nativeEvent.keyCode === 229;
@@ -278,7 +307,7 @@ export function CanvasPromptChipInput({ value, references = [], skills = [], onS
 
                     if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey && onSubmit) {
                         event.preventDefault();
-                        onSubmit();
+                        onSubmit(committed.value, committed.referenceIds);
                         return;
                     }
 
@@ -429,6 +458,7 @@ function createReferenceChip(reference: CanvasResourceReference, theme: (typeof 
     const wrapper = document.createElement("span");
     wrapper.contentEditable = "false";
     wrapper.dataset.refLabel = reference.label;
+    wrapper.dataset.refNodeId = reference.nodeId;
     if (reference.kind === "image" && reference.previewUrl) {
         const image = document.createElement("img");
         image.src = reference.previewUrl;
@@ -454,6 +484,55 @@ function createReferenceChip(reference: CanvasResourceReference, theme: (typeof 
     text.textContent = reference.kind === "text" ? reference.text || reference.title : reference.label;
     wrapper.appendChild(text);
     return wrapper;
+}
+
+function appendReferenceChip(
+    editor: HTMLElement,
+    reference: CanvasResourceReference,
+    theme: (typeof canvasThemes)[keyof typeof canvasThemes],
+    onImagePreview: (url: string) => void,
+    pending = false,
+    caret?: Range | null,
+) {
+    const chip = createReferenceChip(reference, theme, onImagePreview);
+    if (pending) chip.dataset.pendingReference = "true";
+    if (caret && editor.contains(caret.startContainer)) {
+        const trailingSpace = document.createTextNode(" ");
+        caret.insertNode(trailingSpace);
+        trailingSpace.before(" ", chip);
+        caret.setStartAfter(trailingSpace);
+        caret.collapse(true);
+        return;
+    }
+    let line = editor;
+    while (true) {
+        let last = line.lastChild;
+        while (last?.nodeType === Node.TEXT_NODE && !last.textContent) last = last.previousSibling;
+        if (last instanceof HTMLElement && (last.tagName === "DIV" || last.tagName === "P")) {
+            line = last;
+            continue;
+        }
+        if (last instanceof HTMLBRElement) last.remove();
+        break;
+    }
+    line.append(document.createTextNode(" "), chip, document.createTextNode(" "));
+    editor.scrollTop = editor.scrollHeight;
+}
+
+function removeReferenceChip(chip: HTMLElement) {
+    const parent = chip.parentElement;
+    const previousSibling = chip.previousSibling;
+    const nextSibling = chip.nextSibling;
+    if (previousSibling?.nodeType === Node.TEXT_NODE) previousSibling.textContent = (previousSibling.textContent || "").replace(/[ \u00A0]$/, "");
+    if (nextSibling?.nodeType === Node.TEXT_NODE) nextSibling.textContent = (nextSibling.textContent || "").replace(/^[ \u00A0]/, "");
+    chip.remove();
+    parent?.normalize();
+}
+
+function referenceIdsFromEditor(editor: HTMLElement) {
+    return Array.from(new Set(Array.from(editor.querySelectorAll<HTMLElement>("[data-ref-node-id]"))
+        .map((chip) => chip.dataset.refNodeId)
+        .filter((id): id is string => Boolean(id))));
 }
 
 function serializePromptEditor(editor: HTMLElement) {

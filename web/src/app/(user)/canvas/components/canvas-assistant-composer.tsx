@@ -22,6 +22,8 @@ export type CanvasAssistantComposerProps = {
     references: CanvasAssistantReference[];
     /** 首页等无画布上下文场景可省略，默认空列表 */
     mentionReferences?: CanvasResourceReference[];
+    availableReferences?: CanvasResourceReference[];
+    pendingReferences?: CanvasResourceReference[];
     skills?: CanvasAgentSkillReference[];
     selectedSkills?: CanvasAgentSkillSelection[];
     onSelectSkill?: (skill: CanvasAgentSkillReference) => void;
@@ -31,11 +33,12 @@ export type CanvasAssistantComposerProps = {
     agentConfig: CanvasAgentConfig;
     onAgentConfigChange: (patch: Partial<CanvasAgentConfig>) => void;
     onPromptChange: (prompt: string) => void;
-    onSubmit: () => void | Promise<void>;
+    onReferenceIdsChange?: (ids: string[]) => void;
+    onSubmit: (prompt?: string, referenceIds?: string[]) => void | Promise<void>;
     onStop?: () => void;
     onOpenUpload: () => void;
     onOpenAssets: () => void;
-    onRemoveReference: (id: string) => void;
+    onRemoveReference?: (id: string) => void;
     onPasteImage: (file: File) => void;
 };
 
@@ -44,6 +47,8 @@ export function CanvasAssistantComposer({
     isRunning,
     references,
     mentionReferences = [],
+    availableReferences,
+    pendingReferences = [],
     skills = [],
     selectedSkills = [],
     onSelectSkill,
@@ -53,6 +58,7 @@ export function CanvasAssistantComposer({
     agentConfig,
     onAgentConfigChange,
     onPromptChange,
+    onReferenceIdsChange,
     onSubmit,
     onStop,
     onOpenUpload,
@@ -71,13 +77,26 @@ export function CanvasAssistantComposer({
     );
     const videoConfig = useMemo(() => ({ ...effectiveConfig, vquality: agentConfig.videoQuality, size: agentConfig.videoSize }), [agentConfig.videoQuality, agentConfig.videoSize, effectiveConfig]);
     const reasoningEnabled = agentConfig.textReasoningEnabled === true;
+    const promptReferences = useMemo(() => {
+        const seen = new Set<string>();
+        return [...(availableReferences || mentionReferences), ...references.map(assistantToPromptReference)].filter((reference) => {
+            if (seen.has(reference.nodeId)) return false;
+            seen.add(reference.nodeId);
+            return true;
+        });
+    }, [availableReferences, mentionReferences, references]);
+    const submitReferenceIds = useMemo(
+        () => Array.from(new Set([...references.map((reference) => reference.id), ...pendingReferences.map((reference) => reference.nodeId)])),
+        [pendingReferences, references],
+    );
+    const submit = (nextPrompt = prompt, referenceIds = submitReferenceIds) => onSubmit(nextPrompt, referenceIds);
 
     return (
         <div className="px-2 pb-2" onWheelCapture={(event) => event.stopPropagation()}>
             {references.length ? (
                 <div className="thin-scrollbar mb-1.5 flex max-w-full gap-1.5 overflow-x-auto px-1 pb-1">
                     {references.map((item) => (
-                        <AssistantReferenceChip key={item.id} item={item} onRemove={() => onRemoveReference(item.id)} />
+                        <AssistantReferenceChip key={item.id} item={item} onRemove={() => onRemoveReference?.(item.id)} />
                     ))}
                 </div>
             ) : null}
@@ -101,11 +120,13 @@ export function CanvasAssistantComposer({
             <div className="rounded-2xl border px-3 pb-3 pt-3" style={{ background: theme.toolbar.panel, borderColor: theme.node.stroke }}>
                 <CanvasPromptChipInput
                     value={prompt}
-                    references={mentionReferences}
+                    references={promptReferences}
+                    pendingReferences={pendingReferences}
                     skills={skills}
                     onSelectSkill={onSelectSkill}
                     onChange={onPromptChange}
-                    onSubmit={() => void onSubmit()}
+                    onReferenceIdsChange={onReferenceIdsChange}
+                    onSubmit={(nextPrompt, referenceIds) => void submit(nextPrompt, referenceIds)}
                     onPasteImage={onPasteImage}
                     className="thin-scrollbar h-20 w-full resize-none border-0 bg-transparent px-1 py-1 text-sm leading-5"
                     style={{ color: theme.node.text }}
@@ -177,7 +198,7 @@ export function CanvasAssistantComposer({
                             shape="circle"
                             className="!size-10 !min-w-10"
                             disabled={!isRunning && !prompt.trim()}
-                            onClick={() => (isRunning ? onStop?.() : void onSubmit())}
+                            onClick={() => (isRunning ? onStop?.() : void submit())}
                             aria-label={isRunning ? "停止" : "发送"}
                             icon={isRunning ? <Square className="size-4 fill-current" /> : <ArrowUp className="size-4" />}
                         />
@@ -209,6 +230,20 @@ export function AssistantReferenceChip({ item, onRemove }: { item: CanvasAssista
             ) : null}
         </div>
     );
+}
+
+export function assistantToPromptReference(reference: CanvasAssistantReference): CanvasResourceReference {
+    const kind = reference.type === CanvasNodeType.Video ? "video" : reference.type === CanvasNodeType.Audio ? "audio" : reference.type === CanvasNodeType.Text ? "text" : "image";
+    return {
+        id: reference.id,
+        nodeId: reference.id,
+        kind,
+        label: reference.label || reference.title,
+        title: reference.title,
+        previewUrl: reference.dataUrl || reference.url,
+        text: reference.text,
+        active: true,
+    };
 }
 
 function ReferenceIcon({ type }: { type: CanvasNodeType }) {

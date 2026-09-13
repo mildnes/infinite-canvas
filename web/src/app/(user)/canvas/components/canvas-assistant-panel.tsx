@@ -1,7 +1,7 @@
 "use client";
 
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
-import { History, Bot, Copy, PanelRightClose, Plus, RotateCcw, Settings2, Sparkles, Trash2, Video, X } from "lucide-react";
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Bot, Clapperboard, Copy, Group, History, Image as ImageIcon, Music2, PanelRightClose, Plus, RotateCcw, Settings2, Sparkles, Trash2, Type, Video, X } from "lucide-react";
 import { App, Button, Modal, Segmented, Switch, Tooltip } from "antd";
 import { motion } from "motion/react";
 import { nanoid } from "nanoid";
@@ -25,20 +25,38 @@ import { useUserStore } from "@/stores/use-user-store";
 import type { CanvasAgentContext } from "../agent/canvas-agent-context";
 import type { CanvasAgentAction, CanvasAgentToolResult } from "../agent/canvas-agent-tools";
 import { CanvasNodeType, type CanvasAgentConfig, type CanvasAgentSkillReference, type CanvasAgentState, type CanvasAssistantMessage, type CanvasAssistantReference, type CanvasAssistantSession, type CanvasNodeData } from "../types";
-import { assistantReferenceContentFromNode, buildAgentResourceReferences } from "../utils/canvas-resource-references";
+import { isCanvasImageNodeType } from "../utils/canvas-panorama";
+import { assistantReferenceContentFromNode, buildAgentResourceReferences, buildAllCanvasResourceReferences, type CanvasResourceReference } from "../utils/canvas-resource-references";
 import { AssistantReferenceChip, CanvasAssistantComposer } from "./canvas-assistant-composer";
 
 const PANEL_MOTION_MS = 500;
 const PANEL_MOTION_SECONDS = PANEL_MOTION_MS / 1000;
+const ASSISTANT_NODE_TYPE_META = {
+    [CanvasNodeType.Image]: { Icon: ImageIcon, label: "图片" },
+    [CanvasNodeType.Panorama]: { Icon: ImageIcon, label: "全景图" },
+    [CanvasNodeType.Video]: { Icon: Video, label: "视频" },
+    [CanvasNodeType.Audio]: { Icon: Music2, label: "音频" },
+    [CanvasNodeType.Text]: { Icon: Type, label: "文本" },
+    [CanvasNodeType.Config]: { Icon: Settings2, label: "生成配置" },
+    [CanvasNodeType.Director]: { Icon: Clapperboard, label: "导演台" },
+    [CanvasNodeType.Group]: { Icon: Group, label: "组" },
+};
+const ASSISTANT_NODE_STATUS_COLOR: Record<string, string> = {
+    success: "#22c55e",
+    loading: "#f59e0b",
+    error: "#ef4444",
+};
 
 type CanvasAssistantPanelProps = {
     nodes: CanvasNodeData[];
     selectedNodeIds: Set<string>;
+    referenceNodeClick: { nodeId: string | null; version: number };
     sessions: CanvasAssistantSession[];
     activeSessionId: string | null;
     agentConfig: CanvasAgentConfig;
     width: number;
     onWidthChange: (width: number) => void;
+    onFocusNode: (nodeId: string) => void;
     onSelectNodeIds: (ids: Set<string>) => void;
     onSessionsChange: (sessions: CanvasAssistantSession[], activeSessionId: string | null) => void;
     onAgentConfigChange: (patch: Partial<CanvasAgentConfig>) => void;
@@ -61,11 +79,13 @@ type PendingDeleteConfirmation = {
 export function CanvasAssistantPanel({
     nodes,
     selectedNodeIds,
+    referenceNodeClick,
     sessions,
     activeSessionId,
     agentConfig,
     width,
     onWidthChange,
+    onFocusNode,
     onSelectNodeIds,
     onSessionsChange,
     onAgentConfigChange,
@@ -87,6 +107,7 @@ export function CanvasAssistantPanel({
     const { message: appMessage } = App.useApp();
     const abortRef = useRef<AbortController | null>(null);
     const consumedInitialRequestRef = useRef<typeof initialRequest>(null);
+    const consumedReferenceNodeClickVersionRef = useRef(0);
     const pendingDeleteRef = useRef<PendingDeleteConfirmation | null>(null);
     const messageListRef = useRef<HTMLDivElement>(null);
     const [view, setView] = useState<"chat" | "history">("chat");
@@ -94,6 +115,7 @@ export function CanvasAssistantPanel({
     const [selectedSkills, setSelectedSkills] = useState<CanvasAgentSkillSelection[]>([]);
     const [adminSkills, setAdminSkills] = useState<CanvasAgentSkillReference[]>([]);
     const [isRunning, setIsRunning] = useState(false);
+    const [composerReferenceIds, setComposerReferenceIds] = useState<string[]>([]);
     const [checkedChatIds, setCheckedChatIds] = useState<string[]>([]);
     const [deleteChatIds, setDeleteChatIds] = useState<string[]>([]);
     const [settingsOpen, setSettingsOpen] = useState(false);
@@ -152,8 +174,46 @@ export function CanvasAssistantPanel({
             cancelled = true;
         };
     }, [authToken]);
-    const allSelectedReferences = useMemo(() => buildAssistantReferences(nodes, selectedNodeIds), [nodes, selectedNodeIds]);
-    const selectedReferences = useMemo(() => allSelectedReferences.filter((item) => !removedReferenceIds.has(item.id)), [allSelectedReferences, removedReferenceIds]);
+    const resourceReferences = useMemo(() => buildAllCanvasResourceReferences(nodes), [nodes]);
+    const resourceReferenceById = useMemo(() => new Map(resourceReferences.map((reference) => [reference.nodeId, reference])), [resourceReferences]);
+    const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+    const selectedReferenceNodeIds = useMemo(() => {
+        const ids: string[] = [];
+        const seen = new Set<string>();
+        const append = (id: string) => {
+            if (!id || seen.has(id)) return;
+            seen.add(id);
+            ids.push(id);
+        };
+        selectedNodeIds.forEach((id) => {
+            const node = nodeById.get(id);
+            if (!node) return;
+            if (node.type === CanvasNodeType.Group) {
+                nodes.filter((child) => child.metadata?.groupId === node.id).forEach((child) => append(child.id));
+                return;
+            }
+            append(node.id);
+            node.metadata?.batchChildIds?.forEach(append);
+        });
+        return new Set(ids);
+    }, [nodeById, nodes, selectedNodeIds]);
+    const resolveReferences = useCallback(
+        (ids: string[]) => ids.flatMap((id) => {
+            const node = nodeById.get(id);
+            const resource = resourceReferenceById.get(id);
+            const reference = node && resource ? nodeToReference(node, resource) : null;
+            return reference ? [reference] : [];
+        }),
+        [nodeById, resourceReferenceById],
+    );
+    const composerReferences = useMemo(() => resolveReferences(composerReferenceIds), [composerReferenceIds, resolveReferences]);
+    const pendingReferences = useMemo(() => {
+        const pendingClickNodeId = referenceNodeClick.version > consumedReferenceNodeClickVersionRef.current ? referenceNodeClick.nodeId : null;
+        return resourceReferences.filter(
+            (reference) => selectedReferenceNodeIds.has(reference.nodeId)
+                && ((!composerReferenceIds.includes(reference.nodeId) && !removedReferenceIds.has(reference.nodeId)) || reference.nodeId === pendingClickNodeId),
+        );
+    }, [composerReferenceIds, referenceNodeClick, removedReferenceIds, resourceReferences, selectedReferenceNodeIds]);
     const mentionReferences = useMemo(() => buildAgentResourceReferences(nodes), [nodes]);
     const skillOptions = useMemo<CanvasAgentSkillReference[]>(() => [...BUILTIN_CANVAS_AGENT_SKILLS.map(({ prompt: _prompt, ...skill }) => skill), ...adminSkills], [adminSkills]);
     const compatConfig = agentConfig as CanvasAgentConfigCompat;
@@ -245,8 +305,8 @@ export function CanvasAssistantPanel({
         }
 
         // @ 提及优先；没有明确 @ 时，自动带入画布当前选中的媒体节点。
-        const mentionedReferences = savedReferences ? [] : collectMentionedAssistantReferences(text, nodes, mentionReferences);
-        const references = savedReferences ? savedReferences : mentionedReferences.length ? mentionedReferences : selectedReferences;
+        const mentionedReferences = savedReferences === undefined ? collectMentionedAssistantReferences(text, nodes, mentionReferences) : [];
+        const references = savedReferences !== undefined ? savedReferences : composerReferences.length ? composerReferences : mentionedReferences;
         const skills = savedSkills || selectedSkills;
         const librarySelections = skills.filter((skill) => skill.source === "system" || skill.source === "user");
         let activeSkillContents: Array<{ id: string; source: "system" | "user"; name: string; content: string; hasFiles?: boolean }> = [];
@@ -273,7 +333,9 @@ export function CanvasAssistantPanel({
         appendMessage(session.id, userMessage);
         appendMessage(session.id, { id: assistantId, role: "assistant", text: "", status: "thinking", activity: "正在理解画布和创作目标" });
         setPrompt("");
+        setComposerReferenceIds([]);
         setSelectedSkills([]);
+        setRemovedReferenceIds(new Set(selectedReferenceNodeIds));
 
         const requestConfig = {
             ...effectiveConfig,
@@ -381,10 +443,11 @@ export function CanvasAssistantPanel({
         void sendMessage(initialRequest.prompt, initialRequest.references, initialRequest.skills);
     }, [initialRequest, onInitialRequestConsumed]);
 
-    const submit = async () => {
-        const text = prompt.trim();
+    const submit = async (nextPrompt = prompt, referenceIds = composerReferenceIds) => {
+        const text = nextPrompt.trim();
         if (!text || isRunning) return;
-        await sendMessage(text);
+        const references = resolveReferences(referenceIds);
+        await sendMessage(text, references.length ? references : undefined);
     };
 
     const retryMessage = (message: CanvasAssistantMessage) => {
@@ -497,7 +560,7 @@ export function CanvasAssistantPanel({
                             onDelete={(id) => setDeleteChatIds([id])}
                         />
                     ) : messages.length ? (
-                        <AssistantMessages messages={messages} onRetry={retryMessage} />
+                        <AssistantMessages messages={messages} nodeById={nodeById} onFocusNode={onFocusNode} onRetry={retryMessage} />
                     ) : (
                         <div className="flex h-full flex-col items-center justify-center px-8 text-center">
                             <div className="grid size-12 place-items-center rounded-2xl" style={{ background: theme.node.fill }}>
@@ -530,8 +593,10 @@ export function CanvasAssistantPanel({
                         <CanvasAssistantComposer
                             prompt={prompt}
                             isRunning={isRunning}
-                            references={composerAttachmentReferences(prompt, selectedReferences, mentionReferences, nodes)}
+                            references={composerReferences}
                             mentionReferences={mentionReferences}
+                            availableReferences={resourceReferences}
+                            pendingReferences={pendingReferences}
                             skills={skillOptions}
                             selectedSkills={selectedSkills}
                             onSelectSkill={selectSkill}
@@ -541,6 +606,12 @@ export function CanvasAssistantPanel({
                             agentConfig={agentConfig}
                             onAgentConfigChange={onAgentConfigChange}
                             onPromptChange={setPrompt}
+                            onReferenceIdsChange={(ids) => {
+                                consumedReferenceNodeClickVersionRef.current = referenceNodeClick.version;
+                                const removedSelectedIds = composerReferenceIds.filter((id) => selectedReferenceNodeIds.has(id) && !ids.includes(id));
+                                if (removedSelectedIds.length) setRemovedReferenceIds((previous) => new Set([...previous, ...removedSelectedIds]));
+                                setComposerReferenceIds(ids);
+                            }}
                             onSubmit={submit}
                             onStop={() => {
                                 settleDeleteConfirmation(false);
@@ -549,6 +620,7 @@ export function CanvasAssistantPanel({
                             onOpenUpload={onOpenUpload}
                             onOpenAssets={onOpenAssets}
                             onRemoveReference={(id) => {
+                                setComposerReferenceIds((current) => current.filter((nodeId) => nodeId !== id));
                                 setRemovedReferenceIds((previous) => new Set(previous).add(id));
                                 if (selectedNodeIds.has(id)) onSelectNodeIds(new Set(Array.from(selectedNodeIds).filter((nodeId) => nodeId !== id)));
                             }}
@@ -621,7 +693,7 @@ const ASSISTANT_MARKDOWN_COMPONENTS: Components = {
     a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer" className="font-medium underline underline-offset-4" />,
 };
 
-function AssistantMarkdown({ children }: { children: string }) {
+function AssistantMarkdown({ children, components }: { children: string; components: Components }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
 
     return (
@@ -648,16 +720,43 @@ function AssistantMarkdown({ children }: { children: string }) {
                 } as CSSProperties
             }
         >
-            <ReactMarkdown remarkPlugins={[remarkGfm]} components={ASSISTANT_MARKDOWN_COMPONENTS} skipHtml>
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} skipHtml>
                 {children}
             </ReactMarkdown>
         </div>
     );
 }
 
-function AssistantMessages({ messages, onRetry }: { messages: CanvasAssistantMessage[]; onRetry: (message: CanvasAssistantMessage) => void }) {
+function AssistantMessages({ messages, nodeById, onFocusNode, onRetry }: { messages: CanvasAssistantMessage[]; nodeById: ReadonlyMap<string, CanvasNodeData>; onFocusNode: (nodeId: string) => void; onRetry: (message: CanvasAssistantMessage) => void }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const copyText = useCopyText();
+    const markdownComponents = useMemo<Components>(() => ({
+        ...ASSISTANT_MARKDOWN_COMPONENTS,
+        code: ({ node, className, children, ...props }) => {
+            const nodeId = String(children).trim();
+            const canvasNode = nodeById.get(nodeId);
+            const isInlineCode = node?.position?.start.line === node?.position?.end.line;
+            if (isInlineCode && canvasNode) {
+                const { Icon, label: typeLabel } = ASSISTANT_NODE_TYPE_META[canvasNode.type];
+                const hasImage = isCanvasImageNodeType(canvasNode.type) && Boolean(canvasNode.metadata?.content);
+                return (
+                    <span className="my-1 flex w-full min-w-0 items-center rounded-lg transition-opacity hover:opacity-80" style={{ background: theme.toolbar.itemHover }}>
+                        <button type="button" onClick={() => onFocusNode(canvasNode.id)} className="flex min-w-0 flex-1 items-center gap-3 px-2 py-2 text-left outline-none" title={`定位到画布节点：${canvasNode.title || typeLabel}`}>
+                            <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-md">
+                                {hasImage ? <img src={canvasNode.metadata?.content} alt={canvasNode.title || typeLabel} className="size-full object-cover" /> : <Icon className="size-5 opacity-60" />}
+                            </span>
+                            <span className="min-w-0 flex-1 space-y-0.5">
+                                <span className="block truncate text-sm font-medium leading-snug">{canvasNode.title || `${typeLabel}节点`}</span>
+                                <span className="block truncate text-xs leading-snug opacity-50">{canvasNode.type === CanvasNodeType.Text ? canvasNode.metadata?.content || canvasNode.metadata?.prompt || "" : typeLabel}</span>
+                            </span>
+                            {canvasNode.metadata?.status && canvasNode.metadata.status !== "idle" ? <span className="size-1.5 shrink-0 rounded-full" style={{ background: ASSISTANT_NODE_STATUS_COLOR[canvasNode.metadata.status] || "transparent" }} /> : null}
+                        </button>
+                    </span>
+                );
+            }
+            return <code {...props} className={className}>{children}</code>;
+        },
+    }), [nodeById, onFocusNode, theme]);
 
     return (
         <>
@@ -682,7 +781,7 @@ function AssistantMessages({ messages, onRetry }: { messages: CanvasAssistantMes
                                         Agent
                                     </div>
                                 ) : null}
-                                {message.role === "assistant" ? <AssistantMarkdown>{message.text}</AssistantMarkdown> : message.text}
+                                {message.role === "assistant" ? <AssistantMarkdown components={markdownComponents}>{message.text}</AssistantMarkdown> : message.text}
                             </div>
                         ) : null}
                         {message.references?.length ? <MessageReferences message={message} /> : null}
@@ -743,15 +842,9 @@ function MessageReferences({ message }: { message: CanvasAssistantMessage }) {
     );
 }
 
-function nodeToReference(node: CanvasNodeData): CanvasAssistantReference | null {
+function nodeToReference(node: CanvasNodeData, resource?: CanvasResourceReference): CanvasAssistantReference | null {
     const content = assistantReferenceContentFromNode(node);
-    return content ? { id: node.id, type: node.type, title: node.title, ...content } : null;
-}
-
-function composerAttachmentReferences(prompt: string, selectedReferences: CanvasAssistantReference[], mentionReferences: ReturnType<typeof buildAgentResourceReferences>, nodes: CanvasNodeData[]) {
-    const mentioned = collectMentionedAssistantReferences(prompt, nodes, mentionReferences);
-    // @ 提及优先；输入已有 @ 时不再叠加画布选中节点。
-    return mentioned.length ? [] : selectedReferences;
+    return content ? { id: node.id, type: node.type, title: node.title, label: resource?.label, ...content } : null;
 }
 
 function collectMentionedAssistantReferences(text: string, nodes: CanvasNodeData[], mentionReferences: ReturnType<typeof buildAgentResourceReferences>) {
@@ -776,34 +869,6 @@ function textMentionsLabel(text: string, label: string) {
     const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     // Chip 序列化通常是 “图片2”，也可能带 @；边界匹配避免 图片1 误伤 图片10。
     return new RegExp(`(?:^|[\\s，,。.!！？?:：;；、])@?${escaped}(?=$|[\\s，,。.!！？?:：;；、])`).test(text);
-}
-
-function buildAssistantReferences(nodes: CanvasNodeData[], selectedNodeIds: Set<string>) {
-    const nodeById = new Map(nodes.map((node) => [node.id, node]));
-    const expandedIds: string[] = [];
-    const seen = new Set<string>();
-    const append = (id: string) => {
-        if (!id || seen.has(id)) return;
-        seen.add(id);
-        expandedIds.push(id);
-    };
-
-    selectedNodeIds.forEach((id) => {
-        const node = nodeById.get(id);
-        if (!node) return;
-        if (node.type === CanvasNodeType.Group) {
-            nodes.filter((child) => child.metadata?.groupId === node.id).forEach((child) => append(child.id));
-            return;
-        }
-        append(node.id);
-        node.metadata?.batchChildIds?.forEach(append);
-    });
-
-    return expandedIds
-        .map((id) => nodeById.get(id))
-        .filter((node): node is CanvasNodeData => Boolean(node))
-        .map(nodeToReference)
-        .filter((item): item is CanvasAssistantReference => Boolean(item));
 }
 
 function createSession(): CanvasAssistantSession {

@@ -26,6 +26,10 @@ export function assistantReferenceContentFromNode(node: CanvasNodeData): Partial
 }
 
 export function buildAgentResourceReferences(nodes: CanvasNodeData[]) {
+    return buildAllCanvasResourceReferences(nodes);
+}
+
+export function buildAllCanvasResourceReferences(nodes: CanvasNodeData[]) {
     return labelResourceNodes(nodes.filter(isResourceNode), true);
 }
 
