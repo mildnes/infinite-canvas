@@ -24,6 +24,29 @@ func GetStorageObject(id string) (model.StorageObject, error) {
 	return object, err
 }
 
+// ListLocalGeneratedObjects pages only the still-local generated media.
+func ListLocalGeneratedObjects(after string, limit int) ([]model.StorageObject, error) {
+	db, err := DB()
+	if err != nil {
+		return nil, err
+	}
+	var objects []model.StorageObject
+	err = db.Where("provider_id = ? AND id > ?", "local-generated", after).Order("id").Limit(limit).Find(&objects).Error
+	return objects, err
+}
+
+// ListGeneratedCloudCopies pages media that passed cloud verification and grace period.
+func ListGeneratedCloudCopies(after, before string, limit int) ([]model.StorageObject, error) {
+	db, err := DB()
+	if err != nil {
+		return nil, err
+	}
+	var objects []model.StorageObject
+	err = db.Where("cloud_synced_at <> ? AND cloud_synced_at <= ? AND local_copy_removed_at = ? AND id > ?", "", before, "", after).
+		Order("id").Limit(limit).Find(&objects).Error
+	return objects, err
+}
+
 // DeleteStorageObjectRecord 删除存储对象记录（软删除）。
 func DeleteStorageObjectRecord(id string) error {
 	db, err := DB()

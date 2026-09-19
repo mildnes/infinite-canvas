@@ -98,6 +98,8 @@ S3/R2、WebDAV 与服务端本地生成媒体共用的文件索引表，不保�
 | `direct` | boolean | 是否由登录用户的浏览器直接上传至 WebDAV |
 | `created_by` | string | 创建用户 ID |
 | `created_at` | string | 创建时间 |
+| `cloud_synced_at` | string | 新生成媒体通过云端内容校验并切换对象索引的 UTC 时间；空值表示尚未云同步 |
+| `local_copy_removed_at` | string | 已校验云端且经过保留期后，冗余本地副本的清理时间；空值表示尚未清理 |
 | `deleted_at` | string | 预留字段；当前删除链路直接删除索引记录 |
 
 ### prompts

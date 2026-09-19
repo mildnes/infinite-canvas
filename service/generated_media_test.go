@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/tigerowo/infinite-canvas/config"
 	"github.com/tigerowo/infinite-canvas/model"
@@ -47,5 +48,27 @@ func TestGeneratedMediaRangeAndPath(t *testing.T) {
 	object.ObjectKey = "../sample.png"
 	if _, err := downloadGeneratedMedia(object, ""); err == nil {
 		t.Fatal("escaped media path should be rejected")
+	}
+}
+
+func TestGeneratedCopyRequiresVerifiedCloudAndGrace(t *testing.T) {
+	current := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
+	object := model.StorageObject{ProviderID: "storage-cloud", CloudSyncedAt: current.Add(-31 * 24 * time.Hour).Format(time.RFC3339Nano)}
+	if !generatedCopyReady(object, current, 30*24*time.Hour) {
+		t.Fatal("verified old cloud copy should be eligible")
+	}
+	object.ProviderID = generatedMediaProviderID
+	if generatedCopyReady(object, current, 30*24*time.Hour) {
+		t.Fatal("local-only object must not be cleaned")
+	}
+	object.ProviderID = "storage-cloud"
+	object.CloudSyncedAt = current.Add(-29 * 24 * time.Hour).Format(time.RFC3339Nano)
+	if generatedCopyReady(object, current, 30*24*time.Hour) {
+		t.Fatal("fresh cloud copy must remain during grace period")
+	}
+	object.CloudSyncedAt = current.Add(-31 * 24 * time.Hour).Format(time.RFC3339Nano)
+	object.LocalCopyRemovedAt = current.Format(time.RFC3339Nano)
+	if generatedCopyReady(object, current, 30*24*time.Hour) {
+		t.Fatal("already cleaned object must not be cleaned twice")
 	}
 }

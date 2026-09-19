@@ -313,7 +313,7 @@ func DeleteStorageObject(ctx context.Context, id string, providerInput *StorageO
 	if user, ok := UserFromContext(ctx); ok && object.CreatedBy != "" && object.CreatedBy != user.ID {
 		return errors.New("无权删除该对象")
 	}
-	if object.ProviderID == generatedMediaProviderID || hasGeneratedMediaCopy(object) {
+	if object.ProviderID == generatedMediaProviderID || object.CloudSyncedAt != "" || hasGeneratedMediaCopy(object) {
 		// Task recovery and other projects can still reference this object. Defer
 		// reclamation until a global reference sweep, rather than deleting on
 		// the basis of a single canvas node's lifetime.

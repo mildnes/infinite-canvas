@@ -15,6 +15,7 @@ FROM golang:1.25-alpine AS api-build
 WORKDIR /app
 COPY go.mod go.sum ./
 COPY config ./config
+COPY cmd ./cmd
 COPY handler ./handler
 COPY middleware ./middleware
 COPY model ./model
@@ -22,7 +23,7 @@ COPY repository ./repository
 COPY router ./router
 COPY service ./service
 COPY main.go ./
-RUN go build -o /server .
+RUN go build -o /server . && go build -o /media-cloud ./cmd/media-cloud
 
 # 运行镜像：Next.js 对外监听 3000，Go 只在容器内部监听 8080。
 FROM node:22-bookworm-slim
@@ -31,6 +32,7 @@ WORKDIR /app
 COPY VERSION /app/VERSION
 COPY CHANGELOG.md /app/CHANGELOG.md
 COPY --from=api-build /server /app/server
+COPY --from=api-build /media-cloud /app/media-cloud
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 COPY --from=web-build /app/web/public /app/web/public
