@@ -82,22 +82,86 @@ func CurrentUserImageGenerationLogs(ctx context.Context) ([]json.RawMessage, err
 }
 
 func SaveCurrentUserImageGenerationLogs(ctx context.Context, raws []json.RawMessage) ([]json.RawMessage, error) {
+	if err := UpsertCurrentUserImageGenerationLogs(ctx, raws); err != nil {
+		return nil, err
+	}
+	return CurrentUserImageGenerationLogs(ctx)
+}
+
+func UpsertCurrentUserImageGenerationLogs(ctx context.Context, raws []json.RawMessage) error {
 	user, ok := UserFromContext(ctx)
 	if !ok || user.ID == "" {
-		return nil, errors.New("请先登录")
+		return errors.New("请先登录")
 	}
 	cleanupGenerationLogs()
 	logs := make([]model.ImageGenerationLog, 0, len(raws))
 	for _, raw := range raws {
 		log := imageGenerationLogFromPayload(raw)
 		if log.ID != "" {
+			log.SummaryJSON = imageGenerationSummary(raw)
 			logs = append(logs, log)
 		}
 	}
 	if err := repository.UpsertImageGenerationLogs(user.ID, logs); err != nil {
-		return nil, err
+		return err
 	}
-	return CurrentUserImageGenerationLogs(ctx)
+	return nil
+}
+
+func DeleteCurrentUserWorkbenchImageLogs(ctx context.Context, ids, taskIDs []string) error {
+	user, ok := UserFromContext(ctx)
+	if !ok || user.ID == "" {
+		return errors.New("请先登录")
+	}
+	if len(ids) == 0 || len(ids) > 200 || len(taskIDs) > 200 {
+		return errors.New("删除的历史记录数量无效")
+	}
+	logs, err := repository.ListImageGenerationLogsForCleanup(user.ID, ids)
+	if err != nil {
+		return err
+	}
+	storageKeys := make([]string, 0, len(ids))
+	for _, log := range logs {
+		payload := log.SummaryJSON
+		if payload == "" {
+			payload = log.PayloadJSON
+		}
+		storageKeys = append(storageKeys, imageLogServerKeys(json.RawMessage(payload))...)
+	}
+	if err := QueueImageMediaCleanup(user.ID, storageKeys); err != nil {
+		return err
+	}
+	return repository.DeleteWorkbenchImageLogs(user.ID, ids, taskIDs, now())
+}
+
+func imageLogServerKeys(raw json.RawMessage) []string {
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return nil
+	}
+	result := make([]string, 0)
+	seen := map[string]bool{}
+	var visit func(any)
+	visit = func(current any) {
+		switch item := current.(type) {
+		case string:
+			key := strings.TrimSpace(item)
+			if strings.HasPrefix(key, "server:") && !seen[key] {
+				seen[key] = true
+				result = append(result, key)
+			}
+		case []any:
+			for _, child := range item {
+				visit(child)
+			}
+		case map[string]any:
+			for _, child := range item {
+				visit(child)
+			}
+		}
+	}
+	visit(value)
+	return result
 }
 
 func DeleteCurrentUserImageGenerationLog(ctx context.Context, id string) error {
@@ -263,6 +327,7 @@ func migrateUserImageGenerationLogs(userID string) error {
 	for _, raw := range legacy.Logs {
 		log := imageGenerationLogFromPayload(raw)
 		if log.ID != "" {
+			log.SummaryJSON = imageGenerationSummary(raw)
 			logs = append(logs, log)
 		}
 	}
@@ -273,4 +338,3 @@ func migrateUserImageGenerationLogs(userID string) error {
 	_, err = repository.SaveUserConfig(config)
 	return err
 }
-

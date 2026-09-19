@@ -119,7 +119,13 @@ func New() *gin.Engine {
 		handler.DeleteUserVideoGenerationLog(c.Writer, c.Request, c.Param("id"))
 	})
 	v1.GET("/generation-logs/images", gin.WrapF(handler.UserImageGenerationLogs))
+	v1.GET("/generation-logs/images/page", gin.WrapF(handler.UserImageGenerationLogPage))
+	v1.GET("/generation-logs/images/:id", func(c *gin.Context) {
+		handler.UserImageGenerationLog(c.Writer, c.Request, c.Param("id"))
+	})
 	v1.POST("/generation-logs/images", gin.WrapF(handler.SaveUserImageGenerationLogs))
+	v1.POST("/generation-logs/images/upsert", gin.WrapF(handler.UpsertUserImageGenerationLogs))
+	v1.POST("/generation-logs/images/workbench-delete", gin.WrapF(handler.DeleteUserWorkbenchImageLogs))
 	v1.POST("/generation-logs/images/delete", gin.WrapF(handler.DeleteUserImageGenerationLogs))
 	v1.DELETE("/generation-logs/images/:id", func(c *gin.Context) {
 		handler.DeleteUserImageGenerationLog(c.Writer, c.Request, c.Param("id"))

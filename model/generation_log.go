@@ -19,6 +19,7 @@ type ImageGenerationLog struct {
 	ImageID     string `json:"imageId" gorm:"index"`
 	Status      string `json:"status" gorm:"index"`
 	PayloadJSON string `json:"payloadJson" gorm:"type:text"`
+	SummaryJSON string `json:"summaryJson" gorm:"type:text"`
 	CreatedAt   string `json:"createdAt" gorm:"index;index:idx_image_generation_logs_user_deleted_created,priority:3"`
 	UpdatedAt   string `json:"updatedAt" gorm:"index"`
 	DeletedAt   string `json:"deletedAt" gorm:"index;index:idx_image_generation_logs_user_deleted_created,priority:2"`

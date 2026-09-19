@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/service"
@@ -131,12 +132,14 @@ func DeleteDirectFileRecord(w http.ResponseWriter, r *http.Request, id string) {
 
 // FileContent 获取文件内容。
 func FileContent(w http.ResponseWriter, r *http.Request, id string) {
+	started := time.Now()
 	download, err := service.DownloadStorageObject(id, r.Header.Get("Range"))
 	if err != nil {
 		FailError(w, err)
 		return
 	}
 	defer download.Stream.Close()
+	w.Header().Set("Server-Timing", "storage-open;dur="+strconv.FormatFloat(float64(time.Since(started).Microseconds())/1000, 'f', 1, 64))
 	w.Header().Set("Content-Type", download.Object.MimeType)
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	if download.AcceptRanges {

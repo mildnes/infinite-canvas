@@ -32,6 +32,7 @@ description: 当前后端主要数据表与字段说明
 - `canvas_projects`
 - `user_configs`
 - `storage_objects`
+- `media_cleanup_candidates`
 - `agent_skills`
 - `agent_skill_files`
 
@@ -193,7 +194,7 @@ S3/R2、WebDAV 与服务端本地生成媒体共用的文件索引表，不保�
 
 ### image_generation_logs
 
-生图工作台成果历史表。当前先提供后端表和接口，前端生图工作台后续再接入；字段设计和软删除策略与 `video_generation_logs` 一致。
+生图工作台成果历史表。完整详情与轻量分页摘要分开保存，软删除策略与 `video_generation_logs` 一致。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -203,9 +204,28 @@ S3/R2、WebDAV 与服务端本地生成媒体共用的文件索引表，不保�
 | `image_id` | string | 图片结果 ID、存储 key 或 URL |
 | `status` | string | 记录状态 |
 | `payload_json` | text | 完整成果卡片 JSON。删除记录会清空该字段 |
+| `summary_json` | text | 工作台分页列表使用的轻量摘要，不保存 Base64、Blob、请求响应体或错误详情 |
 | `created_at` | string | 创建时间 |
 | `updated_at` | string | 更新时间 |
 | `deleted_at` | string | 软删除时间，空字符串表示未删除 |
+
+### media_cleanup_candidates
+
+云端媒体的延迟回收候选表。工作台删除结果时只登记候选；候选至少保留 30 天，并通过维护命令做只读引用审查。当前无法观察浏览器离线数据，因此不提供自动或命令行物理删除能力。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | string | 候选 ID |
+| `user_id` | string | 对象所属用户 |
+| `object_id` | string | `storage_objects.id` |
+| `storage_key` | string | 唯一的 `server:<id>` 引用 |
+| `requested_at` | string | 加入候选时间 |
+| `eligible_at` | string | 最早审查时间，默认 30 天后 |
+| `status` | string | `pending`、`not_due`、`referenced`、`unknown`、`protected` 或 `not_found` |
+| `last_checked_at` | string | 最近审查时间 |
+| `review_reason` | text | 未回收原因 |
+| `attempt_count` | number | 审查次数 |
+| `resolved_at` | string | 预留的完成时间；当前保持为空 |
 
 ### canvas_image_tasks
 

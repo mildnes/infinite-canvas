@@ -45,8 +45,8 @@ import { normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConf
 import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
 import { formatBytes, formatDuration, getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
-import { ImageRequestError, batchCanvasImageTaskStatus, createCanvasImageTask, deleteCanvasImageTask, listCanvasImageTasks, requestEdit, requestGeneration, type CanvasImageTask } from "@/services/api/image";
-import { deleteImageGenerationLogs, fetchImageGenerationLogs, saveImageGenerationLogs } from "@/services/api/generation-logs";
+import { ImageRequestError, batchCanvasImageTaskStatus, createCanvasImageTask, listCanvasImageTasks, requestEdit, requestGeneration, type CanvasImageTask } from "@/services/api/image";
+import { deleteImageWorkbenchLogs, fetchImageGenerationLog, fetchImageGenerationLogsPage, upsertImageGenerationLogs } from "@/services/api/generation-logs";
 import { deleteStoredImages, imageToDataUrl, resolveImageUrl, uploadImage, uploadRemoteImageToServer } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useUserStore } from "@/stores/use-user-store";
@@ -55,6 +55,7 @@ import type { ReferenceImage } from "@/types/image";
 type GeneratedImage = {
     id: string;
     dataUrl: string;
+    thumbnailUrl?: string;
     storageKey?: string;
     durationMs: number;
     width: number;
@@ -126,6 +127,7 @@ const CATEGORY_STORE_KEY = "infinite-canvas:image_generation_categories";
 const WORKBENCH_LAYOUT_KEY = "infinite-canvas:image-workbench-layout";
 const RESULT_VIEW_MODE_KEY = "infinite-canvas:image-result-view-mode";
 const IMAGE_TASK_POLL_INTERVAL_MS = 10000;
+const IMAGE_HISTORY_PAGE_SIZE = 40;
 const WORKFLOW_BUTTON_POSITION_KEY = "infinite-canvas:workflow-button-position";
 const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
 const categoryStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_categories" });
@@ -158,6 +160,10 @@ export default function ImagePage() {
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
     const [now, setNow] = useState(Date.now());
     const [workflowButtonPosition, setWorkflowButtonPosition] = useState({ x: 0, y: 0 });
+    const [historyNextCursor, setHistoryNextCursor] = useState<string | null>(null);
+    const [historyHasMore, setHistoryHasMore] = useState(false);
+    const [historyLoading, setHistoryLoading] = useState(false);
+    const [historyDisplayLimit, setHistoryDisplayLimit] = useState(IMAGE_HISTORY_PAGE_SIZE);
     const workflowButtonRef = useRef<HTMLButtonElement>(null);
     const workflowButtonDragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number; moved: boolean } | null>(null);
     const accountHistorySyncEnabledRef = useRef(false);
@@ -165,6 +171,7 @@ export default function ImagePage() {
     const pollingLogIdsRef = useRef(new Set<string>());
     const logsRef = useRef<GenerationLog[]>([]);
     const effectiveConfigRef = useRef(effectiveConfig);
+    const historyRequestRef = useRef(false);
 
     const model = effectiveConfig.imageModel || effectiveConfig.model;
     const canGenerate = Boolean(prompt.trim());
@@ -400,8 +407,17 @@ export default function ImagePage() {
     };
 
     const retryLog = async (log: GenerationLog) => {
-        const retryChannelId = imageTaskChannelId(log.task);
-        const snapshot = buildRequestSnapshot({ promptText: log.prompt, referenceItems: log.references, taskCount: Number(log.config.count) || 1, configOverride: { ...log.config, ...(retryChannelId ? { imageChannelId: retryChannelId, activeChannelId: retryChannelId } : {}) } });
+        let source = log;
+        if (token && log.references.some((reference) => !reference.dataUrl)) {
+            try {
+                source = await normalizeLog(await fetchImageGenerationLog<GenerationLog>(token, log.id));
+            } catch {
+                message.error("完整参考图读取失败，暂时无法重试");
+                return;
+            }
+        }
+        const retryChannelId = imageTaskChannelId(source.task);
+        const snapshot = buildRequestSnapshot({ promptText: source.prompt, referenceItems: source.references, taskCount: Number(source.config.count) || 1, configOverride: { ...source.config, ...(retryChannelId ? { imageChannelId: retryChannelId, activeChannelId: retryChannelId } : {}) } });
         if (!snapshot) return;
         await submitGenerationBatch(snapshot);
     };
@@ -629,7 +645,7 @@ export default function ImagePage() {
         await logStore.setItem(log.id, serializeLog(nextLog));
         const nextLogs = logs.map((item) => item.id === log.id ? nextLog : item);
         setLogs(nextLogs);
-        await persistImageHistory(nextLogs, categories);
+        await persistImageHistory(nextLogs, categories, [nextLog]);
         if (previewLog?.id === log.id) setPreviewLog(nextLog);
     };
 
@@ -676,44 +692,55 @@ export default function ImagePage() {
         setPreviewLog(null);
     };
 
-    const deleteBackendImageTasks = async (items: GenerationLog[]) => {
-        if (!token) return;
-        const tasks = Array.from(
-            new Map(
-                items.flatMap((item) => {
-                    const taskId = item.task?.parent_task_id || item.task?.id;
-                    return item.task && taskId
-                        ? [[taskId, { ...item.task, id: taskId }] as const]
-                        : [];
-                }),
-            ).values(),
-        );
-        await Promise.all(tasks.map((task) => deleteCanvasImageTask(imageTaskConfig(), task).catch(() => undefined)));
-    };
-
     const deleteAccountImageLogs = async (items: GenerationLog[]) => {
         if (!token) return;
-        const ids = Array.from(new Set(items.flatMap((item) => [item.id, item.task?.id].filter((id): id is string => Boolean(id)))));
-        if (!ids.length) return;
-        await deleteImageGenerationLogs(token, ids).catch(() => undefined);
+        const ids = Array.from(new Set(items.map((item) => item.id).filter(Boolean)));
+        const taskIds = Array.from(new Set(items.flatMap((item) => [item.task?.parent_task_id, item.task?.id].filter((id): id is string => Boolean(id)))));
+        if (!ids.length && !taskIds.length) return;
+        await deleteImageWorkbenchLogs(token, ids, taskIds);
     };
 
-    const deleteSelectedLogs = () => {
-        const deletedLogs = logs.filter((log) => selectedLogIds.includes(log.id));
-        const nextLogs = logs.filter((log) => !selectedLogIds.includes(log.id));
-        const imageKeys = disposableLogStorageKeys(deletedLogs, nextLogs);
-        void Promise.all([deleteBackendImageTasks(deletedLogs), deleteAccountImageLogs(deletedLogs), deleteStoredImages(imageKeys), ...deletedLogs.map((log) => logStore.removeItem(log.id))]).then(async () => {
-            setLogs(nextLogs);
-            setReferences((value) => value.filter((item) => !item.storageKey || !imageKeys.includes(item.storageKey)));
-            await persistImageHistory(nextLogs, categories);
-            await refreshLogs();
-        });
-        if (previewLog && selectedLogIds.includes(previewLog.id)) {
+    const removeDeletedLogsLocally = async (deletedLogs: GenerationLog[]) => {
+        // Workbench deletion only removes history records. Media may still be referenced
+        // by assets, canvas nodes, or browser-only sessions, so leave the cache to the
+        // storage/reference garbage collector instead of deleting it synchronously.
+        await Promise.all(deletedLogs.map((log) => logStore.removeItem(log.id)));
+    };
+
+    const deleteLogsOptimistically = async (deletedLogs: GenerationLog[], previousLogs: GenerationLog[], previousSelectedIds: string[] = []) => {
+        if (!deletedLogs.length) return;
+        const deletedIds = new Set(deletedLogs.map((log) => log.id));
+        const nextLogs = previousLogs.filter((log) => !deletedIds.has(log.id));
+        setLogs(nextLogs);
+        logsRef.current = nextLogs;
+        setSelectedLogIds([]);
+        setResults((value) => value.filter((item) => item.status === "pending" || !imageResultIdentityKeys(item).some((key) => deletedLogs.some((log) => imageLogIdentityKeys(log).includes(key)))));
+        if (previewLog && deletedIds.has(previewLog.id)) {
             setPreviewLog(null);
             setResults((value) => value.filter((item) => item.status === "pending"));
         }
-        setSelectedLogIds([]);
+        try {
+            await deleteAccountImageLogs(deletedLogs);
+        } catch (error) {
+            setLogs(previousLogs);
+            logsRef.current = previousLogs;
+            setSelectedLogIds(previousSelectedIds);
+            message.error(error instanceof Error ? error.message : "删除生成记录失败");
+            return;
+        }
+        try {
+            await removeDeletedLogsLocally(deletedLogs);
+            message.success(`已删除 ${deletedLogs.length} 条生成记录`);
+        } catch (error) {
+            message.warning(error instanceof Error ? error.message : "生成记录已删除，本地缓存清理未完成");
+        }
+    };
+
+    const deleteSelectedLogs = () => {
+        const previousSelectedIds = [...selectedLogIds];
+        const deletedLogs = logs.filter((log) => previousSelectedIds.includes(log.id));
         setDeleteConfirmOpen(false);
+        void deleteLogsOptimistically(deletedLogs, logs, previousSelectedIds);
     };
 
     const deleteLog = (log: GenerationLog) => {
@@ -724,15 +751,7 @@ export default function ImagePage() {
             cancelText: "取消",
             okButtonProps: { danger: true },
             onOk: async () => {
-                const nextLogs = logs.filter((item) => item.id !== log.id);
-                const imageKeys = disposableLogStorageKeys([log], nextLogs);
-                await Promise.all([deleteBackendImageTasks([log]), deleteAccountImageLogs([log]), deleteStoredImages(imageKeys), logStore.removeItem(log.id)]);
-                setLogs(nextLogs);
-                setReferences((value) => value.filter((item) => !item.storageKey || !imageKeys.includes(item.storageKey)));
-                await persistImageHistory(nextLogs, categories);
-                setSelectedLogIds((value) => value.filter((id) => id !== log.id));
-                if (previewLog?.id === log.id) setPreviewLog(null);
-                await refreshLogs();
+                await deleteLogsOptimistically([log], logs, selectedLogIds);
             },
         });
     };
@@ -770,7 +789,7 @@ export default function ImagePage() {
             setLogs(nextLogs);
             await Promise.all(duplicateLogs.map((item) => logStore.removeItem(item.id)));
             await logStore.setItem(log.id, serializeLog(persistedLog));
-            await persistImageHistory(nextLogs, categories);
+            await persistImageHistory(nextLogs, categories, [persistedLog]);
         })();
         saveLogChainRef.current = nextChain;
         await nextChain;
@@ -784,28 +803,75 @@ export default function ImagePage() {
     const refreshCategories = async () => setCategories(await readStoredCategories());
 
     const loadAccountImageHistory = async (currentToken: string) => {
+        accountHistorySyncEnabledRef.current = true;
+        const localLogs = await readStoredLogs();
+        const storedCategories = await readStoredCategories();
+        const localCategorized = withWorkflowLogCategories(localLogs, storedCategories);
+        setCategories(localCategorized.categories);
+        setLogs(localCategorized.logs);
+        logsRef.current = localCategorized.logs;
+        setHistoryDisplayLimit(IMAGE_HISTORY_PAGE_SIZE);
+        setHistoryNextCursor(null);
+        setHistoryHasMore(false);
         try {
-            accountHistorySyncEnabledRef.current = true;
-            const localLogs = await readStoredLogs();
-            const storedCategories = await readStoredCategories();
-            const remoteLogs = await fetchImageGenerationLogs<GenerationLog>(currentToken);
-            const mergedLogs = await mergeGenerationLogs(remoteLogs, localLogs);
+            const page = await fetchImageGenerationLogsPage<GenerationLog>(currentToken, IMAGE_HISTORY_PAGE_SIZE);
+            const remoteLogs = await Promise.all((page.items || []).map((log) => normalizeLog(log, { resolveMedia: false })));
+            const mergedLogs = await mergeGenerationLogs(remoteLogs, localCategorized.logs, { resolveMedia: false });
             const categorized = withWorkflowLogCategories(mergedLogs, storedCategories);
-            await replaceStoredImageHistory(categorized.logs, categorized.categories);
+            await Promise.all(remoteLogs.map((log) => logStore.setItem(log.id, serializeLog(log))));
+            await categoryStore.setItem(CATEGORY_STORE_KEY, categorized.categories);
             setCategories(categorized.categories);
             setLogs(categorized.logs);
+            logsRef.current = categorized.logs;
+            setHistoryNextCursor(page.nextCursor || null);
+            setHistoryHasMore(Boolean(page.nextCursor));
             return categorized.logs;
         } catch {
             // Keep local history available when account sync fails.
-            return undefined;
+            return localCategorized.logs;
         }
     };
 
-    const persistImageHistory = async (nextLogs: GenerationLog[], _nextCategories: GenerationCategory[]) => {
-        if (!token || !accountHistorySyncEnabledRef.current) return;
-        await saveImageGenerationLogs(token, nextLogs.map(serializeLog)).catch(() => {
+    const loadMoreHistory = async () => {
+        if (historyRequestRef.current) return;
+        if (!token || !historyHasMore) {
+            setHistoryDisplayLimit((value) => Math.min(logsRef.current.length, value + IMAGE_HISTORY_PAGE_SIZE));
+            return;
+        }
+        historyRequestRef.current = true;
+        setHistoryLoading(true);
+        try {
+            const page = await fetchImageGenerationLogsPage<GenerationLog>(token, IMAGE_HISTORY_PAGE_SIZE, historyNextCursor);
+            const remoteLogs = await Promise.all((page.items || []).map((log) => normalizeLog(log, { resolveMedia: false })));
+            const mergedLogs = dedupeGenerationLogs([...logsRef.current, ...remoteLogs]);
+            const categorized = withWorkflowLogCategories(mergedLogs, categories);
+            await Promise.all([
+                ...remoteLogs.map((log) => logStore.setItem(log.id, serializeLog(log))),
+                categoryStore.setItem(CATEGORY_STORE_KEY, categorized.categories),
+            ]);
+            setCategories(categorized.categories);
+            setLogs(categorized.logs);
+            logsRef.current = categorized.logs;
+            setHistoryDisplayLimit((value) => value + IMAGE_HISTORY_PAGE_SIZE);
+            setHistoryNextCursor(page.nextCursor || null);
+            setHistoryHasMore(Boolean(page.nextCursor));
+        } catch {
+            message.error("加载更多历史记录失败");
+        } finally {
+            historyRequestRef.current = false;
+            setHistoryLoading(false);
+        }
+    };
+
+    const persistImageHistory = async (nextLogs: GenerationLog[], _nextCategories: GenerationCategory[], changedLogs = nextLogs) => {
+        if (!token || !accountHistorySyncEnabledRef.current || !changedLogs.length) return;
+        try {
+            for (let index = 0; index < changedLogs.length; index += IMAGE_HISTORY_PAGE_SIZE) {
+                await upsertImageGenerationLogs(token, changedLogs.slice(index, index + IMAGE_HISTORY_PAGE_SIZE).map(serializeLog));
+            }
+        } catch {
             accountHistorySyncEnabledRef.current = false;
-        });
+        }
     };
 
     const syncBackendImageTasks = async (baseLogs?: GenerationLog[]) => {
@@ -877,7 +943,7 @@ export default function ImagePage() {
         const nextCategories = [...categories, nextCategory];
         setCategories(nextCategories);
         await categoryStore.setItem(CATEGORY_STORE_KEY, nextCategories);
-        await persistImageHistory(logs, nextCategories);
+        await persistImageHistory(logs, nextCategories, []);
         return nextCategory;
     };
 
@@ -890,7 +956,7 @@ export default function ImagePage() {
         const nextCategories = categories.map((item) => (item.id === category.id ? { ...item, name: trimmedName } : item));
         setCategories(nextCategories);
         await categoryStore.setItem(CATEGORY_STORE_KEY, nextCategories);
-        await persistImageHistory(logs, nextCategories);
+        await persistImageHistory(logs, nextCategories, []);
         message.success("已重命名分类");
     };
 
@@ -908,7 +974,7 @@ export default function ImagePage() {
                 setLogs(nextLogs);
                 await categoryStore.setItem(CATEGORY_STORE_KEY, nextCategories);
                 await Promise.all(nextLogs.map((log) => logStore.setItem(log.id, serializeLog(log))));
-                await persistImageHistory(nextLogs, nextCategories);
+                await persistImageHistory(nextLogs, nextCategories, nextLogs);
                 message.success("已删除分类");
             },
         });
@@ -919,7 +985,7 @@ export default function ImagePage() {
         const nextLogs = logs.map((item) => (item.id === log.id ? nextLog : item));
         setLogs(nextLogs);
         await logStore.setItem(log.id, serializeLog(nextLog));
-        await persistImageHistory(nextLogs, categories);
+        await persistImageHistory(nextLogs, categories, [nextLog]);
         await refreshLogs();
         message.success(categoryIds.length ? "已更新分类" : "已移至未分类");
     };
@@ -930,24 +996,40 @@ export default function ImagePage() {
     };
 
     const previewGenerationLog = async (log: GenerationLog) => {
-        setPreviewLog(log);
-        setPrompt(log.prompt);
-        setReferences(log.references || []);
-        const nextModel = log.config.imageModel || log.model;
-        const nextChannelId = resolveImageChannelId(effectiveConfig, nextModel, imageTaskChannelId(log.task), log.config.imageChannelId, log.config.activeChannelId);
+        let nextLog = log;
+        const needsDetail = Boolean(token && (log.imageCount > log.images.length || log.images.some((image) => !image.dataUrl || image.storageKey?.startsWith("server:")) || log.references.some((reference) => !reference.dataUrl || reference.storageKey?.startsWith("server:"))));
+        if (needsDetail) {
+            try {
+                const detail = await fetchImageGenerationLog<GenerationLog>(token, log.id);
+                nextLog = await normalizeLog(detail);
+                const nextLogs = logsRef.current.map((item) => item.id === log.id ? nextLog : item);
+                setLogs(nextLogs);
+                logsRef.current = nextLogs;
+                await logStore.setItem(nextLog.id, serializeLog(nextLog));
+            } catch {
+                message.warning("完整图片读取失败，已保留历史摘要");
+            }
+        } else {
+            nextLog = await normalizeLog(log);
+        }
+        setPreviewLog(nextLog);
+        setPrompt(nextLog.prompt);
+        setReferences(nextLog.references || []);
+        const nextModel = nextLog.config.imageModel || nextLog.model;
+        const nextChannelId = resolveImageChannelId(effectiveConfig, nextModel, imageTaskChannelId(nextLog.task), nextLog.config.imageChannelId, nextLog.config.activeChannelId);
         if (nextModel) updateConfig("imageModel", nextModel);
         if (nextChannelId) {
             updateConfig("imageChannelId", nextChannelId);
             updateConfig("activeChannelId", nextChannelId);
         }
-        if (log.config.quality) updateConfig("quality", log.config.quality);
-        if (log.config.size) updateConfig("size", log.config.size);
-        if (log.config.count) updateConfig("count", log.config.count);
-        if (log.config.apiMode) updateConfig("apiMode", log.config.apiMode);
-        if (typeof log.config.streamImages === "boolean") updateConfig("streamImages", log.config.streamImages);
-        if (log.config.streamPartialImages) updateConfig("streamPartialImages", log.config.streamPartialImages);
-        if (typeof log.config.responseFormatB64Json === "boolean") updateConfig("responseFormatB64Json", log.config.responseFormatB64Json);
-        if (typeof log.config.codexCli === "boolean") updateConfig("codexCli", log.config.codexCli);
+        if (nextLog.config.quality) updateConfig("quality", nextLog.config.quality);
+        if (nextLog.config.size) updateConfig("size", nextLog.config.size);
+        if (nextLog.config.count) updateConfig("count", nextLog.config.count);
+        if (nextLog.config.apiMode) updateConfig("apiMode", nextLog.config.apiMode);
+        if (typeof nextLog.config.streamImages === "boolean") updateConfig("streamImages", nextLog.config.streamImages);
+        if (nextLog.config.streamPartialImages) updateConfig("streamPartialImages", nextLog.config.streamPartialImages);
+        if (typeof nextLog.config.responseFormatB64Json === "boolean") updateConfig("responseFormatB64Json", nextLog.config.responseFormatB64Json);
+        if (typeof nextLog.config.codexCli === "boolean") updateConfig("codexCli", nextLog.config.codexCli);
     };
 
     const copyPrompt = async (text: string) => {
@@ -1129,6 +1211,10 @@ export default function ImagePage() {
                             resultViewMode={resultViewMode}
                             activeCategoryId={activeResultCategoryId}
                             pendingCount={pendingCount}
+                            historyDisplayLimit={historyDisplayLimit}
+                            historyHasMore={historyHasMore || logs.length > historyDisplayLimit}
+                            historyLoading={historyLoading}
+                            onLoadMore={() => void loadMoreHistory()}
                             now={now}
                             selectedLogIds={selectedLogIds}
                             activeLogId={previewLog?.id}
@@ -1165,6 +1251,10 @@ export default function ImagePage() {
                             resultViewMode={resultViewMode}
                             activeCategoryId={activeResultCategoryId}
                             pendingCount={pendingCount}
+                            historyDisplayLimit={historyDisplayLimit}
+                            historyHasMore={historyHasMore || logs.length > historyDisplayLimit}
+                            historyLoading={historyLoading}
+                            onLoadMore={() => void loadMoreHistory()}
                             now={now}
                             selectedLogIds={selectedLogIds}
                             activeLogId={previewLog?.id}
@@ -1570,6 +1660,10 @@ function ResultsPanel({
     resultViewMode,
     activeCategoryId,
     pendingCount,
+    historyDisplayLimit,
+    historyHasMore,
+    historyLoading,
+    onLoadMore,
     now,
     selectedLogIds,
     activeLogId,
@@ -1602,6 +1696,10 @@ function ResultsPanel({
     resultViewMode: ResultViewMode;
     activeCategoryId: string | null;
     pendingCount: number;
+    historyDisplayLimit: number;
+    historyHasMore: boolean;
+    historyLoading: boolean;
+    onLoadMore: () => void;
     now: number;
     selectedLogIds: string[];
     activeLogId?: string;
@@ -1635,8 +1733,9 @@ function ResultsPanel({
     const baseVisibleLogs = logs.filter((log) => !imageLogIdentityKeys(log).some((key) => liveLogIds.has(key)) && !log.images.some((image) => liveImageIds.has(image.id)));
     const categoryGroups = categories.map((category) => ({ category, logs: baseVisibleLogs.filter((log) => log.categoryIds.includes(category.id)) }));
     const activeCategory = activeCategoryId ? categories.find((category) => category.id === activeCategoryId) : null;
-    const visibleLogs = resultViewMode === "category" ? (activeCategoryId ? baseVisibleLogs.filter((log) => log.categoryIds.includes(activeCategoryId)) : baseVisibleLogs.filter((log) => !log.categoryIds.length)) : baseVisibleLogs;
-    const totalCount = results.length + (resultViewMode === "category" ? (activeCategoryId ? visibleLogs.length : categories.length + visibleLogs.length) : visibleLogs.length);
+    const allVisibleLogs = resultViewMode === "category" ? (activeCategoryId ? baseVisibleLogs.filter((log) => log.categoryIds.includes(activeCategoryId)) : baseVisibleLogs.filter((log) => !log.categoryIds.length)) : baseVisibleLogs;
+    const visibleLogs = allVisibleLogs.slice(0, historyDisplayLimit);
+    const totalCount = results.length + (resultViewMode === "category" ? (activeCategoryId ? allVisibleLogs.length : categories.length + allVisibleLogs.length) : allVisibleLogs.length);
     const shouldShowGrid = totalCount > 0;
     const allVisibleLogsSelected = Boolean(visibleLogs.length) && visibleLogs.every((log) => selectedLogIds.includes(log.id));
     const toggleVisibleLogs = () => onSelectedLogIdsChange(allVisibleLogsSelected ? selectedLogIds.filter((id) => !visibleLogs.some((log) => log.id === id)) : Array.from(new Set([...selectedLogIds, ...visibleLogs.map((log) => log.id)])));
@@ -1747,6 +1846,13 @@ function ResultsPanel({
                     <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有生成图片" />
                 </div>
             )}
+            {historyHasMore ? (
+                <div className="mt-4 flex justify-center">
+                    <Button loading={historyLoading} onClick={onLoadMore}>
+                        加载更多历史记录
+                    </Button>
+                </div>
+            ) : null}
             <Modal title="新建分类" open={creatingCategory} onCancel={() => setCreatingCategory(false)} onOk={() => void createCategory()} okText="创建" cancelText="取消" destroyOnHidden>
                 <Input value={categoryName} autoFocus placeholder="输入分类名称" onChange={(event) => setCategoryName(event.target.value)} onPressEnter={() => void createCategory()} />
             </Modal>
@@ -1791,8 +1897,12 @@ function CategoryCard({
                         {images.map((image, index) => (
                             <img
                                 key={`${image.id}-${index}`}
-                                src={image.dataUrl}
+                                src={image.thumbnailUrl || image.dataUrl}
                                 alt=""
+                                loading="lazy"
+                                onError={(event) => {
+                                    if (image.thumbnailUrl && event.currentTarget.src !== image.dataUrl) event.currentTarget.src = image.dataUrl;
+                                }}
                                 className={`${images.length === 1 ? "inset-0 size-full rounded-none border-0" : "h-[92%] w-[86%] rounded-lg border border-white/80 dark:border-stone-900"} absolute object-cover shadow-xl transition-transform duration-200 group-hover:scale-[1.02]`}
                                 style={{
                                     left: images.length === 1 ? 0 : `${3 + index * 4}%`,
@@ -1883,7 +1993,7 @@ function ResultImageCard({
                     <Tag className="m-0 text-[10px]" color="blue">新生成</Tag>
                 </div>
                 <ReferenceThumbnailOverlay references={result.references} className="left-1.5 top-1.5" />
-                <Image src={image.dataUrl} alt={`生成结果 ${index + 1}`} className="aspect-[4/3] object-cover" />
+                <Image src={image.dataUrl} alt={`生成结果 ${index + 1}`} loading="lazy" className="aspect-[4/3] object-cover" />
             </div>
             <TaskInfo result={result} onCopyPrompt={onCopyPrompt} />
             <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 border-t border-stone-200 px-2.5 py-2 dark:border-stone-800">
@@ -2032,6 +2142,7 @@ function HistoryLogCard({
 }) {
     const displayImages = log.images.filter((image) => Boolean(image.dataUrl));
     const firstImage = displayImages[0];
+    const [thumbnailFailed, setThumbnailFailed] = useState(false);
     const [expanded, setExpanded] = useState(false);
     const [categoryOpen, setCategoryOpen] = useState(false);
     const [categoryName, setCategoryName] = useState("");
@@ -2060,7 +2171,10 @@ function HistoryLogCard({
     }, [categoryOpen]);
 
     return (
-        <div className={`overflow-hidden rounded-lg border bg-background dark:bg-stone-950 ${active ? "border-stone-900 dark:border-stone-100" : "border-stone-200 dark:border-stone-800"}`}>
+        <div
+            className={`overflow-hidden rounded-lg border bg-background dark:bg-stone-950 ${active ? "border-stone-900 dark:border-stone-100" : "border-stone-200 dark:border-stone-800"}`}
+            style={{ contentVisibility: "auto", containIntrinsicSize: "360px" }}
+        >
             <div className="relative aspect-[4/3] bg-stone-100 dark:bg-stone-900">
                 <div className="absolute left-1.5 top-1.5 z-10 flex items-center gap-1 rounded-md bg-white/85 px-1.5 py-1 shadow-sm dark:bg-stone-950/80">
                     <Checkbox checked={selected} onChange={(event) => onSelectedChange(event.target.checked)} />
@@ -2074,7 +2188,14 @@ function HistoryLogCard({
                     <Tag className="m-0 text-[10px]">{log.imageCount} 张</Tag>
                 </div>
                 {firstImage ? (
-                    <Image src={firstImage.dataUrl} alt={`历史结果 ${index + 1}`} className="aspect-[4/3] object-cover" />
+                    <Image
+                        src={thumbnailFailed ? firstImage.dataUrl : firstImage.thumbnailUrl || firstImage.dataUrl}
+                        alt={`历史结果 ${index + 1}`}
+                        loading="lazy"
+                        onError={() => setThumbnailFailed(true)}
+                        preview={{ src: firstImage.dataUrl }}
+                        className="aspect-[4/3] object-cover"
+                    />
                 ) : (
                     <div className="flex size-full flex-col items-center justify-center gap-2 p-5 text-center text-sm text-red-500">
                         <AlertCircle className="size-7" />
@@ -2084,7 +2205,16 @@ function HistoryLogCard({
                 {displayImages.length > 1 ? (
                     <div className="absolute bottom-1.5 left-1.5 right-1.5 flex gap-1 overflow-hidden">
                         {displayImages.slice(0, 4).map((image) => (
-                            <img key={image.id} src={image.dataUrl} alt="" className="size-8 shrink-0 rounded border border-white/80 object-cover shadow-sm dark:border-stone-900/80" />
+                            <img
+                                key={image.id}
+                                src={image.thumbnailUrl || image.dataUrl}
+                                alt=""
+                                loading="lazy"
+                                onError={(event) => {
+                                    if (image.thumbnailUrl && event.currentTarget.src !== image.dataUrl) event.currentTarget.src = image.dataUrl;
+                                }}
+                                className="size-8 shrink-0 rounded border border-white/80 object-cover shadow-sm dark:border-stone-900/80"
+                            />
                         ))}
                     </div>
                 ) : null}
@@ -2186,7 +2316,16 @@ function ReferenceThumbnailOverlay({ references, className = "" }: { references?
     return (
         <div className={`absolute z-10 flex items-center gap-1 rounded-md bg-black/55 p-1 shadow-sm backdrop-blur ${className}`}>
             {visibleReferences.map((item) => (
-                <img key={item.id} src={item.dataUrl} alt={item.name} className="size-7 rounded border border-white/60 object-cover" />
+                <img
+                    key={item.id}
+                    src={thumbnailUrlForReference(item)}
+                    alt={item.name}
+                    loading="lazy"
+                    onError={(event) => {
+                        if (event.currentTarget.src !== item.dataUrl) event.currentTarget.src = item.dataUrl;
+                    }}
+                    className="size-7 rounded border border-white/60 object-cover"
+                />
             ))}
             {(references || []).length > visibleReferences.length ? <span className="px-1 text-[10px] text-white">+{(references || []).length - visibleReferences.length}</span> : null}
         </div>
@@ -2205,10 +2344,6 @@ function createPendingResult(id: string, snapshot: RequestSnapshot): GenerationR
     };
 }
 
-function generationLogStorageKeys(log: GenerationLog) {
-    return [...log.images.map((image) => image.storageKey), ...log.references.filter(isDisposableReferenceFile).map((image) => image.storageKey)].filter((key): key is string => Boolean(key));
-}
-
 function referenceUsedByGeneration(reference: ReferenceImage, logs: GenerationLog[], results: GenerationResult[]) {
     if (!reference.storageKey) return false;
     return logs.some((log) => log.references.some((item) => item.storageKey === reference.storageKey)) || results.some((result) => result.references.some((item) => item.storageKey === reference.storageKey));
@@ -2223,12 +2358,6 @@ function shouldDeleteReferenceFile(reference: ReferenceImage, logs: GenerationLo
 function isDisposableReferenceFile(reference: ReferenceImage) {
     const item = reference as ReferenceImage & { temporary?: boolean; source?: string };
     return item.temporary === true || item.source === "upload" || item.source === "clipboard";
-}
-
-function disposableLogStorageKeys(deletedLogs: GenerationLog[], remainingLogs: GenerationLog[]) {
-    const deletedKeys = new Set(deletedLogs.flatMap(generationLogStorageKeys));
-    const retainedKeys = new Set(remainingLogs.flatMap(generationLogStorageKeys));
-    return [...deletedKeys].filter((key) => !retainedKeys.has(key));
 }
 
 function createWorkflowResultId(taskId: string, index: number) {
@@ -2527,7 +2656,7 @@ async function readStoredLogs() {
         await logStore.iterate<GenerationLog, void>((value) => {
             values.push(value);
         });
-        const logs = await Promise.all(values.map(normalizeLog));
+        const logs = await Promise.all(values.map((log) => normalizeLog(log, { resolveMedia: false })));
         return dedupeGenerationLogs(logs);
     } catch {
         return [];
@@ -2542,13 +2671,6 @@ async function readStoredCategories() {
     } catch {
         return [];
     }
-}
-
-async function replaceStoredImageHistory(logs: GenerationLog[], categories: GenerationCategory[]) {
-    if (typeof window === "undefined") return;
-    await logStore.clear();
-    await Promise.all(logs.map((log) => logStore.setItem(log.id, serializeLog(log))));
-    await categoryStore.setItem(CATEGORY_STORE_KEY, categories);
 }
 
 function withWorkflowLogCategories(logs: GenerationLog[], categories: GenerationCategory[]) {
@@ -2583,8 +2705,23 @@ function withWorkflowLogCategories(logs: GenerationLog[], categories: Generation
     return { logs: logsChanged ? nextLogs : logs, categories: categoriesChanged ? nextCategories : categories };
 }
 
-function hasInlineImageData(log: Partial<GenerationLog>) {
-    return [...(log.images || []), ...(log.references || [])].some((item) => item.dataUrl?.startsWith("data:image/"));
+function serverObjectId(storageKey?: string) {
+    return storageKey?.startsWith("server:") && !storageKey.startsWith("server:webdav:") ? storageKey.slice("server:".length) : "";
+}
+
+function serverContentUrl(storageKey?: string) {
+    const objectId = serverObjectId(storageKey);
+    return objectId ? `/api/files/${encodeURIComponent(objectId)}/content` : "";
+}
+
+function thumbnailUrlForImage(image: Pick<GeneratedImage, "storageKey" | "dataUrl">) {
+    const objectId = serverObjectId(image.storageKey);
+    return objectId ? `/api/files/${encodeURIComponent(objectId)}/thumbnail` : image.dataUrl;
+}
+
+function thumbnailUrlForReference(reference: ReferenceImage) {
+    const objectId = serverObjectId(reference.storageKey);
+    return objectId ? `/api/files/${encodeURIComponent(objectId)}/thumbnail` : reference.dataUrl;
 }
 
 function isClientImageTaskId(value?: string) {
@@ -2607,9 +2744,9 @@ function shouldPreserveLocalImageLogDuringRemoteMerge(log: GenerationLog, remote
     return !keys.length || !keys.some((key) => remoteKeys.has(key));
 }
 
-async function mergeGenerationLogs(remoteLogs: GenerationLog[], localLogs: GenerationLog[]) {
-    const normalizedRemote = await Promise.all(remoteLogs.map(normalizeLog));
-    const normalizedLocal = await Promise.all(localLogs.map(normalizeLog));
+async function mergeGenerationLogs(remoteLogs: GenerationLog[], localLogs: GenerationLog[], options: { resolveMedia?: boolean } = {}) {
+    const normalizedRemote = options.resolveMedia === false ? remoteLogs : await Promise.all(remoteLogs.map((log) => normalizeLog(log, options)));
+    const normalizedLocal = options.resolveMedia === false ? localLogs : await Promise.all(localLogs.map((log) => normalizeLog(log, options)));
     const remoteKeys = new Set(normalizedRemote.flatMap(imageLogIdentityKeys));
     const preservedLocal = normalizedLocal.filter((log) => shouldPreserveLocalImageLogDuringRemoteMerge(log, remoteKeys));
     return dedupeGenerationLogs([...normalizedRemote, ...preservedLocal]);
@@ -2623,23 +2760,28 @@ function mergeGenerationCategories(remoteCategories: GenerationCategory[], local
     return [...byId.values()].sort((a, b) => a.createdAt - b.createdAt);
 }
 
-async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog> {
+async function normalizeLog(log: Partial<GenerationLog>, options: { resolveMedia?: boolean } = {}): Promise<GenerationLog> {
+    const resolveMedia = options.resolveMedia !== false;
     const references = await Promise.all(
-        (log.references || []).map(async (item) => ({
-            ...item,
-            dataUrl: await resolveImageUrl(item.storageKey, item.dataUrl),
-        })),
+        (log.references || []).map(async (item) => {
+            const fallback = item.dataUrl || serverContentUrl(item.storageKey);
+            return {
+                ...item,
+                dataUrl: !resolveMedia && item.storageKey?.startsWith("server:") ? fallback : await resolveImageUrl(item.storageKey, fallback),
+            };
+        }),
     );
     const images = await Promise.all(
         (log.images || []).map(async (item) => {
-            const dataUrl = await resolveImageUrl(item.storageKey, item.dataUrl);
-            return { ...item, dataUrl };
+            const fallback = item.dataUrl || serverContentUrl(item.storageKey);
+            const dataUrl = !resolveMedia && item.storageKey?.startsWith("server:") ? fallback : await resolveImageUrl(item.storageKey, fallback);
+            return { ...item, dataUrl, thumbnailUrl: thumbnailUrlForImage({ ...item, dataUrl }) };
         }),
     );
     const visibleImages = images.filter((image) => Boolean(image.dataUrl));
     if (!visibleImages.length && log.status === "成功") {
         const taskImageUrl = log.task?.image_url || log.task?.url || "";
-        const dataUrl = await resolveImageUrl(log.task?.storageKey, taskImageUrl);
+        const dataUrl = await resolveImageUrl(log.task?.storageKey, taskImageUrl || serverContentUrl(log.task?.storageKey));
         if (dataUrl) {
             visibleImages.push({
                 id: log.task?.id || log.id || nanoid(),
@@ -2650,6 +2792,7 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
                 height: log.task?.height || 0,
                 bytes: log.task?.bytes || 0,
                 mimeType: log.task?.mimeType || "image/png",
+                thumbnailUrl: thumbnailUrlForImage({ storageKey: log.task?.storageKey, dataUrl }),
             });
         }
     }
@@ -2671,7 +2814,7 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
         quality: log.quality || config.quality || "",
         status: log.status || "成功",
         images: visibleImages,
-        thumbnails: visibleImages.map((image) => image.dataUrl),
+        thumbnails: visibleImages.map((image) => image.thumbnailUrl || image.dataUrl),
         errors: log.errors || [],
         errorDetails: log.errorDetails || [],
         categoryIds: Array.isArray(log.categoryIds) ? log.categoryIds : [],
@@ -2848,17 +2991,3 @@ function buildLog({
 function formatLogTime(value: number) {
     return new Date(value).toLocaleString("zh-CN", { hour12: false });
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
