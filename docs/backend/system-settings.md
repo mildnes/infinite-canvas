@@ -139,7 +139,7 @@ docker compose exec app /app/media-cloud -mode cleanup -apply -backup-confirmed 
 
 `-min-age-days` 可调整保留期，但不得低于 7 天。此命令只清理验证后的冗余本地文件，不清理 `local-generated` 唯一副本、云端对象、任务或备份。不要直接对整个目录使用定时删除；如未来设置外部计划任务，也要保留备份验证和失败告警。提供方关闭、配置失效或远端内容不匹配时停止该对象清理。
 
-### 生图历史摘要、缩略图与云端原图
+### 生图历史摘要与云端原图
 
 生图工作台通过每页 40 条的轻量摘要读取历史；部署新镜像并完成数据库自动迁移后、恢复用户流量前，先分批回填旧日志摘要。分页接口不会在首屏临时读取大型旧载荷；未回填记录会暂不出现在列表中。命令默认只统计，显式 `-apply` 才写入 `summary_json`：
 
@@ -150,7 +150,7 @@ docker compose exec app /app/image-log-summaries -apply -limit 10
 
 按输出的 `nextCursor` 配合 `-after <ID>` 继续，直至 `inspected` 为 0。回填不清理旧 `payload_json`，也不读取或改写云端原图。
 
-工作台列表通过 `/api/files/<id>/thumbnail` 读取最大 480 像素的 WebP 缩略图，原图预览、编辑和下载仍使用既有 `/content` 地址。缩略图默认缓存于 `/app/data/thumbnail-cache`，上限 512 MiB，可删除并自动重建；该目录不是原图备份。媒体响应的 `Server-Timing: storage-open` 可用于区分应用打开 WebDAV 与浏览器传输、解码耗时。
+工作台分类与历史卡片、预览、编辑和下载均使用既有 `/content` 原图地址；列表分页并对未展示的卡片延迟加载，不再请求缩略图接口。媒体响应的 `Server-Timing: storage-open` 可用于区分应用打开 WebDAV 与浏览器传输、解码耗时。
 
 删除工作台记录会登记至少 30 天后的云媒体回收候选。`/app/media-gc` 只执行引用和云端校验审查；由于浏览器 IndexedDB 与离线项目无法被服务端完整观察，当前始终拒绝物理删除，不得将其替换为直接删除 WebDAV 目录的计划任务。
 

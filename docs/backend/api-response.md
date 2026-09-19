@@ -29,4 +29,3 @@ description: 业务接口统一响应结构与前端处理约定
 - `GET /api/v1/generation-logs/images/:id`：用户点击载入时读取当前账号的完整记录。
 - `POST /api/v1/generation-logs/images/upsert`：每批最多增量保存 40 条记录，不返回整份历史。
 - `POST /api/v1/generation-logs/images/workbench-delete`：批量软删除当前账号的历史和对应工作台任务；云端原文件只进入延迟回收候选。
-- `GET /api/files/:id/thumbnail`：返回最大 480 像素的 WebP 列表缩略图；失败时前端回退原 `/content` 地址。

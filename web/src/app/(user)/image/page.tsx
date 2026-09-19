@@ -55,7 +55,6 @@ import type { ReferenceImage } from "@/types/image";
 type GeneratedImage = {
     id: string;
     dataUrl: string;
-    thumbnailUrl?: string;
     storageKey?: string;
     durationMs: number;
     width: number;
@@ -1897,12 +1896,9 @@ function CategoryCard({
                         {images.map((image, index) => (
                             <img
                                 key={`${image.id}-${index}`}
-                                src={image.thumbnailUrl || image.dataUrl}
+                                src={image.dataUrl}
                                 alt=""
                                 loading="lazy"
-                                onError={(event) => {
-                                    if (image.thumbnailUrl && event.currentTarget.src !== image.dataUrl) event.currentTarget.src = image.dataUrl;
-                                }}
                                 className={`${images.length === 1 ? "inset-0 size-full rounded-none border-0" : "h-[92%] w-[86%] rounded-lg border border-white/80 dark:border-stone-900"} absolute object-cover shadow-xl transition-transform duration-200 group-hover:scale-[1.02]`}
                                 style={{
                                     left: images.length === 1 ? 0 : `${3 + index * 4}%`,
@@ -2142,7 +2138,6 @@ function HistoryLogCard({
 }) {
     const displayImages = log.images.filter((image) => Boolean(image.dataUrl));
     const firstImage = displayImages[0];
-    const [thumbnailFailed, setThumbnailFailed] = useState(false);
     const [expanded, setExpanded] = useState(false);
     const [categoryOpen, setCategoryOpen] = useState(false);
     const [categoryName, setCategoryName] = useState("");
@@ -2189,10 +2184,9 @@ function HistoryLogCard({
                 </div>
                 {firstImage ? (
                     <Image
-                        src={thumbnailFailed ? firstImage.dataUrl : firstImage.thumbnailUrl || firstImage.dataUrl}
+                        src={firstImage.dataUrl}
                         alt={`历史结果 ${index + 1}`}
                         loading="lazy"
-                        onError={() => setThumbnailFailed(true)}
                         preview={{ src: firstImage.dataUrl }}
                         className="aspect-[4/3] object-cover"
                     />
@@ -2207,12 +2201,9 @@ function HistoryLogCard({
                         {displayImages.slice(0, 4).map((image) => (
                             <img
                                 key={image.id}
-                                src={image.thumbnailUrl || image.dataUrl}
+                                src={image.dataUrl}
                                 alt=""
                                 loading="lazy"
-                                onError={(event) => {
-                                    if (image.thumbnailUrl && event.currentTarget.src !== image.dataUrl) event.currentTarget.src = image.dataUrl;
-                                }}
                                 className="size-8 shrink-0 rounded border border-white/80 object-cover shadow-sm dark:border-stone-900/80"
                             />
                         ))}
@@ -2318,12 +2309,9 @@ function ReferenceThumbnailOverlay({ references, className = "" }: { references?
             {visibleReferences.map((item) => (
                 <img
                     key={item.id}
-                    src={thumbnailUrlForReference(item)}
+                    src={item.dataUrl}
                     alt={item.name}
                     loading="lazy"
-                    onError={(event) => {
-                        if (event.currentTarget.src !== item.dataUrl) event.currentTarget.src = item.dataUrl;
-                    }}
                     className="size-7 rounded border border-white/60 object-cover"
                 />
             ))}
@@ -2714,16 +2702,6 @@ function serverContentUrl(storageKey?: string) {
     return objectId ? `/api/files/${encodeURIComponent(objectId)}/content` : "";
 }
 
-function thumbnailUrlForImage(image: Pick<GeneratedImage, "storageKey" | "dataUrl">) {
-    const objectId = serverObjectId(image.storageKey);
-    return objectId ? `/api/files/${encodeURIComponent(objectId)}/thumbnail` : image.dataUrl;
-}
-
-function thumbnailUrlForReference(reference: ReferenceImage) {
-    const objectId = serverObjectId(reference.storageKey);
-    return objectId ? `/api/files/${encodeURIComponent(objectId)}/thumbnail` : reference.dataUrl;
-}
-
 function isClientImageTaskId(value?: string) {
     return typeof value === "string" && value.startsWith("client_image_task_");
 }
@@ -2775,7 +2753,7 @@ async function normalizeLog(log: Partial<GenerationLog>, options: { resolveMedia
         (log.images || []).map(async (item) => {
             const fallback = item.dataUrl || serverContentUrl(item.storageKey);
             const dataUrl = !resolveMedia && item.storageKey?.startsWith("server:") ? fallback : await resolveImageUrl(item.storageKey, fallback);
-            return { ...item, dataUrl, thumbnailUrl: thumbnailUrlForImage({ ...item, dataUrl }) };
+            return { ...item, dataUrl };
         }),
     );
     const visibleImages = images.filter((image) => Boolean(image.dataUrl));
@@ -2792,7 +2770,6 @@ async function normalizeLog(log: Partial<GenerationLog>, options: { resolveMedia
                 height: log.task?.height || 0,
                 bytes: log.task?.bytes || 0,
                 mimeType: log.task?.mimeType || "image/png",
-                thumbnailUrl: thumbnailUrlForImage({ storageKey: log.task?.storageKey, dataUrl }),
             });
         }
     }
@@ -2814,7 +2791,7 @@ async function normalizeLog(log: Partial<GenerationLog>, options: { resolveMedia
         quality: log.quality || config.quality || "",
         status: log.status || "成功",
         images: visibleImages,
-        thumbnails: visibleImages.map((image) => image.thumbnailUrl || image.dataUrl),
+        thumbnails: visibleImages.map((image) => image.dataUrl),
         errors: log.errors || [],
         errorDetails: log.errorDetails || [],
         categoryIds: Array.isArray(log.categoryIds) ? log.categoryIds : [],
