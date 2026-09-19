@@ -277,22 +277,68 @@ func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []
 		saveFailedCanvasImageTask(task, err.Error(), string(payload))
 		return
 	}
+	imageStorage := make([]*model.CanvasImageStorage, len(imageURLs))
+	created := make([]string, 0, len(imageURLs))
+	for index, url := range imageURLs {
+		if !strings.HasPrefix(url, "data:image/") {
+			continue
+		}
+		data, imageMimeType, decodeErr := imageCandidateBytes(url)
+		if decodeErr != nil {
+			err = decodeErr
+			break
+		}
+		stored, saveErr := service.SaveGeneratedMedia(user.ID, imageMimeType, data)
+		if saveErr != nil {
+			err = saveErr
+			break
+		}
+		created = append(created, stored.ID)
+		width, height := imageSize(data)
+		imageURLs[index] = stored.URL
+		imageStorage[index] = &model.CanvasImageStorage{URL: stored.URL, StorageKey: stored.StorageKey, MimeType: stored.MimeType, Bytes: stored.Bytes, Width: width, Height: height}
+		if index == 0 {
+			mimeType, bytes = stored.MimeType, stored.Bytes
+			task.Width, task.Height = width, height
+			task.StorageKey = stored.StorageKey
+		}
+	}
+	if err != nil {
+		for _, id := range created {
+			service.DiscardGeneratedMedia(id)
+		}
+		task.StorageKey = ""
+		task.Width, task.Height = 0, 0
+		saveFailedCanvasImageTask(task, "保存生成图片失败", err.Error())
+		return
+	}
 	task.Status = "completed"
 	task.Progress = 100
 	task.CompletedAt = taskTime()
-	task.ResponseBody = string(payload)
+	task.ResponseBody = ""
 	task.ImageURL = imageURLs[0]
 	if collectAll {
 		task.ImageURLs = imageURLs
+		task.ImageStorage = imageStorage
 	}
-	task.StorageKey = ""
 	task.MimeType = mimeType
 	task.Bytes = bytes
-	task.Width = 0
-	task.Height = 0
 	task.Error = ""
 	task.ErrorDetail = ""
-	_, _ = service.SaveCanvasImageTask(task)
+	if _, err = service.SaveCanvasImageTask(task); err != nil {
+		if persisted, found, readErr := service.GetUserCanvasImageTask(user.ID, task.ID); readErr == nil && found && persisted.Status != "completed" {
+			for _, id := range created {
+				service.DiscardGeneratedMedia(id)
+			}
+		}
+		log.Printf("save completed canvas image task failed: id=%s err=%v", task.ID, err)
+		return
+	}
+	for _, id := range created {
+		if err := service.SyncGeneratedMedia(service.WithUser(context.Background(), user), id); err != nil {
+			log.Printf("sync canvas image media failed (local preserved): task=%s object=%s err=%v", task.ID, id, err)
+		}
+	}
 }
 
 func runCanvasAudioTask(task model.CanvasAudioTask, user model.AuthUser, body []byte, contentType string, channelID string, userChannelID string) {
@@ -331,13 +377,27 @@ func runCanvasAudioTask(task model.CanvasAudioTask, user model.AuthUser, body []
 	task.Progress = 100
 	task.CompletedAt = taskTime()
 	task.ResponseBody = "[binary audio]"
-	task.AudioURL = "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(payload)
-	task.StorageKey = ""
+	stored, err := service.SaveGeneratedMedia(user.ID, mimeType, payload)
+	if err != nil {
+		saveFailedCanvasAudioTask(task, "保存生成音频失败", err.Error())
+		return
+	}
+	task.AudioURL = stored.URL
+	task.StorageKey = stored.StorageKey
 	task.MimeType = mimeType
 	task.Bytes = int64(len(payload))
 	task.Error = ""
 	task.ErrorDetail = ""
-	_, _ = service.SaveCanvasAudioTask(task)
+	if _, err = service.SaveCanvasAudioTask(task); err != nil {
+		if persisted, found, readErr := service.GetUserCanvasAudioTask(user.ID, task.ID); readErr == nil && found && persisted.Status != "completed" {
+			service.DiscardGeneratedMedia(stored.ID)
+		}
+		log.Printf("save completed canvas audio task failed: id=%s err=%v", task.ID, err)
+		return
+	}
+	if err := service.SyncGeneratedMedia(service.WithUser(context.Background(), user), stored.ID); err != nil {
+		log.Printf("sync canvas audio media failed (local preserved): task=%s object=%s err=%v", task.ID, stored.ID, err)
+	}
 }
 
 func executeCanvasAIRequest(user model.AuthUser, endpoint string, body []byte, contentType string, channelID string, userChannelID string) ([]byte, int, string, error) {
@@ -362,17 +422,24 @@ func executeCanvasAIRequest(user model.AuthUser, endpoint string, body []byte, c
 func saveFailedCanvasImageTask(task model.CanvasImageTask, message string, detail string) {
 	task.Status = "failed"
 	task.CompletedAt = taskTime()
-	task.Error = firstNonEmpty(message, "图片生成失败")
-	task.ErrorDetail = detail
+	task.Error = boundedTaskError(firstNonEmpty(message, "图片生成失败"), 1000)
+	task.ErrorDetail = boundedTaskError(detail, 8192)
 	_, _ = service.SaveCanvasImageTask(task)
 }
 
 func saveFailedCanvasAudioTask(task model.CanvasAudioTask, message string, detail string) {
 	task.Status = "failed"
 	task.CompletedAt = taskTime()
-	task.Error = firstNonEmpty(message, "音频生成失败")
-	task.ErrorDetail = detail
+	task.Error = boundedTaskError(firstNonEmpty(message, "音频生成失败"), 1000)
+	task.ErrorDetail = boundedTaskError(detail, 8192)
 	_, _ = service.SaveCanvasAudioTask(task)
+}
+
+func boundedTaskError(value string, limit int) string {
+	if len(value) > limit {
+		return "上游错误内容过长（已省略）"
+	}
+	return value
 }
 
 func readCanvasTaskAIRequest(r *http.Request, fallbackEndpoint string) ([]byte, string, string, string, string, string, string, string, string, error) {

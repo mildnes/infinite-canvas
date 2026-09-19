@@ -313,6 +313,12 @@ func DeleteStorageObject(ctx context.Context, id string, providerInput *StorageO
 	if user, ok := UserFromContext(ctx); ok && object.CreatedBy != "" && object.CreatedBy != user.ID {
 		return errors.New("无权删除该对象")
 	}
+	if object.ProviderID == generatedMediaProviderID || hasGeneratedMediaCopy(object) {
+		// Task recovery and other projects can still reference this object. Defer
+		// reclamation until a global reference sweep, rather than deleting on
+		// the basis of a single canvas node's lifetime.
+		return errors.New("生成媒体仍可能被任务或其他记录引用，暂不可直接删除")
+	}
 	settings, err := repository.GetSettings()
 	if err != nil {
 		return err
@@ -485,6 +491,9 @@ func DownloadStorageObject(id string, rangeHeader string) (DownloadedStorageObje
 	if err != nil {
 		return DownloadedStorageObject{}, err
 	}
+	if object.ProviderID == generatedMediaProviderID {
+		return downloadGeneratedMedia(object, rangeHeader)
+	}
 
 	providers := []model.StorageProvider{}
 	if object.CreatedBy != "" && object.CreatedBy != "anonymous" {
@@ -497,7 +506,11 @@ func DownloadStorageObject(id string, rangeHeader string) (DownloadedStorageObje
 	}
 	if stream, readErr := readStorageObjectStreamFromProviders(object, providers, rangeHeader); readErr == nil && stream.Body != nil {
 		return downloadedStorageObject(object, stream), nil
-	} else if strings.TrimSpace(object.PublicURL) == "" {
+	}
+	if local, readErr := generatedMediaFallback(object, rangeHeader); readErr == nil {
+		return local, nil
+	}
+	if strings.TrimSpace(object.PublicURL) == "" {
 		return DownloadedStorageObject{}, safeMessageError{message: "对象存储读取失败，请检查存储配置或重新上传"}
 	}
 
@@ -988,8 +1001,20 @@ func extensionForContentType(contentType string) string {
 		return ".jpg"
 	case "image/webp":
 		return ".webp"
+	case "image/gif":
+		return ".gif"
 	case "image/png":
 		return ".png"
+	case "audio/mpeg", "audio/mp3":
+		return ".mp3"
+	case "audio/wav", "audio/x-wav":
+		return ".wav"
+	case "audio/ogg":
+		return ".ogg"
+	case "audio/aac":
+		return ".aac"
+	case "audio/mp4", "audio/x-m4a":
+		return ".m4a"
 	default:
 		return ".bin"
 	}

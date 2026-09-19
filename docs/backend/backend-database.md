@@ -81,12 +81,12 @@ description: 当前后端主要数据表与字段说明
 
 ### storage_objects
 
-S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表或生成记录。
+S3/R2、WebDAV 与服务端本地生成媒体共用的文件索引表，不保存画布、素材列表或生成记录。本地生成对象的 `provider_id` 为 `local-generated`，文件放在数据库同级的 `generated-media/`（容器内 `/app/data/generated-media`），须与数据库一起备份；云同步成功后索引可指向云端，同一 ID 的本地副本暂留作读取回退。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | string | 文件 ID，前端存储 key 使用 `server:<id>` |
-| `provider_id` | string | 创建文件时使用的 S3/R2 或 WebDAV Provider ID |
+| `provider_id` | string | S3/R2、WebDAV Provider ID，或本地生成标识 `local-generated` |
 | `bucket` | string | S3/R2 Bucket；WebDAV 为空 |
 | `object_key` | string | Provider 内相对对象路径，唯一索引 |
 | `public_url` | string | S3/R2 可选公开地址；WebDAV 为空并通过 `/api/files/:id/content` 读取 |
@@ -224,7 +224,9 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `generation_type` | string | `generation` 或 `edit` |
 | `image_url` | text | 完成后图片 URL或第一张图片 URL |
 | `image_urls` | JSON | 完成后全部图片 URL，第一项与 `image_url` 一致 |
+| `image_storage` | JSON | 多图逐张短 URL、`storageKey`、MIME、尺寸和字节；外链项为 `null` |
 | `storage_key` | string | 存储对象 key |
+| `response_body` | text | 新成功任务不再保存上游二进制/base64；旧任务需单独迁移 |
 | `error` | text | 失败摘要 |
 | `error_detail` | text | 失败详情 |
 | `created_at` | string | 创建时间 |
@@ -252,6 +254,7 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `prompt` | text | 提示词 |
 | `audio_url` | text | 完成后音频 URL |
 | `storage_key` | string | 存储对象 key |
+| `response_body` | text | 新任务只保留不含音频二进制的摘要；旧任务需单独迁移 |
 | `error` | text | 失败摘要 |
 | `error_detail` | text | 失败详情 |
 | `created_at` | string | 创建时间 |

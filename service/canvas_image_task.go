@@ -3,9 +3,9 @@ package service
 import (
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/repository"
-	"github.com/google/uuid"
 )
 
 type CanvasImageTaskCreateInput struct {
@@ -118,6 +118,9 @@ func CanvasImageTaskResponse(task model.CanvasImageTask) map[string]any {
 		if len(task.ImageURLs) > 0 {
 			result["image_urls"] = task.ImageURLs
 		}
+		if len(task.ImageStorage) > 0 {
+			result["imageStorage"] = task.ImageStorage
+		}
 		result["storageKey"] = task.StorageKey
 		result["width"] = task.Width
 		result["height"] = task.Height
@@ -156,4 +159,3 @@ func normalizeCanvasImageTaskSources(sources []string) []string {
 	}
 	return result
 }
-

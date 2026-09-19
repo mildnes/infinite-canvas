@@ -1029,7 +1029,7 @@ async function syncCanvasImageTask(task: CanvasImageTask, resultId = task.starte
     const status = (task.status || "").toLowerCase();
     if (status && !["completed", "complete", "done", "succeeded", "success"].includes(status)) return task;
     const urls = [...new Set([...(task.image_urls || []), task.image_url || task.url || ""].map((url) => url.trim()).filter(Boolean))];
-    const imageStorage = await Promise.all(urls.map((url, index) => autoSyncImage(url, `${task.id}:${resultId || "result"}:${index}`, index === 0 ? task.storageKey : undefined)));
+    const imageStorage = await Promise.all(urls.map(async (url, index) => task.imageStorage?.[index] || await autoSyncImage(url, `${task.id}:${resultId || "result"}:${index}`, index === 0 ? task.storageKey : undefined)));
     if (!imageStorage.some(Boolean)) return task;
     const syncedUrls = urls.map((url, index) => imageStorage[index]?.url || url);
     const stored = imageStorage[0];
