@@ -53,6 +53,9 @@ func SaveSettings(settings model.Settings) (model.Settings, error) {
 		return model.Settings{}, err
 	}
 	settings = normalizeSettings(settings)
+	if err := validateUniqueModelChannelIDs(settings.Private.Channels); err != nil {
+		return model.Settings{}, err
+	}
 	settings.Private.Agent.Skills = []model.LegacyAgentSkill{}
 	keepPrivateAPIKeys(&settings, normalizeSettings(saved))
 	keepPrivateAuthSecrets(&settings, normalizeSettings(saved))
@@ -172,12 +175,7 @@ func normalizePublicSettingWithChannels(setting model.PublicSetting, channels []
 	if strings.TrimSpace(setting.ModelChannel.SystemPrompts.WorkflowAgent) == "" {
 		setting.ModelChannel.SystemPrompts.WorkflowAgent = DefaultSystemPrompts().WorkflowAgent
 	}
-	for i := range setting.ModelChannel.ModelCosts {
-		setting.ModelChannel.ModelCosts[i].Model = strings.TrimSpace(setting.ModelChannel.ModelCosts[i].Model)
-		if setting.ModelChannel.ModelCosts[i].Credits < 0 {
-			setting.ModelChannel.ModelCosts[i].Credits = 0
-		}
-	}
+	setting.ModelChannel.ModelCosts = normalizeModelCosts(setting.ModelChannel.ModelCosts, channels)
 	if setting.ModelChannel.AllowCustomChannel == nil {
 		enabled := true
 		setting.ModelChannel.AllowCustomChannel = &enabled
@@ -198,18 +196,85 @@ func normalizePublicSettingWithChannels(setting model.PublicSetting, channels []
 	return setting
 }
 
-func ModelCost(modelName string) (int, error) {
+func normalizeModelCosts(costs []model.ModelCost, channels []model.ModelChannel) []model.ModelCost {
+	type costKey struct{ channelID, modelName string }
+	result := make([]model.ModelCost, 0, len(costs))
+	seen := map[costKey]bool{}
+	legacy := make([]model.ModelCost, 0)
+	for _, item := range costs {
+		item.ChannelID = strings.TrimSpace(item.ChannelID)
+		item.Model = strings.TrimSpace(item.Model)
+		if item.Model == "" {
+			continue
+		}
+		if item.Credits < 0 {
+			item.Credits = 0
+		}
+		if item.ChannelID == "" {
+			legacy = append(legacy, item)
+			continue
+		}
+		key := costKey{item.ChannelID, item.Model}
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, item)
+		}
+	}
+	for _, item := range legacy {
+		matched := false
+		for _, channel := range channels {
+			for _, modelName := range channel.Models {
+				if strings.TrimSpace(modelName) != item.Model {
+					continue
+				}
+				matched = true
+				key := costKey{channel.ID, item.Model}
+				if !seen[key] {
+					seen[key] = true
+					result = append(result, model.ModelCost{ChannelID: channel.ID, Model: item.Model, Credits: item.Credits})
+				}
+				break
+			}
+		}
+		if !matched {
+			key := costKey{"", item.Model}
+			if !seen[key] {
+				seen[key] = true
+				result = append(result, item)
+			}
+		}
+	}
+	return result
+}
+
+func validateUniqueModelChannelIDs(channels []model.ModelChannel) error {
+	seen := map[string]bool{}
+	for _, channel := range channels {
+		if seen[channel.ID] {
+			return safeMessageError{message: "模型渠道 ID 重复，请调整渠道名称或地址"}
+		}
+		seen[channel.ID] = true
+	}
+	return nil
+}
+
+func ModelCost(channelID string, modelName string) (int, error) {
 	settings, err := repository.GetSettings()
 	if err != nil {
 		return 0, err
 	}
+	return modelCostForChannel(normalizeSettings(settings).Public.ModelChannel.ModelCosts, channelID, modelName), nil
+}
+
+func modelCostForChannel(costs []model.ModelCost, channelID string, modelName string) int {
+	channelID = strings.TrimSpace(channelID)
 	modelName = strings.TrimSpace(modelName)
-	for _, item := range normalizePublicSetting(settings.Public).ModelChannel.ModelCosts {
-		if item.Model == modelName {
-			return item.Credits, nil
+	for _, item := range costs {
+		if channelID != "" && item.ChannelID == channelID && item.Model == modelName {
+			return item.Credits
 		}
 	}
-	return 0, nil
+	return 0
 }
 
 func normalizePrivateSetting(setting model.PrivateSetting) model.PrivateSetting {
@@ -251,6 +316,7 @@ func normalizePrivateSetting(setting model.PrivateSetting) model.PrivateSetting 
 		if setting.Channels[i].Protocol == "" {
 			setting.Channels[i].Protocol = "openai"
 		}
+		setting.Channels[i].ID = strings.TrimSpace(setting.Channels[i].ID)
 		if setting.Channels[i].ID == "" {
 			setting.Channels[i].ID = stableModelChannelID(setting.Channels[i])
 		}
@@ -1129,7 +1195,7 @@ func modelChannelsForModel(channels []model.ModelChannel, modelName string) []mo
 func publicChannelInfos(channels []model.ModelChannel) []model.PublicModelChannelInfo {
 	result := []model.PublicModelChannelInfo{}
 	for _, channel := range channels {
-		if !channel.Enabled || channel.BaseURL == "" || len(channel.Models) == 0 {
+		if !channel.Enabled || channel.BaseURL == "" || channel.APIKey == "" || len(channel.Models) == 0 {
 			continue
 		}
 		result = append(result, model.PublicModelChannelInfo{

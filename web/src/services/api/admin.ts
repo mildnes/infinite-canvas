@@ -203,6 +203,7 @@ export type AdminPublicModelChannelSettings = {
 };
 
 export type AdminModelCost = {
+    channelId: string;
     model: string;
     credits: number;
 };

@@ -30,8 +30,9 @@ type ModelChannel struct {
 
 // ModelCost 模型算力点配置。
 type ModelCost struct {
-	Model   string `json:"model"`
-	Credits int    `json:"credits"`
+	ChannelID string `json:"channelId,omitempty"`
+	Model     string `json:"model"`
+	Credits   int    `json:"credits"`
 }
 
 // PublicModelChannelSetting 公开模型渠道配置。

@@ -513,6 +513,8 @@ export function normalizeLocalChannels(config: Partial<AiConfig>): LocalModelCha
 
 export function channelIdForActiveModel(config: AiConfig) {
     const channels = config.channelMode === "remote" ? config.publicChannels : normalizeLocalChannels(config);
+    const activeChannel = channels.find((channel) => channel.id === config.activeChannelId && channel.models?.includes(config.model));
+    if (activeChannel) return activeChannel.id || "";
     const selectedChannelId = config.model === config.imageModel ? config.imageChannelId : config.model === config.videoModel ? config.videoChannelId : config.model === config.audioModel ? config.audioChannelId : config.model === config.textModel ? config.textChannelId : "";
     const selectedChannel = channels.find((channel) => channel.id === selectedChannelId);
     if (selectedChannel?.protocol === "gemini") return selectedChannelId;

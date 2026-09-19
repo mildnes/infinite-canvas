@@ -74,7 +74,7 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	credits := 0
 	if userChannelID == "" {
-		credits, err = service.ModelCost(modelName)
+		credits, err = service.ModelCost(channel.ID, modelName)
 		if err != nil {
 			log.Printf("AI video read model cost failed: model=%s err=%v", modelName, err)
 			Fail(w, "AI 接口请求失败")
@@ -111,7 +111,7 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 		RequestBody:     summarizeAIRequest(body, contentType),
 	}
 	if credits > 0 {
-		if err := service.ConsumeUserCredits(user.ID, modelName, credits, upstreamPath); err != nil {
+		if err := service.ConsumeUserCredits(user.ID, channel.ID, modelName, credits, upstreamPath); err != nil {
 			FailError(w, err)
 			return
 		}
@@ -119,7 +119,7 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 	payload, status, err := doAIRequest(request, channel)
 	if err != nil {
 		if credits > 0 {
-			refundVideoCredits(user.ID, modelName, credits, upstreamPath)
+			refundVideoCredits(user.ID, channel.ID, modelName, credits, upstreamPath)
 		}
 		saveAIProxyLog(logContext, 0, "", err.Error())
 		Fail(w, "AI 接口请求失败")
@@ -128,7 +128,7 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 	if status >= http.StatusBadRequest {
 		message := readUpstreamAIErrorMessage(payload, status)
 		if credits > 0 {
-			refundVideoCredits(user.ID, modelName, credits, upstreamPath)
+			refundVideoCredits(user.ID, channel.ID, modelName, credits, upstreamPath)
 		}
 		saveAIProxyLog(logContext, status, string(payload), strings.TrimSpace(string(payload)))
 		Fail(w, message)
@@ -137,7 +137,7 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 	transformed := transformVideoCreatePayload(payload, request, channel, modelName)
 	if message := readVideoCreateErrorMessage(payload, transformed, channel, modelName); message != "" {
 		if credits > 0 {
-			refundVideoCredits(user.ID, modelName, credits, upstreamPath)
+			refundVideoCredits(user.ID, channel.ID, modelName, credits, upstreamPath)
 		}
 		saveAIProxyLog(logContext, status, string(payload), message)
 		Fail(w, message)
@@ -146,7 +146,7 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 	parsed := parseVideoTaskPayload(transformed, modelName)
 	if parsed.UpstreamTaskID == "" && parsed.UpstreamVideoID == "" {
 		if credits > 0 {
-			refundVideoCredits(user.ID, modelName, credits, upstreamPath)
+			refundVideoCredits(user.ID, channel.ID, modelName, credits, upstreamPath)
 		}
 		saveAIProxyLog(logContext, status, string(transformed), "视频接口没有返回任务 ID")
 		Fail(w, "视频接口没有返回任务 ID")
@@ -177,8 +177,14 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		log.Printf("save video task failed: model=%s err=%v", modelName, err)
+		if credits > 0 {
+			refundVideoCredits(user.ID, channel.ID, modelName, credits, upstreamPath)
+		}
 		Fail(w, "AI 接口请求失败")
 		return
+	}
+	if credits > 0 && service.IsFailedVideoTaskStatus(task.Status) {
+		refundVideoCredits(user.ID, channel.ID, modelName, credits, upstreamPath)
 	}
 	saveAIProxyLog(logContext, status, string(transformed), "")
 	OK(w, service.VideoTaskResponse(task))
@@ -590,8 +596,8 @@ func findFirstHTTPURL(value any) string {
 	return ""
 }
 
-func refundVideoCredits(userID string, modelName string, credits int, endpoint string) {
-	if err := service.RefundUserCredits(userID, modelName, credits, endpoint); err != nil {
+func refundVideoCredits(userID string, channelID string, modelName string, credits int, endpoint string) {
+	if err := service.RefundUserCredits(userID, channelID, modelName, credits, endpoint); err != nil {
 		log.Printf("AI video refund credits failed: user=%s model=%s credits=%d err=%v", userID, modelName, credits, err)
 	}
 }

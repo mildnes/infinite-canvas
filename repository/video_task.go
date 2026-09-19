@@ -10,6 +10,17 @@ func SaveVideoTask(task model.VideoTask) (model.VideoTask, error) {
 	return task, db.Save(&task).Error
 }
 
+func SavePendingVideoTaskPoll(task model.VideoTask) (bool, error) {
+	db, err := DB()
+	if err != nil {
+		return false, err
+	}
+	result := db.Model(&model.VideoTask{}).
+		Where("id = ? AND status IN ?", task.ID, []string{"queued", "in_progress", "processing", "running"}).
+		Select("*").Updates(&task)
+	return result.RowsAffected > 0, result.Error
+}
+
 func GetVideoTask(id string) (model.VideoTask, bool, error) {
 	db, err := DB()
 	if err != nil {

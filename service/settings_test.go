@@ -81,3 +81,96 @@ func TestBuildModelChannelURLZhipuV4(t *testing.T) {
 		}
 	}
 }
+
+func TestModelCostsExpandLegacyAcrossChannelsAndKeepOverrides(t *testing.T) {
+	settings := normalizeSettings(model.Settings{
+		Private: model.PrivateSetting{Channels: []model.ModelChannel{
+			{ID: "channel-a", Models: []string{"shared", "new"}, Enabled: true},
+			{ID: "channel-b", Models: []string{"shared"}, Enabled: false},
+		}},
+		Public: model.PublicSetting{ModelChannel: model.PublicModelChannelSetting{ModelCosts: []model.ModelCost{
+			{Model: "shared", Credits: 7},
+			{ChannelID: "channel-b", Model: "shared", Credits: 18},
+			{Model: "removed", Credits: 23},
+		}}},
+	})
+	costs := settings.Public.ModelChannel.ModelCosts
+	if got := modelCostForChannel(costs, "channel-a", "shared"); got != 7 {
+		t.Fatalf("first channel price = %d, want 7", got)
+	}
+	if got := modelCostForChannel(costs, "channel-b", "shared"); got != 18 {
+		t.Fatalf("second channel override = %d, want 18", got)
+	}
+	if got := modelCostForChannel(costs, "channel-a", "new"); got != 0 {
+		t.Fatalf("unpriced model = %d, want 0", got)
+	}
+	if got := modelCostForChannel(costs, "", "shared"); got != 0 {
+		t.Fatalf("missing channel must not inherit legacy price: %d", got)
+	}
+	if got := modelCostForChannel(costs, "channel-c", "removed"); got != 0 {
+		t.Fatalf("unmatched legacy price must not bill a new channel: %d", got)
+	}
+	var orphanFound bool
+	for _, cost := range costs {
+		if cost.ChannelID == "" && cost.Model == "removed" && cost.Credits == 23 {
+			orphanFound = true
+		}
+		if cost.ChannelID == "" && cost.Model == "shared" {
+			t.Fatal("matched legacy price should become channel-specific")
+		}
+	}
+	if !orphanFound {
+		t.Fatal("unmatched legacy price must remain available in saved settings")
+	}
+	if !reflect.DeepEqual(normalizeModelCosts(costs, settings.Private.Channels), costs) {
+		t.Fatal("normalizing migrated costs again should not change prices")
+	}
+}
+
+func TestValidateUniqueModelChannelIDs(t *testing.T) {
+	channels := []model.ModelChannel{{ID: "channel-same"}, {ID: "channel-same"}}
+	if err := validateUniqueModelChannelIDs(channels); err == nil {
+		t.Fatal("duplicate channel IDs must be rejected before saving prices")
+	}
+	channels[1].ID = "channel-other"
+	if err := validateUniqueModelChannelIDs(channels); err != nil {
+		t.Fatalf("distinct channel IDs: %v", err)
+	}
+	autoIDs := normalizePrivateSetting(model.PrivateSetting{Channels: []model.ModelChannel{
+		{Name: "same", BaseURL: "https://example.com"},
+		{Name: "same", BaseURL: "https://example.com"},
+	}})
+	if err := validateUniqueModelChannelIDs(autoIDs.Channels); err == nil {
+		t.Fatal("colliding generated channel IDs must also be rejected")
+	}
+}
+
+func TestVideoAndWorkflowPricesUseSelectedChannel(t *testing.T) {
+	costs := []model.ModelCost{
+		{ChannelID: "cheap", Model: "shared-video", Credits: 20},
+		{ChannelID: "premium", Model: "shared-video", Credits: 86},
+		{ChannelID: "cheap", Model: "workflow-model", Credits: 1},
+		{ChannelID: "premium", Model: "workflow-model", Credits: 9},
+	}
+	if got := modelCostForChannel(costs, "premium", "shared-video"); got != 86 {
+		t.Fatalf("selected video channel price = %d, want 86", got)
+	}
+	if got := modelCostForChannel(costs, "cheap", "workflow-model"); got != 1 {
+		t.Fatalf("selected workflow channel price = %d, want 1", got)
+	}
+	if got := modelCostForChannel(costs, "other", "workflow-model"); got != 0 {
+		t.Fatalf("unpriced workflow channel = %d, want 0", got)
+	}
+}
+
+func TestPublicPricingCandidatesExcludeUnusableChannels(t *testing.T) {
+	channels := []model.ModelChannel{
+		{ID: "ready", Enabled: true, BaseURL: "https://example.com", APIKey: "key", Models: []string{"shared"}},
+		{ID: "missing-key", Enabled: true, BaseURL: "https://example.com", Models: []string{"shared"}},
+		{ID: "disabled", Enabled: false, BaseURL: "https://example.com", APIKey: "key", Models: []string{"shared"}},
+	}
+	infos := publicChannelInfos(channels)
+	if len(infos) != 1 || infos[0].ID != "ready" {
+		t.Fatalf("quote candidates = %#v, want only the selectable channel", infos)
+	}
+}

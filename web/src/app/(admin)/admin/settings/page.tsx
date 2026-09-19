@@ -2,7 +2,7 @@
 
 import { CheckCircleOutlined, DeleteOutlined, FormatPainterOutlined, LoadingOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import { json } from "@codemirror/lang-json";
-import { App, Button, Card, Checkbox, Col, Drawer, Flex, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from "antd";
+import { App, Button, Card, Checkbox, Col, Collapse, Drawer, Flex, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from "antd";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { EditorView } from "@uiw/react-codemirror";
@@ -85,9 +85,10 @@ export default function AdminSettingsPage() {
     const [isSaving, setIsSaving] = useState(false);
     const [measuringProviderIndex, setMeasuringProviderIndex] = useState<number | null>(null);
     const [fetchingMCPToolsIndex, setFetchingMCPToolsIndex] = useState<number | null>(null);
-    const [modelCosts, setModelCosts] = useState<AdminModelCost[]>([]);
     const [knownModels, setKnownModels] = useState<string[]>([]);
     const publicModels = Form.useWatch(["public", "modelChannel", "availableModels"], form) || [];
+    const modelCosts = Form.useWatch(["public", "modelChannel", "modelCosts"], { form, preserve: true }) as AdminModelCost[] | undefined;
+    const modelCostIndex = useMemo(() => new Map<string, number>((modelCosts || []).map((item) => [modelCostKey(item.channelId, item.model), item.credits])), [modelCosts]);
     const storageProviders = Form.useWatch(["private", "storage", "providers"], form) || [];
     const agentMCPServers = Form.useWatch(["private", "agent", "mcpServers"], form) || [];
     const channelProtocol = Form.useWatch("protocol", channelForm);
@@ -111,7 +112,6 @@ export default function AdminSettingsPage() {
             const data = normalizeSettings(await fetchAdminSettings(token));
             form.setFieldsValue(data);
             setChannels(data.private.channels);
-            setModelCosts(data.public.modelChannel.modelCosts);
             setKnownModels(collectKnownModels(data));
             setJsonText({
                 public: JSON.stringify(data.public, null, 2),
@@ -146,7 +146,6 @@ export default function AdminSettingsPage() {
             const merged = mergeChannelApiKeys(values.private.channels, saved);
             form.setFieldsValue(merged);
             setChannels(merged.private.channels);
-            setModelCosts(merged.public.modelChannel.modelCosts);
             rememberKnownModels(merged);
             setJsonText({
                 public: JSON.stringify(merged.public, null, 2),
@@ -176,7 +175,6 @@ export default function AdminSettingsPage() {
         }
         form.setFieldsValue({ [tab]: parsed } as Partial<AdminSettings>);
         if (tab === "private") setChannels((parsed as AdminSettings["private"]).channels);
-        if (tab === "public") setModelCosts((parsed as AdminSettings["public"]).modelChannel.modelCosts);
         rememberKnownModels({ ...normalizeSettings(form.getFieldsValue(true) as AdminSettings), [tab]: parsed });
         setEditorMode((current) => ({ ...current, [tab]: nextMode }));
     };
@@ -187,7 +185,6 @@ export default function AdminSettingsPage() {
             message.error("JSON 格式不正确");
             return;
         }
-        if (tab === "public") setModelCosts((parsed as AdminSettings["public"]).modelChannel.modelCosts);
         setJsonText((current) => ({
             ...current,
             [tab]: JSON.stringify(parsed, null, 2),
@@ -368,7 +365,6 @@ export default function AdminSettingsPage() {
         clearFileStorageConfigCache();
         const merged = mergeChannelApiKeys(nextChannels, saved);
         setChannels(merged.private.channels);
-        setModelCosts(merged.public.modelChannel.modelCosts);
         rememberKnownModels(merged);
         form.setFieldsValue(merged);
         setJsonText({
@@ -547,28 +543,31 @@ export default function AdminSettingsPage() {
                                     </Col>
                                     <Col span={24}>
                                         <Typography.Title level={5}>模型算力点</Typography.Title>
-                                        <Table
-                                            rowKey="model"
-                                            pagination={false}
-                                            size="small"
-                                            dataSource={publicModels.map((model) => ({ model, credits: modelCostCredits(modelCosts, model) }))}
-                                            columns={[
-                                                { title: "模型", dataIndex: "model" },
-                                                {
-                                                    title: "每次调用扣除",
-                                                    dataIndex: "credits",
-                                                    width: 220,
-                                                    render: (_, item) => (
-                                                        <Space.Compact className="!w-full">
-                                                            <InputNumber min={0} step={1} precision={0} className="!w-full" value={item.credits} onChange={(value) => setModelCost(form, setModelCosts, item.model, Number(value) || 0)} />
-                                                            <span className="flex h-8 items-center rounded-r-md border border-l-0 border-stone-200 bg-stone-50 px-3 text-sm text-stone-500 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-300">
-                                                                点
-                                                            </span>
-                                                        </Space.Compact>
-                                                    ),
-                                                },
-                                            ]}
-                                        />
+                                        <Typography.Text type="secondary">每个渠道的模型独立定价；未设置时为 0 点，多图按生成张数扣除。</Typography.Text>
+                                        <Collapse className="mt-3" size="small" items={channels.map((channel) => ({
+                                            key: channel.id,
+                                            label: <Space>{channel.name || channel.id}<Tag>{channel.protocol}</Tag>{!channel.enabled && <Tag color="default">已停用</Tag>}<Typography.Text type="secondary">{uniqueModels(channel.models).length} 个模型</Typography.Text></Space>,
+                                            children: <Table
+                                                rowKey="model"
+                                                pagination={false}
+                                                size="small"
+                                                dataSource={uniqueModels(channel.models).map((model) => ({ model, credits: modelCostIndex.get(modelCostKey(channel.id, model)) ?? 0 }))}
+                                                columns={[
+                                                    { title: "模型", dataIndex: "model" },
+                                                    {
+                                                        title: "每次调用扣除",
+                                                        dataIndex: "credits",
+                                                        width: 220,
+                                                        render: (_, item) => (
+                                                            <Space.Compact className="!w-full">
+                                                                <InputNumber min={0} step={1} precision={0} className="!w-full" value={item.credits} onChange={(value) => setModelCost(form, channel.id, item.model, Number(value) || 0)} />
+                                                                <span className="flex h-8 items-center rounded-r-md border border-l-0 border-stone-200 bg-stone-50 px-3 text-sm text-stone-500 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-300">点</span>
+                                                            </Space.Compact>
+                                                        ),
+                                                    },
+                                                ]}
+                                            />,
+                                        }))} />
                                     </Col>
                                 </Row>
                             </Form>
@@ -1296,7 +1295,7 @@ function normalizePublicSetting(setting: Partial<AdminSettings["public"]> = {}):
 }
 
 function normalizeModelCosts(items: Partial<AdminSettings["public"]["modelChannel"]["modelCosts"][number]>[]) {
-    return items.filter((item) => item.model).map((item) => ({ model: item.model || "", credits: Math.max(0, Number(item.credits) || 0) }));
+    return items.filter((item) => item.model).map((item) => ({ channelId: item.channelId || "", model: item.model || "", credits: Math.max(0, Number(item.credits) || 0) }));
 }
 
 function normalizePrivateSetting(setting: Partial<AdminSettings["private"]> = {}): AdminSettings["private"] {
@@ -1427,16 +1426,15 @@ function normalizeMCPTool(item: Partial<AdminMCPTool> = {}): AdminMCPTool {
     return { name: item.name || "", description: item.description || "", inputSchema: item.inputSchema && typeof item.inputSchema === "object" ? item.inputSchema : {} };
 }
 
-function modelCostCredits(items: AdminSettings["public"]["modelChannel"]["modelCosts"], model: string) {
-    return items.find((item) => item.model === model)?.credits || 0;
+function modelCostKey(channelId: string, model: string) {
+    return JSON.stringify([channelId, model]);
 }
 
-function setModelCost(form: any, setModelCosts: (items: AdminModelCost[]) => void, model: string, credits: number) {
+function setModelCost(form: any, channelId: string, model: string, credits: number) {
     const current = (form.getFieldValue(["public", "modelChannel", "modelCosts"]) || []) as AdminSettings["public"]["modelChannel"]["modelCosts"];
-    const next = current.filter((item) => item.model !== model);
-    next.push({ model, credits: Math.max(0, credits) });
+    const next = current.filter((item) => item.channelId !== channelId || item.model !== model);
+    next.push({ channelId, model, credits: Math.max(0, credits) });
     form.setFieldValue(["public", "modelChannel", "modelCosts"], next);
-    setModelCosts(next);
 }
 
 function mergeChannelApiKeys(currentChannels: AdminModelChannel[], saved: AdminSettings): AdminSettings {

@@ -147,7 +147,7 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 	}
 	credits := 0
 	if userChannelID == "" {
-		credits, err = service.ModelCost(modelName)
+		credits, err = service.ModelCost(channel.ID, modelName)
 		if err != nil {
 			log.Printf("AI proxy read model cost failed: model=%s err=%v", modelName, err)
 			Fail(w, "AI 接口请求失败")
@@ -181,7 +181,7 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		request.Header.Set("Content-Type", contentType)
 	}
 	if credits > 0 {
-		if err := service.ConsumeUserCredits(user.ID, modelName, credits, upstreamPath); err != nil {
+		if err := service.ConsumeUserCredits(user.ID, channel.ID, modelName, credits, upstreamPath); err != nil {
 			FailError(w, err)
 			return
 		}
@@ -198,7 +198,7 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		RequestBody:     summarizeAIRequest(body, contentType),
 	}, func() {
 		if credits > 0 {
-			if err := service.RefundUserCredits(user.ID, modelName, credits, upstreamPath); err != nil {
+			if err := service.RefundUserCredits(user.ID, channel.ID, modelName, credits, upstreamPath); err != nil {
 				log.Printf("AI proxy refund credits failed: user=%s model=%s credits=%d err=%v", user.ID, modelName, credits, err)
 			}
 		}

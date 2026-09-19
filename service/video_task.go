@@ -299,8 +299,24 @@ func UpdateVideoTaskFromPoll(task model.VideoTask, update VideoTaskPollUpdate) e
 		task.Status = "failed"
 		task.CompletedAt = current
 	}
-	_, err := repository.SaveVideoTask(task)
-	return err
+	updated, err := repository.SavePendingVideoTaskPoll(task)
+	if err != nil {
+		return err
+	}
+	if credits := failedVideoTaskRefundAmount(task, updated); credits > 0 {
+		if err := RefundUserCredits(task.UserID, task.ChannelID, task.Model, credits, "/videos"); err != nil {
+			log.Printf("refund failed video task credits failed id=%s err=%v", task.ID, err)
+			return err
+		}
+	}
+	return nil
+}
+
+func failedVideoTaskRefundAmount(task model.VideoTask, updated bool) int {
+	if updated && IsFailedVideoTaskStatus(task.Status) && task.UserChannelID == "" && task.Credits > 0 {
+		return task.Credits
+	}
+	return 0
 }
 
 func NormalizeVideoTaskStatus(status string) string {

@@ -336,7 +336,7 @@ Skill 的附属目录与 Markdown/TXT 引用文件。Agent 按需读取，不会
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `availableModels` | string[] | 系统可用模型列表 |
-| `modelCosts` | object[] | 模型算力点配置 |
+| `modelCosts` | object[] | 按渠道 ID 与模型分别配置算力点；旧版仅有模型名的价格在读取时复制到匹配渠道，未匹配记录保留但不计费 |
 | `defaultModel` | string | 默认模型 |
 | `defaultImageModel` | string | 默认图片模型 |
 | `defaultVideoModel` | string | 默认视频模型 |
@@ -348,8 +348,9 @@ Skill 的附属目录与 Markdown/TXT 引用文件。Agent 按需读取，不会
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
+| `channelId` | string | `private.channels[].id`，同名模型可跨渠道独立定价 |
 | `model` | string | 模型名称 |
-| `credits` | number | 每次后端模型接口调用前预扣的算力点，未配置默认不扣除 |
+| `credits` | number | 按实际渠道每次调用预扣的算力点；多张图片按张数乘算，未配置默认不扣除 |
 
 `auth.linuxDo` 当前字段：
 
@@ -408,7 +409,7 @@ Skill 的附属目录与 Markdown/TXT 引用文件。Agent 按需读取，不会
 | `balance` | number | 变动后的用户算力点余额 |
 | `related_id` | string | 关联业务 ID，可为空 |
 | `remark` | string | 备注 |
-| `extra` | json | 扩展信息 |
+| `extra` | json | 模型预扣和退款记录包含实际 `channelId`、`model`、`path` |
 | `created_at` | string | 创建时间 |
 
 `type` 当前取值：

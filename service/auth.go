@@ -329,7 +329,7 @@ func AdjustUserCredits(id string, credits int) (model.User, error) {
 	return user, err
 }
 
-func ConsumeUserCredits(userID string, modelName string, credits int, path string) error {
+func ConsumeUserCredits(userID string, channelID string, modelName string, credits int, path string) error {
 	if credits <= 0 {
 		return nil
 	}
@@ -340,7 +340,7 @@ func ConsumeUserCredits(userID string, modelName string, credits int, path strin
 	if !ok {
 		return safeMessageError{message: "算力点不足"}
 	}
-	extra, _ := json.Marshal(map[string]string{"model": modelName, "path": path})
+	extra, _ := json.Marshal(map[string]string{"channelId": channelID, "model": modelName, "path": path})
 	_, err = repository.SaveCreditLog(model.CreditLog{
 		ID:        newID("credit"),
 		UserID:    userID,
@@ -354,7 +354,7 @@ func ConsumeUserCredits(userID string, modelName string, credits int, path strin
 	return err
 }
 
-func RefundUserCredits(userID string, modelName string, credits int, path string) error {
+func RefundUserCredits(userID string, channelID string, modelName string, credits int, path string) error {
 	if credits <= 0 {
 		return nil
 	}
@@ -365,7 +365,7 @@ func RefundUserCredits(userID string, modelName string, credits int, path string
 	if !ok {
 		return safeMessageError{message: "用户不存在"}
 	}
-	extra, _ := json.Marshal(map[string]string{"model": modelName, "path": path})
+	extra, _ := json.Marshal(map[string]string{"channelId": channelID, "model": modelName, "path": path})
 	_, err = repository.SaveCreditLog(model.CreditLog{
 		ID:        newID("credit"),
 		UserID:    userID,
