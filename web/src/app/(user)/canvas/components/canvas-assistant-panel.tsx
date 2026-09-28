@@ -100,12 +100,14 @@ export function CanvasAssistantPanel({
     onInitialRequestConsumed,
 }: CanvasAssistantPanelProps) {
     const authToken = useUserStore((state) => state.token);
+    const authUserId = useUserStore((state) => state.user?.id || "");
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const effectiveConfig = useEffectiveConfig();
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const cleanupImages = useAssetStore((state) => state.cleanupImages);
     const { message: appMessage } = App.useApp();
     const abortRef = useRef<AbortController | null>(null);
+    const accountSessionRef = useRef({ token: authToken, userId: authUserId });
     const consumedInitialRequestRef = useRef<typeof initialRequest>(null);
     const consumedReferenceNodeClickVersionRef = useRef(0);
     const pendingDeleteRef = useRef<PendingDeleteConfirmation | null>(null);
@@ -142,6 +144,17 @@ export function CanvasAssistantPanel({
         },
         [],
     );
+
+    useEffect(() => {
+        const previous = accountSessionRef.current;
+        if (previous.token !== authToken || previous.userId !== authUserId) {
+            abortRef.current?.abort();
+            pendingDeleteRef.current?.resolve(false);
+            pendingDeleteRef.current = null;
+            setPendingDelete(null);
+        }
+        accountSessionRef.current = { token: authToken, userId: authUserId };
+    }, [authToken, authUserId]);
 
     const activeSession = safeSessions.find((session) => session.id === resolvedActiveSessionId) || safeSessions[0] || null;
     const historySessions = safeSessions.filter((session) => session.messages.length > 0);
@@ -299,6 +312,9 @@ export function CanvasAssistantPanel({
     };
 
     const sendMessage = async (text: string, savedReferences?: CanvasAssistantReference[], savedSkills?: CanvasAgentSkillSelection[]) => {
+        const requestToken = authToken;
+        const requestUserId = authUserId;
+        const requestIsCurrent = () => useUserStore.getState().token === requestToken && (useUserStore.getState().user?.id || "") === requestUserId;
         const session = activeSession || createSession();
         if (!activeSession) {
             commitSessions([session], session.id);
@@ -319,14 +335,17 @@ export function CanvasAssistantPanel({
                     .filter((skill): skill is NonNullable<typeof skill> => Boolean(skill))
                     .map((skill) => ({ id: skill.id, source: skill.source, name: skill.name, content: skill.content, hasFiles: skill.hasFiles }));
                 if (activeSkillContents.length !== librarySelections.length) {
+                    if (!requestIsCurrent()) return;
                     appMessage.error("部分 Skill 已不可用，请重新选择");
                     return;
                 }
             } catch (error) {
+                if (!requestIsCurrent()) return;
                 appMessage.error(error instanceof Error ? error.message : "Skill 加载失败");
                 return;
             }
         }
+        if (!requestIsCurrent()) return;
         const messageReferenceNodeIds = references.map((reference) => reference.id);
         const userMessage = { id: nanoid(), role: "user", text, references, skills, status: "success" } as CanvasAssistantMessage;
         const assistantId = nanoid();
@@ -348,6 +367,7 @@ export function CanvasAssistantPanel({
         };
         const jsonToolFallbackKey = [requestConfig.apiMode || "chat", requestConfig.textChannelId || requestConfig.activeChannelId || requestConfig.baseUrl, requestConfig.model].join("|");
         if (!isAiConfigReady(requestConfig, requestConfig.model)) {
+            if (!requestIsCurrent()) return;
             updateMessage(session.id, assistantId, {
                 text: "全局文本模型尚未配置完成。请先从应用原有的全局配置入口选择文本模型和渠道，然后再继续。",
                 status: "error",
@@ -370,6 +390,7 @@ export function CanvasAssistantPanel({
                     }
                 }),
             );
+            if (!requestIsCurrent()) return;
             const result = await runCanvasAgent({
                 config: requestConfig,
                 initialState: session.agentState,
@@ -382,6 +403,7 @@ export function CanvasAssistantPanel({
                 preferredJsonMode: session.jsonToolFallbackKey === jsonToolFallbackKey ? session.jsonToolFallbackMode : undefined,
                 getContext: getAgentContext,
                 executeAction: async (action) => {
+                    if (!requestIsCurrent()) return { ok: false, code: "stale_session", message: "账号已切换，已停止执行旧会话操作" };
                     if (action.name !== "delete_node") return onExecuteAction(action, messageReferenceNodeIds);
                     const nodeId = typeof action.arguments.nodeId === "string" ? action.arguments.nodeId : "";
                     const node = nodes.find((item) => item.id === nodeId);
@@ -394,22 +416,27 @@ export function CanvasAssistantPanel({
                 },
                 authToken,
                 signal: controller.signal,
-                onEvent: (event) => updateMessage(session.id, assistantId, { status: event.status, activity: event.label }),
+                onEvent: (event) => {
+                    if (requestIsCurrent()) updateMessage(session.id, assistantId, { status: event.status, activity: event.label });
+                },
                 onCheckpoint: (checkpoint) =>
-                    updateSession(
-                        session.id,
-                        (current) =>
-                            ({
-                                ...current,
-                                agentState: checkpoint.state,
-                                protocolMessages: checkpoint.protocolMessages,
-                                contextCheckpoint: checkpoint.contextCheckpoint,
-                                jsonToolFallbackKey: checkpoint.jsonFallbackMode ? jsonToolFallbackKey : undefined,
-                                jsonToolFallbackMode: checkpoint.jsonFallbackMode,
-                                updatedAt: new Date().toISOString(),
-                            }) as CanvasAssistantSession,
-                    ),
+                    requestIsCurrent()
+                        ? updateSession(
+                              session.id,
+                              (current) =>
+                                  ({
+                                      ...current,
+                                      agentState: checkpoint.state,
+                                      protocolMessages: checkpoint.protocolMessages,
+                                      contextCheckpoint: checkpoint.contextCheckpoint,
+                                      jsonToolFallbackKey: checkpoint.jsonFallbackMode ? jsonToolFallbackKey : undefined,
+                                      jsonToolFallbackMode: checkpoint.jsonFallbackMode,
+                                      updatedAt: new Date().toISOString(),
+                                  }) as CanvasAssistantSession,
+                          )
+                        : undefined,
             });
+            if (!requestIsCurrent()) return;
             updateSession(
                 session.id,
                 (current) =>
@@ -425,6 +452,7 @@ export function CanvasAssistantPanel({
                     }) as CanvasAssistantSession,
             );
         } catch (error) {
+            if (!requestIsCurrent()) return;
             const stopped = error instanceof Error && error.name === "AbortError";
             updateMessage(session.id, assistantId, {
                 text: stopped ? "已停止继续执行。已经创建的节点和已经提交的媒体任务会保留。" : error instanceof Error ? error.message : "Agent 执行失败",

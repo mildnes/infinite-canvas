@@ -95,6 +95,31 @@ class CanvasAgentRequestError extends Error {
 
 type CanvasAgentAiConfig = AiConfig & { textReasoningEnabled?: boolean; textStreaming?: boolean };
 
+type CanvasAgentToolCallFragment = {
+    index?: number | string;
+    id?: string;
+    function?: { name?: unknown; arguments?: unknown };
+};
+
+type CanvasAgentToolCallAccumulator = {
+    id?: string;
+    function: { name: string; arguments: string };
+};
+
+export function mergeCanvasAgentToolCallFragments(fragments: CanvasAgentToolCallFragment[]) {
+    const calls: Array<CanvasAgentToolCallAccumulator | undefined> = [];
+    for (const fragment of fragments) {
+        const parsedIndex = Number(fragment.index);
+        const index = Number.isInteger(parsedIndex) && parsedIndex >= 0 ? parsedIndex : calls.length;
+        const call = calls[index] || { function: { name: "", arguments: "" } };
+        if (typeof fragment.id === "string" && fragment.id) call.id = fragment.id;
+        if (typeof fragment.function?.name === "string") call.function.name += fragment.function.name;
+        if (typeof fragment.function?.arguments === "string") call.function.arguments += fragment.function.arguments;
+        calls[index] = call;
+    }
+    return calls.flatMap((call) => (call ? [call] : []));
+}
+
 function applyReasoning(body: Record<string, unknown>, config: CanvasAgentAiConfig, mode: "chat" | "responses" | "gemini") {
     applyCanvasAgentReasoning(body, { enabled: config.textReasoningEnabled === true, mode, model: config.model, protocol: channelProtocolForConfig(config) });
 }
@@ -196,7 +221,7 @@ async function requestCompletion(config: CanvasAgentAiConfig, systemPrompt: stri
         let reasoningContent = "";
         let finishReason = "";
         let usage: ChatCompletionPayload["usage"];
-        const toolCalls: Array<{ id?: string; function: { name: string; arguments: string } }> = [];
+        const toolCallFragments: CanvasAgentToolCallFragment[] = [];
         await readCanvasAgentStream(response, (event) => {
             if (event.usage) usage = event.usage as ChatCompletionPayload["usage"];
             const choice = (event.choices as Array<{ delta?: { content?: string; reasoning_content?: string; tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> }; finish_reason?: string | null }> | undefined)?.[0];
@@ -204,17 +229,10 @@ async function requestCompletion(config: CanvasAgentAiConfig, systemPrompt: stri
             if (typeof choice.delta?.content === "string") content += choice.delta.content;
             if (typeof choice.delta?.reasoning_content === "string") reasoningContent += choice.delta.reasoning_content;
             if (typeof choice.finish_reason === "string") finishReason = choice.finish_reason;
-            for (const fragment of choice.delta?.tool_calls || []) {
-                const index = typeof fragment.index === "number" ? fragment.index : toolCalls.length;
-                const call = toolCalls[index] || { function: { name: "", arguments: "" } };
-                if (fragment.id) call.id = fragment.id;
-                if (fragment.function?.name) call.function.name += fragment.function.name;
-                if (fragment.function?.arguments) call.function.arguments += fragment.function.arguments;
-                toolCalls[index] = call;
-            }
+            toolCallFragments.push(...(choice.delta?.tool_calls || []));
         });
         if (!finishReason) throw new CanvasAgentRequestError("文本模型流式响应未完成", response.status);
-        payload = { usage, choices: [{ finish_reason: finishReason, message: { content, reasoning_content: reasoningContent || undefined, tool_calls: toolCalls } }] };
+        payload = { usage, choices: [{ finish_reason: finishReason, message: { content, reasoning_content: reasoningContent || undefined, tool_calls: mergeCanvasAgentToolCallFragments(toolCallFragments) } }] };
     } else {
         ({ payload, rawText } = await readResponsePayload<ChatCompletionPayload>(response));
     }
