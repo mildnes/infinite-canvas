@@ -18,6 +18,7 @@ description: settings 表中 public 和 private 配置结构说明
 {
   "modelChannel": {
     "availableModels": ["gpt-5.5", "gpt-image-2"],
+    "availableWorkflows": [],
     "modelCosts": [
       { "channelId": "channel-openai", "model": "gpt-5.5", "credits": 1 },
       { "channelId": "channel-openai", "model": "gpt-image-2", "credits": 10 }
@@ -51,6 +52,7 @@ description: settings 表中 public 和 private 配置结构说明
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `availableModels` | string[] | 系统可用模型；保存设置时会自动合并所有已启用私有渠道的模型 |
+| `availableWorkflows` | string[] | 对普通用户开放的系统工作流标识；仅工作流渠道使用 |
 | `modelCosts` | object[] | 按渠道 ID 和模型分别配置算力点；后端选定渠道后预扣，失败时返还实际预扣额；未配置默认不扣除 |
 | `defaultModel` | string | 默认模型，从 `availableModels` 中选择；为空或失效时优先选择文本模型 |
 | `defaultImageModel` | string | 默认图片模型，从 `availableModels` 中选择；为空或失效时优先选择 `seedream`、`image`、`gpt-image` 模型 |
@@ -158,16 +160,20 @@ docker compose exec app /app/image-log-summaries -apply -limit 10
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `protocol` | string | 协议，支持 OpenAI、Gemini、Grok2API、xAI、MiniMax、APIMart、KIE、MiMo |
+| `protocol` | string | 协议，支持 OpenAI、Gemini、Grok2API、xAI、MiniMax、APIMart、KIE、MiMo、RunningHub、ComfyUI 等现有渠道 |
 | `name` | string | 渠道名称 |
 | `baseUrl` | string | 渠道接口地址 |
 | `apiKey` | string | 渠道密钥 |
 | `models` | string[] | 该渠道可用模型 |
+| `workflows` | object[] | RunningHub 或 ComfyUI 工作流条目，包含用途、启停状态、字段映射及工作流 JSON/拓扑 |
+| `bridgeId` | string | ComfyUI 渠道绑定的 Bridge 设备 ID |
 | `weight` | number | 渠道权重；同一模型有多个可用渠道时按权重随机 |
 | `enabled` | boolean | 是否启用 |
 | `remark` | string | 备注 |
 
 后端调用模型时，会从已启用、已配置 `baseUrl` 和 `apiKey`、且 `models` 包含目标模型的渠道中选择一个。
+
+工作流按 `workflow:<scope>:<channelId>:<kind>:<workflowId>` 标识；系统工作流可在同一 `modelCosts` 表按渠道单独定价。个人本地工作流不预扣系统算力点。Bridge 设备令牌仅在注册时返回明文，服务端保存哈希；不要把 ComfyUI 访问凭据放进浏览器配置或公开设置。
 
 `agent.mcpServers` 每项可使用 `transport=streamable_http`（填写 `endpoint`、可选 `apiKey`）或 `transport=stdio`（填写 `command`、`args`、`env`、可选 `workingDirectory`）。`tools` 是允许 Agent 调用的工具白名单；`allowUsers` 为 `false` 时仅管理员可调用。系统 Skill 已迁移至 `agent_skills` 与 `agent_skill_files`，不再保存在此 JSON；旧 `private.agent.skills` 会在启动时一次性迁移。
 

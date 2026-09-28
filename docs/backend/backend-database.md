@@ -35,6 +35,8 @@ description: 当前后端主要数据表与字段说明
 - `media_cleanup_candidates`
 - `agent_skills`
 - `agent_skill_files`
+- `comfy_bridges`
+- `comfy_bridge_requests`
 
 后续新增表时再同步补充本文档，未实际使用的规划表不提前写入。
 
@@ -139,6 +141,36 @@ S3/R2、WebDAV 与服务端本地生成媒体共用的文件索引表，不保�
 | `created_at` | string | 创建时间 |
 | `updated_at` | string | 更新时间 |
 
+素材列表响应包含当前可用的 `categories`；查询可同时使用 `category` 与标签筛选。
+
+### comfy_bridges
+
+ComfyUI Bridge 设备登记表。设备令牌只存哈希，设备归属通过 `owner_scope` 与 `owner_id` 隔离。
+
+| 字段 | 说明 |
+| --- | --- |
+| `id` | Bridge ID |
+| `owner_scope`、`owner_id` | 系统或个人归属 |
+| `name`、`enabled` | 设备名称及启停状态 |
+| `token_hash` | 设备令牌哈希，唯一索引 |
+| `last_seen_at`、`capabilities_json` | 最近心跳和工作流发现结果 |
+| `created_at`、`updated_at` | 创建与更新时间 |
+
+### comfy_bridge_requests
+
+Bridge 工作流请求及租约表。队列由 `bridge_id` 和 `status` 索引；租约超时后可重新领取，任务结果与检查点用于重启恢复。
+
+| 字段 | 说明 |
+| --- | --- |
+| `id`、`bridge_id`、`task_id` | 请求、设备和生成任务 ID |
+| `owner_scope`、`owner_id` | 请求归属 |
+| `kind`、`status` | 请求类型与队列状态 |
+| `payload_json`、`result_json`、`error` | 请求、结果与失败信息 |
+| `claimed_at`、`lease_token`、`lease_expires_at` | 领取时间、租约令牌与到期时间 |
+| `checkpoint_json` | 恢复检查点 |
+| `completed_at`、`cleanup_ready_at`、`expires_at` | 完成、结果清理及请求过期时间 |
+| `created_at`、`updated_at` | 创建与更新时间 |
+
 ### video_tasks
 
 视频生成任务表。后端创建视频任务后写入该表，后台轮询器每 5 秒统一查询未完成任务并更新进度、完成地址或失败详情；前端刷新、切换页面或关闭浏览器不会影响后端继续轮询。
@@ -151,7 +183,8 @@ S3/R2、WebDAV 与服务端本地生成媒体共用的文件索引表，不保�
 | `model` | string | 模型名称 |
 | `channel_id` | string | 模型渠道 ID |
 | `channel_name` | string | 模型渠道名称 |
-| `source` | string | 任务来源：`video-workbench`、`canvas` |
+| `source` | string | 任务来源：`video-workbench`、`canvas`、`workflow` |
+| `workflow_ref` | text | 工作流任务的归属、渠道和工作流标识 JSON；普通模型任务为空 |
 | `source_id` | string | 来源内 ID，画布任务记录画布节点 ID，视频创作台为空 |
 | `upstream_task_id` | string | 上游任务 ID |
 | `upstream_video_id` | string | 上游视频 ID，例如 Agnes 的 `video_...` |
@@ -229,13 +262,13 @@ S3/R2、WebDAV 与服务端本地生成媒体共用的文件索引表，不保�
 
 ### canvas_image_tasks
 
-画布图片生成任务表。只用于画布节点生成恢复，不影响生图工作台原接口。
+图片生成任务表，用于画布节点、生图工作台和工作流的任务恢复。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | string | 主键，本地任务 ID |
 | `user_id` | string | 用户 ID |
-| `source` | string | 固定为 `canvas` |
+| `source` | string | `canvas`、`image-workbench` 或 `workflow` |
 | `source_id` | string | 画布来源 ID |
 | `node_id` | string | 画布节点 ID |
 | `model` | string | 模型名称 |
@@ -247,6 +280,8 @@ S3/R2、WebDAV 与服务端本地生成媒体共用的文件索引表，不保�
 | `image_url` | text | 完成后图片 URL或第一张图片 URL |
 | `image_urls` | JSON | 完成后全部图片 URL，第一项与 `image_url` 一致 |
 | `image_storage` | JSON | 多图逐张短 URL、`storageKey`、MIME、尺寸和字节；外链项为 `null` |
+| `workflow_ref` | text | 工作流任务的归属、渠道和工作流标识 JSON；普通模型任务为空 |
+| `credits` | number | 工作流创建时实际预扣的整数算力点，失败时按此退款 |
 | `storage_key` | string | 存储对象 key |
 | `response_body` | text | 新成功任务不再保存上游二进制/base64；旧任务需单独迁移 |
 | `error` | text | 失败摘要 |
@@ -260,7 +295,7 @@ S3/R2、WebDAV 与服务端本地生成媒体共用的文件索引表，不保�
 
 ### canvas_audio_tasks
 
-画布音频生成任务表。只用于画布节点生成恢复，不影响原 `/audio/speech` 接口。
+音频生成任务表，用于画布节点和工作流的任务恢复，不影响原 `/audio/speech` 接口。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -275,6 +310,8 @@ S3/R2、WebDAV 与服务端本地生成媒体共用的文件索引表，不保�
 | `progress` | number | 生成进度 |
 | `prompt` | text | 提示词 |
 | `audio_url` | text | 完成后音频 URL |
+| `workflow_ref` | text | 工作流任务的归属、渠道和工作流标识 JSON；普通模型任务为空 |
+| `credits` | number | 工作流创建时实际预扣的整数算力点，失败时按此退款 |
 | `storage_key` | string | 存储对象 key |
 | `response_body` | text | 新任务只保留不含音频二进制的摘要；旧任务需单独迁移 |
 | `error` | text | 失败摘要 |
@@ -362,6 +399,7 @@ Skill 的附属目录与 Markdown/TXT 引用文件。Agent 按需读取，不会
 | --- | --- | --- |
 | `availableModels` | string[] | 系统可用模型列表 |
 | `modelCosts` | object[] | 按渠道 ID 与模型分别配置算力点；旧版仅有模型名的价格在读取时复制到匹配渠道，未匹配记录保留但不计费 |
+| `availableWorkflows` | string[] | 公开的系统工作流标识；与渠道工作流列表分别保存 |
 | `defaultModel` | string | 默认模型 |
 | `defaultImageModel` | string | 默认图片模型 |
 | `defaultVideoModel` | string | 默认视频模型 |
@@ -396,11 +434,13 @@ Skill 的附属目录与 Markdown/TXT 引用文件。Agent 按需读取，不会
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `protocol` | string | 协议，支持 OpenAI、Gemini、Grok2API、MiniMax、APIMart、KIE、MiMo |
+| `protocol` | string | 协议，支持 OpenAI、Gemini、Grok2API、xAI、MiniMax、APIMart、KIE、MiMo、RunningHub、ComfyUI 等现有渠道 |
 | `name` | string | 渠道名称 |
 | `baseUrl` | string | 渠道接口地址 |
 | `apiKey` | string | 渠道密钥 |
 | `models` | string[] | 渠道可用模型列表 |
+| `workflows` | object[] | RunningHub 或 ComfyUI 工作流、字段映射、拓扑及 API JSON |
+| `bridgeId` | string | ComfyUI 渠道绑定的 Bridge ID |
 | `weight` | number | 渠道权重，同一模型命中多个渠道时按权重随机 |
 | `enabled` | bool | 是否启用 |
 | `remark` | string | 备注 |
