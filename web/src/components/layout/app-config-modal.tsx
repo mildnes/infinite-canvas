@@ -1,8 +1,11 @@
 "use client";
 
 import { App, Button, Form, Input, Modal, Segmented, Select, Switch } from "antd";
-import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
+import { useEffect, useRef, useState } from "react";
 
+import { ChannelModelSelectorModal } from "@/components/channel-model-selector-modal";
+import type { WorkflowChannelSettings } from "@/components/workflow/workflow-channel-pane";
 import { GrokTtsVoiceSelect } from "@/components/grok-tts-voice-select";
 import { ModelPicker } from "@/components/model-picker";
 import { fetchImageModels } from "@/services/api/image";
@@ -14,13 +17,16 @@ import { grokTtsFormatOptions, grokTtsLanguageOptions, isGrok2APITtsConfig, norm
 import { isGeminiConfig, isGeminiTtsModel } from "@/lib/gemini";
 import { geminiTtsVoiceOptions, normalizeGeminiTtsVoice } from "@/lib/gemini-tts";
 import { isMimoPresetTtsModel, isMimoTtsModel, isMimoVoiceCloneModel, isMimoVoiceDesignModel, mimoTtsFormatOptions, mimoTtsVoiceOptions } from "@/lib/mimo-tts";
-import { modelChannelApiKeyUrls, modelChannelDefaultBaseUrls } from "@/lib/model-channel";
+import { isWorkflowProtocol, modelChannelApiKeyUrls, modelChannelDefaultBaseUrls, modelChannelProtocolOptions } from "@/lib/model-channel";
+import type { WorkflowChannelData, WorkflowEntry } from "@/lib/workflow-channel";
+import { listWorkflowChannels, readWorkflowChannel, replaceWorkflowChannels, saveWorkflowChannel } from "@/services/workflow-channel-storage";
 import { filterChannelModelsByCapability, normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig, type LocalModelChannel, type ModelCapability } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
 type ModelGroup = {
     capability: ModelCapability;
     modelKey: "imageModel" | "videoModel" | "textModel" | "audioModel";
+    workflowKey?: "imageWorkflowRef" | "videoWorkflowRef" | "audioWorkflowRef";
     channelKey: "imageChannelId" | "videoChannelId" | "textChannelId" | "audioChannelId";
     modelsKey: "imageModels" | "videoModels" | "textModels" | "audioModels";
     defaultLabel: string;
@@ -28,16 +34,21 @@ type ModelGroup = {
 };
 
 const modelGroups: ModelGroup[] = [
-    { capability: "image", modelKey: "imageModel", channelKey: "imageChannelId", modelsKey: "imageModels", defaultLabel: "默认生图模型", optionsLabel: "生图模型可选项" },
-    { capability: "video", modelKey: "videoModel", channelKey: "videoChannelId", modelsKey: "videoModels", defaultLabel: "默认视频模型", optionsLabel: "视频模型可选项" },
+    { capability: "image", modelKey: "imageModel", workflowKey: "imageWorkflowRef", channelKey: "imageChannelId", modelsKey: "imageModels", defaultLabel: "默认生图模型", optionsLabel: "生图模型可选项" },
+    { capability: "video", modelKey: "videoModel", workflowKey: "videoWorkflowRef", channelKey: "videoChannelId", modelsKey: "videoModels", defaultLabel: "默认视频模型", optionsLabel: "视频模型可选项" },
     { capability: "text", modelKey: "textModel", channelKey: "textChannelId", modelsKey: "textModels", defaultLabel: "默认文本模型", optionsLabel: "文本模型可选项" },
-    { capability: "audio", modelKey: "audioModel", channelKey: "audioChannelId", modelsKey: "audioModels", defaultLabel: "默认音频模型", optionsLabel: "音频模型可选项" },
+    { capability: "audio", modelKey: "audioModel", workflowKey: "audioWorkflowRef", channelKey: "audioChannelId", modelsKey: "audioModels", defaultLabel: "默认音频模型", optionsLabel: "音频模型可选项" },
 ];
+
+const WorkflowChannelPane = dynamic(() => import("@/components/workflow/workflow-channel-pane").then((module) => module.WorkflowChannelPane), { ssr: false });
 
 export function AppConfigModal() {
     const { message } = App.useApp();
     const [loadingModels, setLoadingModels] = useState(false);
     const [savingConfig, setSavingConfig] = useState(false);
+    const [modelSelectChannelId, setModelSelectChannelId] = useState("");
+    const [workflowEntries, setWorkflowEntries] = useState<WorkflowEntry[]>([]);
+    const accountConfigRef = useRef<{ ready: boolean; workflowChannels?: WorkflowChannelData[] }>({ ready: false });
     const [remoteStorageSyncEnabled, setRemoteStorageSyncEnabled] = useState(false);
     const [remoteWebDAVStorageSyncEnabled, setRemoteWebDAVStorageSyncEnabled] = useState(false);
     const [allowUserStorageProvider, setAllowUserStorageProvider] = useState(false);
@@ -71,24 +82,54 @@ export function AppConfigModal() {
     const glmTts = isGlmTtsModel(config.audioModel);
     const grokTts = isGrok2APITtsConfig({ ...modelConfig, model: config.audioModel, audioModel: config.audioModel }, config.audioModel);
     const geminiTts = isGeminiTtsModel(config.audioModel) && isGeminiConfig({ ...modelConfig, model: config.audioModel, audioModel: config.audioModel }, config.audioModel);
+    const modelSelectChannel = normalizeLocalChannels(config).find((channel) => channel.id === modelSelectChannelId);
+
+    useEffect(() => {
+        setWorkflowEntries([]);
+        if (!modelSelectChannel || !isWorkflowProtocol(modelSelectChannel.protocol)) return;
+        const protocol = modelSelectChannel.protocol;
+        let canceled = false;
+		void readWorkflowChannel(user?.id || "guest", protocol, modelSelectChannel.id)
+            .then((items) => { if (!canceled) setWorkflowEntries(items); })
+            .catch((error) => { if (!canceled) message.error(error instanceof Error ? error.message : "读取工作流配置失败"); });
+        return () => { canceled = true; };
+    }, [modelSelectChannelId, modelSelectChannel?.protocol, user?.id]);
 
     useEffect(() => {
         setUserStorage(loadUserS3StorageProvider() || defaultUserStorageProvider());
         setUserWebDAVStorage(loadUserWebDAVStorageProvider() || defaultUserWebDAVStorageProvider());
-        if (!isConfigOpen || !token) return;
+        accountConfigRef.current = { ready: false };
+        if (!isConfigOpen || !token || !user?.id) return;
+        const accountToken = token;
+        const accountId = user.id;
         let canceled = false;
-        void fetchUserConfig(token)
-            .then((payload) => {
-                if (canceled) return;
+        void fetchUserConfig(accountToken)
+            .then(async (payload) => {
+                if (canceled || useUserStore.getState().token !== accountToken || useUserStore.getState().user?.id !== accountId) return;
                 const remoteConfig = payload.modelConfig;
+                const remoteWorkflowChannels = remoteConfig?.workflowChannels;
                 const syncS3 = remoteConfig?.syncStorageConfig === true;
                 const syncWebDAV = remoteConfig?.syncWebDAVStorageConfig === true;
                 setRemoteStorageSyncEnabled(syncS3);
                 setRemoteWebDAVStorageSyncEnabled(syncWebDAV);
                 if (remoteConfig) {
-                    Object.entries(remoteConfig)
+                    const { workflowChannels, ...modelFields } = remoteConfig;
+                    delete modelFields.workflowSyncTouched;
+                    if (workflowChannels !== undefined) {
+                        try {
+                            await replaceWorkflowChannels(accountId, workflowChannels);
+                            if (canceled || useUserStore.getState().token !== accountToken || useUserStore.getState().user?.id !== accountId) return;
+                            updateConfig("workflowSyncTouched", true);
+                        } catch {
+                            if (canceled || useUserStore.getState().token !== accountToken || useUserStore.getState().user?.id !== accountId) return;
+                            updateConfig("workflowSyncTouched", false);
+                        }
+                    }
+                    if (canceled || useUserStore.getState().token !== accountToken || useUserStore.getState().user?.id !== accountId) return;
+                    Object.entries(modelFields)
                         .forEach(([key, value]) => updateConfig(key as keyof AiConfig, value as never));
                 }
+                accountConfigRef.current = { ready: true, workflowChannels: remoteWorkflowChannels };
                 updateConfig("syncStorageConfig", syncS3);
                 updateConfig("syncWebDAVStorageConfig", syncWebDAV);
                 if (syncS3 && payload.storageProvider?.s3) {
@@ -106,7 +147,7 @@ export function AppConfigModal() {
         return () => {
             canceled = true;
         };
-    }, [isConfigOpen, token, updateConfig]);
+    }, [isConfigOpen, token, updateConfig, user?.id]);
 
     useEffect(() => {
         if (!isConfigOpen) return;
@@ -124,12 +165,16 @@ export function AppConfigModal() {
     }, [isConfigOpen]);
 
     const finishConfig = async () => {
-        const localIncomplete = effectiveMode === "local" && normalizeLocalChannels(config).some((channel) => !channel.baseUrl.trim() || !channel.apiKey.trim());
+        const localIncomplete = effectiveMode === "local" && normalizeLocalChannels(config).filter((channel) => !isWorkflowProtocol(channel.protocol)).some((channel) => !channel.baseUrl.trim() || !channel.apiKey.trim());
         const modelIncomplete = !modelConfig.imageModel.trim() || !modelConfig.videoModel.trim() || !modelConfig.textModel.trim();
-        if (userStorage.enabled && userWebDAVStorage.enabled) {
-            message.error("S3/R2 与 WebDAV 不能同时启用");
-            return;
-        }
+		if (userStorage.enabled && userWebDAVStorage.enabled) {
+			message.error("S3/R2 与 WebDAV 不能同时启用");
+			return;
+		}
+		if (token && !accountConfigRef.current.ready) {
+			message.warning("账号配置仍在加载，请稍后再保存");
+			return;
+		}
         if (!canUseRemoteChannel && config.channelMode !== "local") updateConfig("channelMode", "local");
         else if (canUseRemoteChannel && !allowCustomChannel && config.channelMode !== "remote") updateConfig("channelMode", "remote");
         if (canUseUserStorageProvider) {
@@ -137,10 +182,17 @@ export function AppConfigModal() {
             saveUserWebDAVStorageProvider(userWebDAVStorage);
         }
         setSavingConfig(true);
-        try {
-            if (token) {
+		try {
+			if (token) {
                 const configToSave = effectiveMode === "local" && config.channelMode !== "local" ? { ...config, channelMode: "local" as const } : config;
-                await syncUserModelConfig(token, configToSave);
+                const workflowChannels = normalizeLocalChannels(config).filter((channel) => isWorkflowProtocol(channel.protocol));
+                let workflowData = accountConfigRef.current.workflowChannels;
+                if (config.workflowSyncTouched) {
+                    const stored = user?.id ? await listWorkflowChannels(user.id) : [];
+                    const activeKeys = new Set(workflowChannels.map((channel) => `${channel.protocol}:${channel.id}`));
+                    workflowData = stored.filter((channel) => activeKeys.has(`${channel.protocol}:${channel.channelId}`));
+                }
+                await syncUserModelConfig(token, configToSave, workflowData);
             }
             const providers = {
                 ...(config.syncStorageConfig || remoteStorageSyncEnabled ? { s3: config.syncStorageConfig ? userStorage : { ...userStorage, enabled: false, endpoint: "", bucket: "", accessKeyId: "", secretAccessKey: "" } } : {}),
@@ -167,30 +219,36 @@ export function AppConfigModal() {
 
     const refreshModels = async () => {
         if (effectiveMode === "remote") return;
-        const channels = normalizeLocalChannels(config);
+        const allChannels = normalizeLocalChannels(config);
+        const channels = allChannels.filter((channel) => !isWorkflowProtocol(channel.protocol));
         if (channels.some((channel) => !channel.baseUrl.trim() || !channel.apiKey.trim())) {
             message.error("请先填写所有本地渠道的 Base URL 和 API Key");
             return;
         }
         setLoadingModels(true);
         try {
-            const nextChannels = await Promise.all(channels.map(async (channel) => ({ ...channel, models: await fetchImageModels(configForLocalChannel(config, channel)) })));
-            updateLocalChannels(nextChannels);
-            message.success("模型列表已更新");
-        } catch (error) {
-            message.error(error instanceof Error ? error.message : "读取模型失败");
+            const results = await Promise.allSettled(channels.map(async (channel) => fetchImageModels(configForLocalChannel(config, channel))));
+            const updated = new Map(channels.map((channel, index) => [channel.id, results[index]] as const));
+            updateLocalChannels(allChannels.map((channel) => {
+                const result = updated.get(channel.id);
+                return result?.status === "fulfilled" ? { ...channel, models: result.value } : channel;
+            }));
+            const failedCount = results.filter((result) => result.status === "rejected").length;
+            if (failedCount) message.warning(`${failedCount} 个渠道拉取失败，已保留原有模型，可在“选择”中手动增加模型`);
+            else message.success("模型列表已更新");
         } finally {
             setLoadingModels(false);
         }
     };
 
-    const updateLocalChannels = (channels: LocalModelChannel[]) => {
-        const normalized = channels.length ? channels : normalizeLocalChannels({ baseUrl: config.baseUrl, apiKey: config.apiKey, models: config.models });
-        const models = uniqueModels(normalized.flatMap((channel) => channel.models));
-        const nextImageModels = filterChannelModelsByCapability(normalized, "image");
-        const nextVideoModels = filterChannelModelsByCapability(normalized, "video");
-        const nextTextModels = filterChannelModelsByCapability(normalized, "text");
-        const nextAudioModels = filterChannelModelsByCapability(normalized, "audio");
+	const updateLocalChannels = (channels: LocalModelChannel[]) => {
+		const normalized = channels.length ? channels : normalizeLocalChannels({ baseUrl: config.baseUrl, apiKey: config.apiKey, models: config.models });
+		const modelChannels = normalized.filter((channel) => !isWorkflowProtocol(channel.protocol));
+        const models = uniqueModels(modelChannels.flatMap((channel) => channel.models));
+        const nextImageModels = filterChannelModelsByCapability(modelChannels, "image");
+        const nextVideoModels = filterChannelModelsByCapability(modelChannels, "video");
+        const nextTextModels = filterChannelModelsByCapability(modelChannels, "text");
+        const nextAudioModels = filterChannelModelsByCapability(modelChannels, "audio");
         const imageModel = nextImageModels.includes(config.imageModel) ? config.imageModel : nextImageModels[0] || "";
         const videoModel = nextVideoModels.includes(config.videoModel) ? config.videoModel : nextVideoModels[0] || "";
         const textModel = nextTextModels.includes(config.textModel) ? config.textModel : nextTextModels[0] || "";
@@ -205,12 +263,12 @@ export function AppConfigModal() {
         updateConfig("videoModel", videoModel);
         updateConfig("textModel", textModel);
         updateConfig("audioModel", audioModel);
-        updateConfig("imageChannelId", channelIdForLocalModel(normalized, imageModel, config.imageChannelId));
-        updateConfig("videoChannelId", channelIdForLocalModel(normalized, videoModel, config.videoChannelId));
-        updateConfig("textChannelId", channelIdForLocalModel(normalized, textModel, config.textChannelId));
-        updateConfig("audioChannelId", channelIdForLocalModel(normalized, audioModel, config.audioChannelId));
-        updateConfig("baseUrl", normalized[0]?.baseUrl || config.baseUrl);
-        updateConfig("apiKey", normalized[0]?.apiKey || config.apiKey);
+        updateConfig("imageChannelId", channelIdForLocalModel(modelChannels, imageModel, config.imageChannelId));
+        updateConfig("videoChannelId", channelIdForLocalModel(modelChannels, videoModel, config.videoChannelId));
+        updateConfig("textChannelId", channelIdForLocalModel(modelChannels, textModel, config.textChannelId));
+        updateConfig("audioChannelId", channelIdForLocalModel(modelChannels, audioModel, config.audioChannelId));
+        updateConfig("baseUrl", modelChannels[0]?.baseUrl || config.baseUrl);
+        updateConfig("apiKey", modelChannels[0]?.apiKey || config.apiKey);
     };
 
     const patchLocalChannel = (id: string, patch: Partial<LocalModelChannel>) => {
@@ -225,20 +283,75 @@ export function AppConfigModal() {
         updateLocalChannels(normalizeLocalChannels(config).filter((channel) => channel.id !== id));
     };
 
-    const refreshLocalChannelModels = async (channel: LocalModelChannel) => {
-        if (!channel.baseUrl.trim() || !channel.apiKey.trim()) {
+    const openLocalModelSelector = (channel: LocalModelChannel) => setModelSelectChannelId(channel.id);
+
+    const closeLocalModelSelector = () => setModelSelectChannelId("");
+
+    const confirmLocalModelSelector = (models: string[]) => {
+        if (!modelSelectChannelId) return;
+        patchLocalChannel(modelSelectChannelId, { models });
+        closeLocalModelSelector();
+    };
+
+    const changePersonalWorkflows = (items: WorkflowEntry[]) => {
+        if (!modelSelectChannel || !isWorkflowProtocol(modelSelectChannel.protocol)) return;
+        const protocol = modelSelectChannel.protocol;
+        setWorkflowEntries(items);
+        patchLocalChannel(modelSelectChannel.id, { workflowSummaries: items.map(({ provider, kind, workflowId, title, capability, enabled }) => ({ provider, kind, workflowId, title, capability, enabled })) });
+		void saveWorkflowChannel(user?.id || "guest", protocol, modelSelectChannel.id, items).catch((error) => {
+			message.error(error instanceof Error ? error.message : "保存工作流配置失败");
+        });
+    };
+
+    const syncPersonalWorkflows = async () => {
+        if (!token || !user || !modelSelectChannel || !isWorkflowProtocol(modelSelectChannel.protocol)) {
+            throw new Error("请先登录并选择工作流渠道");
+        }
+        const accountToken = token;
+        const accountId = user.id;
+        const channelId = modelSelectChannel.id;
+        const protocol = modelSelectChannel.protocol;
+        const entries = workflowEntries;
+        if (useUserStore.getState().token !== accountToken || useUserStore.getState().user?.id !== accountId) {
+            throw new Error("登录状态已变化");
+		}
+		const current = useConfigStore.getState().config;
+		if (!current.workflowSyncTouched) throw new Error("账号配置仍在加载");
+		await saveWorkflowChannel(accountId, protocol, channelId, entries);
+        if (useUserStore.getState().token !== accountToken || useUserStore.getState().user?.id !== accountId) {
+            throw new Error("登录状态已变化");
+        }
+        const channels = normalizeLocalChannels(current).filter((item) => isWorkflowProtocol(item.protocol));
+        const keys = new Set(channels.map((item) => `${item.protocol}:${item.id}`));
+        if (!keys.has(`${protocol}:${channelId}`)) throw new Error("工作流渠道已变化");
+        const saved = (await listWorkflowChannels(accountId)).filter((item) => keys.has(`${item.protocol}:${item.channelId}`));
+        if (useUserStore.getState().token !== accountToken || useUserStore.getState().user?.id !== accountId) {
+            throw new Error("登录状态已变化");
+        }
+        await syncUserModelConfig(accountToken, current, saved);
+        if (useUserStore.getState().token !== accountToken || useUserStore.getState().user?.id !== accountId) {
+            throw new Error("登录状态已变化");
+        }
+        return channelId;
+    };
+
+    const finishWorkflowChannel = () => {
+        if (!token || !user) {
+            closeLocalModelSelector();
+            return;
+        }
+        void syncPersonalWorkflows()
+            .then(closeLocalModelSelector)
+            .catch((error) => message.error(error instanceof Error ? error.message : "同步工作流配置失败"));
+    };
+
+    const fetchLocalModelList = async () => {
+        if (!modelSelectChannel) return;
+        if (!modelSelectChannel.baseUrl.trim() || !modelSelectChannel.apiKey.trim()) {
             message.error("请先填写该渠道的 Base URL 和 API Key");
             return;
         }
-        setLoadingModels(true);
-        try {
-            patchLocalChannel(channel.id, { models: await fetchImageModels(configForLocalChannel(config, channel)) });
-            message.success("模型列表已更新");
-        } catch (error) {
-            message.error(error instanceof Error ? error.message : "读取模型失败");
-        } finally {
-            setLoadingModels(false);
-        }
+        return uniqueModels(await fetchImageModels(configForLocalChannel(config, modelSelectChannel)));
     };
 
 
@@ -275,7 +388,8 @@ export function AppConfigModal() {
     };
 
     return (
-        <Modal
+        <>
+            <Modal
             title={
                 <div>
                     <div className="text-lg font-semibold">配置与用户偏好</div>
@@ -330,24 +444,13 @@ export function AppConfigModal() {
                                             <Input value={channel.name} placeholder="渠道名称" onChange={(event) => patchLocalChannel(channel.id, { name: event.target.value })} />
                                             <Select
                                                 value={channel.protocol}
-                                                options={[
-                                                    { label: "OpenAI", value: "openai" },
-                                                    { label: "Gemini", value: "gemini" },
-                                                    { label: "Grok2API", value: "grok2api" },
-                                                    { label: "xAI", value: "xai" },
-                                                    { label: "MiniMax & METASO", value: "metaso" },
-                                                    { label: "APIMart", value: "apimart" },
-                                                    { label: "KIE", value: "kie" },
-                                                    { label: "MiMo", value: "mimo" },
-                                                    { label: "火山方舟", value: "ark" },
-                                                ]}
+                                                options={modelChannelProtocolOptions}
                                                 onChange={(protocol: LocalModelChannel["protocol"]) => patchLocalChannel(channel.id, { protocol, baseUrl: modelChannelDefaultBaseUrls[protocol] })}
                                             />
-                                            <Input value={channel.baseUrl} placeholder="Base URL" onChange={(event) => patchLocalChannel(channel.id, { baseUrl: event.target.value })} />
-                                            <Input.Password value={channel.apiKey} placeholder="API Key" onChange={(event) => patchLocalChannel(channel.id, { apiKey: event.target.value })} />
+                                            {isWorkflowProtocol(channel.protocol) ? <div className="flex h-8 items-center justify-center rounded-md border border-dashed border-[var(--ant-color-border)] px-3 text-xs text-[var(--ant-color-text-secondary)] md:col-span-2">连接信息和工作流在「选择」里配置</div> : <><Input value={channel.baseUrl} placeholder="Base URL" onChange={(event) => patchLocalChannel(channel.id, { baseUrl: event.target.value })} /><Input.Password value={channel.apiKey} placeholder="API Key" onChange={(event) => patchLocalChannel(channel.id, { apiKey: event.target.value })} /></>}
                                             <div className="relative flex flex-wrap gap-2 md:flex-nowrap">
-                                                <Button size="small" loading={loadingModels} onClick={() => void refreshLocalChannelModels(channel)}>
-                                                    拉取
+                                                <Button size="small" onClick={() => openLocalModelSelector(channel)}>
+                                                    选择
                                                 </Button>
                                                 <Button size="small" danger disabled={index === 0 && normalizeLocalChannels(config).length === 1} onClick={() => removeLocalChannel(channel.id)}>
                                                     删除
@@ -361,7 +464,7 @@ export function AppConfigModal() {
                                                 ) : null}
                                             </div>
                                         </div>
-                                        <div className="text-xs text-stone-500">已保存 {channel.models.length} 个模型</div>
+                                        <div className="text-xs text-stone-500">{isWorkflowProtocol(channel.protocol) ? `已保存 ${channel.workflowSummaries?.length || 0} 条工作流` : `已保存 ${channel.models.length} 个模型`}</div>
                                     </div>
                                 ))}
                             </div>
@@ -386,7 +489,7 @@ export function AppConfigModal() {
                     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                         {modelGroups.map((group) => (
                             <Form.Item key={group.modelKey} label={group.defaultLabel} className="mb-4">
-                                <ModelPicker config={modelConfig} value={modelConfig[group.modelKey]} channelId={modelConfig[group.channelKey]} onChange={(model, channelId) => { updateConfig(group.modelKey, model); if (channelId) updateConfig(group.channelKey, channelId); }} capability={group.capability} fullWidth />
+                                <ModelPicker config={modelConfig} value={modelConfig[group.modelKey]} channelId={modelConfig[group.channelKey]} workflowRef={group.workflowKey ? modelConfig[group.workflowKey] : undefined} onWorkflowChange={group.workflowKey ? (ref) => updateConfig(group.workflowKey!, ref) : undefined} onChange={(model, channelId) => { updateConfig(group.modelKey, model); if (channelId) updateConfig(group.channelKey, channelId); }} capability={group.capability} fullWidth />
                             </Form.Item>
                         ))}
                     </div>
@@ -522,7 +625,24 @@ export function AppConfigModal() {
                     ) : null}
                 </Form>
             </div>
-        </Modal>
+            </Modal>
+            {modelSelectChannel && isWorkflowProtocol(modelSelectChannel.protocol) ? (
+                <Modal title={`${modelSelectChannel.name || "工作流渠道"} · ${modelSelectChannel.protocol === "runninghub" ? "RunningHub" : "ComfyUI"} 工作流`} open width="75vw" centered onCancel={finishWorkflowChannel} footer={<Button type="primary" onClick={finishWorkflowChannel}>完成</Button>} styles={{ body: { maxHeight: "76vh", overflowY: "auto" } }}>
+                    <WorkflowChannelPane key={`${user?.id || "guest"}:${modelSelectChannel.protocol}:${modelSelectChannel.id}`} channel={modelSelectChannel as WorkflowChannelSettings} workflows={workflowEntries} token={token || ""} onChannelChange={(patch) => patchLocalChannel(modelSelectChannel.id, patch)} onBridgeDeleted={(bridgeId) => {
+                        const current = useConfigStore.getState().config;
+                        updateLocalChannels(normalizeLocalChannels(current).map((channel) => channel.protocol === "comfyui" && channel.bridgeId === bridgeId ? { ...channel, bridgeId: "" } : channel));
+                    }} onWorkflowsChange={changePersonalWorkflows} onBeforeTest={syncPersonalWorkflows} />
+                </Modal>
+            ) : modelSelectChannel ? (
+                <ChannelModelSelectorModal
+                    channel={modelSelectChannel}
+                    models={modelSelectChannel.models}
+                    onCancel={closeLocalModelSelector}
+                    onConfirm={confirmLocalModelSelector}
+                    onFetchModels={fetchLocalModelList}
+                />
+            ) : null}
+        </>
     );
 }
 

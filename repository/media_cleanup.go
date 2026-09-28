@@ -177,7 +177,7 @@ func FindMediaCleanupReferences(object model.StorageObject) ([]model.MediaCleanu
 		return nil, err
 	}
 	if err := appendMatches("video_tasks", "id, user_id, '' AS path", &model.VideoTask{}, []string{
-		"video_url", "request_body", "response_body", "last_response", "error", "error_detail",
+		"storage_key", "video_url", "request_body", "response_body", "last_response", "error", "error_detail",
 	}); err != nil {
 		return nil, err
 	}
@@ -223,6 +223,11 @@ func FindMediaCleanupReferences(object model.StorageObject) ([]model.MediaCleanu
 	}
 	if err := appendMatches("ai_call_logs", "id, user_id, '' AS path", &model.AICallLog{}, []string{
 		"request_body", "response_body", "error",
+	}); err != nil {
+		return nil, err
+	}
+	if err := appendMatches("comfy_bridge_requests", "id, owner_id AS user_id, '' AS path", &model.ComfyBridgeRequest{}, []string{
+		"payload_json", "result_json", "error", "checkpoint_json",
 	}); err != nil {
 		return nil, err
 	}

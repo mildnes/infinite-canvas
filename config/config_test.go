@@ -7,6 +7,8 @@ import (
 )
 
 func TestNormalizeDockerSQLiteDSNUsesMountedDataDir(t *testing.T) {
+	previous := Cfg
+	t.Cleanup(func() { Cfg = previous })
 	root := t.TempDir()
 	appDataDir := filepath.Join(root, "data")
 	if err := os.MkdirAll(appDataDir, 0755); err != nil {
@@ -23,6 +25,8 @@ func TestNormalizeDockerSQLiteDSNUsesMountedDataDir(t *testing.T) {
 }
 
 func TestNormalizeDockerSQLiteDSNLeavesLocalPathWithoutMountedDataDir(t *testing.T) {
+	previous := Cfg
+	t.Cleanup(func() { Cfg = previous })
 	Cfg = Config{StorageDriver: "sqlite", DatabaseDSN: "data/infinite-canvas.db"}
 
 	normalizeDockerSQLiteDSN(filepath.Join(t.TempDir(), "missing-data"))

@@ -1,3 +1,5 @@
+import type { ModelChannelProtocol } from "@/lib/model-channel";
+import type { WorkflowEntry, WorkflowSummary } from "@/lib/workflow-channel";
 import { apiDelete, apiGet, apiPost, compactApiParams } from "@/services/api/request";
 import type { Prompt, PromptListResponse } from "@/services/api/prompts";
 import type { AgentSkill, AgentSkillFile } from "@/services/api/agent-skills";
@@ -74,7 +76,7 @@ export async function deleteAdminUser(token: string, id: string) {
     return apiDelete<boolean>(`/api/admin/users/${encodeURIComponent(id)}`, token);
 }
 
-export async function fetchAdminCreditLogs(token: string, query: AdminUserQuery = {}) {
+export async function fetchAdminCreditLogs(token: string, query: AdminUserQuery & { date?: string } = {}) {
     return apiGet<AdminCreditLogListResponse>("/api/admin/credit-logs", compactApiParams(query), token);
 }
 
@@ -142,12 +144,21 @@ export async function deleteAdminPrompts(token: string, ids: string[]) {
     return apiPost<boolean>("/api/admin/prompts/batch-delete", { ids }, token);
 }
 
-export function fetchAdminAgentSkills(token: string) { return apiGet<AgentSkill[]>("/api/admin/agent-skills", undefined, token); }
-export function saveAdminAgentSkill(token: string, skill: Partial<AgentSkill>) { return apiPost<AgentSkill>("/api/admin/agent-skills", skill, token); }
-export function fetchAdminAgentSkillFiles(token: string, id: string) { return apiGet<AgentSkillFile[]>(`/api/admin/agent-skills/${encodeURIComponent(id)}/files`, undefined, token); }
-export function deleteAdminAgentSkill(token: string, id: string) { return apiDelete<boolean>(`/api/admin/agent-skills/${encodeURIComponent(id)}`, token); }
-export type RemoteAgentSkillInput = { repository: string; ref?: string; path?: string; name?: string };
-export function installAdminAgentSkill(token: string, input: RemoteAgentSkillInput) { return apiPost<AgentSkill>("/api/admin/agent/skills/install", input, token); }
+export function fetchAdminAgentSkills(token: string) {
+    return apiGet<AgentSkill[]>("/api/admin/agent-skills", undefined, token);
+}
+
+export function saveAdminAgentSkill(token: string, skill: Partial<AgentSkill>) {
+    return apiPost<AgentSkill>("/api/admin/agent-skills", skill, token);
+}
+
+export function fetchAdminAgentSkillFiles(token: string, id: string) {
+    return apiGet<AgentSkillFile[]>(`/api/admin/agent-skills/${encodeURIComponent(id)}/files`, undefined, token);
+}
+
+export function deleteAdminAgentSkill(token: string, id: string) {
+    return apiDelete<boolean>(`/api/admin/agent-skills/${encodeURIComponent(id)}`, token);
+}
 
 export type AdminAssetQuery = {
     keyword?: string;
@@ -171,7 +182,7 @@ export async function deleteAdminAsset(token: string, id: string) {
 
 export type AdminModelChannel = {
     id: string;
-    protocol: "openai" | "gemini" | "grok2api" | "xai" | "metaso" | "apimart" | "kie" | "mimo" | "ark";
+    protocol: ModelChannelProtocol;
     name: string;
     baseUrl: string;
     apiKey: string;
@@ -180,10 +191,16 @@ export type AdminModelChannel = {
     timeout: number;
     enabled: boolean;
     remark: string;
+    uploadApiKey?: string;
+    bridgeId?: string;
+    comfyUrl?: string;
+    workflowDir?: string;
+    workflows?: WorkflowEntry[];
 };
 
 export type AdminPublicModelChannelSettings = {
     availableModels: string[];
+    availableWorkflows: string[];
     modelCosts: AdminModelCost[];
     channels: AdminPublicModelChannelInfo[];
     defaultModel: string;
@@ -203,7 +220,7 @@ export type AdminPublicModelChannelSettings = {
 };
 
 export type AdminModelCost = {
-    channelId: string;
+    channelId?: string;
     model: string;
     credits: number;
 };
@@ -218,6 +235,7 @@ export type AdminPublicModelChannelInfo = {
     timeout: number;
     enabled: boolean;
     remark: string;
+    workflows?: WorkflowSummary[];
 };
 
 export type AdminPublicSettings = {
@@ -232,9 +250,9 @@ export type AdminPublicSettings = {
         mode: string;
         allowUserProvider: boolean;
         allowUserGlobalProvider?: boolean;
-        autoSyncAllAssets: boolean;
+        autoSyncAllAssets?: boolean;
     };
-    agent: {
+    agent?: {
         mcpServers: AdminPublicMCPServer[];
     };
 };

@@ -89,7 +89,7 @@ func ListDueVideoTasks(limit int) ([]model.VideoTask, error) {
 		limit = 100
 	}
 	var tasks []model.VideoTask
-	err = db.Where("status IN ?", []string{"queued", "in_progress", "processing", "running"}).
+	err = db.Where("status IN ?", []string{"queued", "in_progress", "processing", "running"}).Where("(workflow_ref = '' OR workflow_ref IS NULL)").
 		Order("created_at ASC").
 		Limit(limit).
 		Find(&tasks).Error

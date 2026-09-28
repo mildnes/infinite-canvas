@@ -19,6 +19,10 @@ type CanvasImageTaskCreateInput struct {
 	ChannelID       string
 	UserChannelID   string
 	ChannelName     string
+	WorkflowRef     string
+	Credits         int
+	BillingName     string
+	BillingPath     string
 	Prompt          string
 	GenerationType  string
 	Endpoint        string
@@ -39,6 +43,8 @@ func CreateCanvasImageTask(input CanvasImageTaskCreateInput) (model.CanvasImageT
 		ChannelID:       strings.TrimSpace(input.ChannelID),
 		UserChannelID:   strings.TrimSpace(input.UserChannelID),
 		ChannelName:     strings.TrimSpace(input.ChannelName),
+		WorkflowRef:     input.WorkflowRef,
+		Credits:         input.Credits,
 		Status:          "queued",
 		Progress:        0,
 		Prompt:          strings.TrimSpace(input.Prompt),
@@ -49,7 +55,17 @@ func CreateCanvasImageTask(input CanvasImageTaskCreateInput) (model.CanvasImageT
 		CreatedAt:       current,
 		UpdatedAt:       current,
 	}
-	return repository.SaveCanvasImageTask(task)
+	saved := task
+	var err error
+	if input.WorkflowRef != "" {
+		err = ConsumeUserCredits(task.UserID, task.ChannelID, input.BillingName, task.Credits, input.BillingPath, &task)
+	} else {
+		saved, err = repository.SaveCanvasImageTask(task)
+	}
+	if err == nil {
+		WakeVideoTaskPoller()
+	}
+	return saved, err
 }
 
 func GetUserCanvasImageTask(userID string, id string) (model.CanvasImageTask, bool, error) {
@@ -126,6 +142,9 @@ func CanvasImageTaskResponse(task model.CanvasImageTask) map[string]any {
 		result["height"] = task.Height
 		result["mimeType"] = task.MimeType
 		result["bytes"] = task.Bytes
+	}
+	if task.WorkflowRef != "" {
+		result["workflowRef"] = task.WorkflowRef
 	}
 	if task.Error != "" || task.ErrorDetail != "" {
 		result["error"] = map[string]any{"message": firstVideoTaskValue(task.Error, task.ErrorDetail)}

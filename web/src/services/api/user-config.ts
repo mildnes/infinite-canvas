@@ -1,9 +1,10 @@
 import { apiDelete, apiGet, apiPost } from "@/services/api/request";
 import type { AiConfig } from "@/stores/use-config-store";
+import type { WorkflowChannelData } from "@/lib/workflow-channel";
 import { toProviderPayload, type UserS3StorageProvider, type UserStorageProvider, type UserWebDAVStorageProvider } from "@/services/image-storage";
 
 export type UserConfigPayload = {
-    modelConfig?: Partial<AiConfig>;
+    modelConfig?: Partial<AiConfig> & { workflowChannels?: WorkflowChannelData[] };
     storageProvider?: {
         s3?: Partial<UserS3StorageProvider>;
         webdav?: Partial<UserWebDAVStorageProvider>;
@@ -29,8 +30,8 @@ export async function fetchUserConfig(token: string) {
     return apiGet<UserConfigPayload>("/api/v1/user-config", undefined, token);
 }
 
-export async function syncUserModelConfig(token: string, config: AiConfig) {
-    return apiPost<UserConfigPayload>("/api/v1/user-config/model", { config }, token);
+export async function syncUserModelConfig(token: string, config: AiConfig, workflowChannels?: WorkflowChannelData[]) {
+    return apiPost<UserConfigPayload>("/api/v1/user-config/model", { config: workflowChannels === undefined ? config : { ...config, workflowChannels } }, token);
 }
 
 export type UserStorageProviders = {

@@ -5,7 +5,8 @@
     "type": "module",
     "scripts": {
         "dev": "next dev --webpack -H 0.0.0.0 -p 3000",
-        "build": "next build",
+        "build": "bun run build:bridge && next build",
+        "build:bridge": "bun ../canvas-agent/scripts/build-comfy-bridge.ts",
         "start": "next start",
         "format": "prettier --write .",
         "format:check": "prettier --check ."

@@ -8,6 +8,7 @@ type VideoTask struct {
 	ChannelID       string `json:"channelId" gorm:"index"`
 	UserChannelID   string `json:"userChannelId" gorm:"index"`
 	ChannelName     string `json:"channelName"`
+	WorkflowRef     string `json:"workflowRef,omitempty" gorm:"type:text"`
 	Source          string `json:"source" gorm:"index"`
 	SourceID        string `json:"source_id" gorm:"index"`
 	UpstreamTaskID  string `json:"upstreamTaskId" gorm:"index"`
@@ -17,6 +18,11 @@ type VideoTask struct {
 	Seconds         string `json:"seconds"`
 	Size            string `json:"size"`
 	VideoURL        string `json:"videoUrl" gorm:"type:text"`
+	StorageKey      string `json:"storageKey"`
+	MimeType        string `json:"mimeType"`
+	Bytes           int64  `json:"bytes"`
+	Width           int    `json:"width"`
+	Height          int    `json:"height"`
 	Error           string `json:"error" gorm:"type:text"`
 	ErrorDetail     string `json:"errorDetail" gorm:"type:text"`
 	RequestBody     string `json:"requestBody" gorm:"type:text"`

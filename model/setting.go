@@ -16,16 +16,71 @@ const (
 
 // ModelChannel 模型渠道配置。
 type ModelChannel struct {
-	ID       string   `json:"id"`
-	Protocol string   `json:"protocol"`
-	Name     string   `json:"name"`
-	BaseURL  string   `json:"baseUrl"`
-	APIKey   string   `json:"apiKey"`
-	Models   []string `json:"models"`
-	Weight   int      `json:"weight"`
-	Timeout  int      `json:"timeout"`
-	Enabled  bool     `json:"enabled"`
-	Remark   string   `json:"remark"`
+	ID           string          `json:"id"`
+	Protocol     string          `json:"protocol"`
+	Name         string          `json:"name"`
+	BaseURL      string          `json:"baseUrl"`
+	APIKey       string          `json:"apiKey"`
+	Models       []string        `json:"models"`
+	Weight       int             `json:"weight"`
+	Timeout      int             `json:"timeout"`
+	Enabled      bool            `json:"enabled"`
+	Remark       string          `json:"remark"`
+	UploadAPIKey string          `json:"uploadApiKey,omitempty"`
+	BridgeID     string          `json:"bridgeId,omitempty"`
+	ComfyURL     string          `json:"comfyUrl,omitempty"`
+	WorkflowDir  string          `json:"workflowDir,omitempty"`
+	Workflows    []WorkflowEntry `json:"workflows,omitempty"`
+}
+
+type WorkflowFieldMapping struct {
+	ID                 string `json:"id,omitempty"`
+	NodeID             string `json:"nodeId"`
+	ClassType          string `json:"classType,omitempty"`
+	FieldName          string `json:"fieldName"`
+	FieldType          string `json:"fieldType,omitempty"`
+	Label              string `json:"label,omitempty"`
+	Role               string `json:"role,omitempty"`
+	SafeToOverride     *bool  `json:"safeToOverride,omitempty"`
+	OptionsSource      string `json:"optionsSource,omitempty"`
+	Source             string `json:"source,omitempty"`
+	SourceIndex        int    `json:"sourceIndex,omitempty"`
+	ImageOrder         int    `json:"imageOrder,omitempty"`
+	FieldValue         any    `json:"fieldValue,omitempty"`
+	Value              any    `json:"value,omitempty"`
+	Default            any    `json:"default,omitempty"`
+	DefaultValue       any    `json:"defaultValue,omitempty"`
+	Enabled            *bool  `json:"enabled,omitempty"`
+	Required           bool   `json:"required,omitempty"`
+	RandomEnabled      bool   `json:"randomEnabled,omitempty"`
+	BindPrompt         bool   `json:"bindPrompt,omitempty"`
+	SourceFromUpstream bool   `json:"sourceFromUpstream,omitempty"`
+	SourceAutomatic    *bool  `json:"sourceAutomatic,omitempty"`
+	Options            []any  `json:"options,omitempty"`
+	Min                any    `json:"min,omitempty"`
+	Max                any    `json:"max,omitempty"`
+	Step               any    `json:"step,omitempty"`
+}
+
+type WorkflowEntry struct {
+	Provider      string                 `json:"provider"`
+	Kind          string                 `json:"kind"`
+	WorkflowID    string                 `json:"workflowId"`
+	Title         string                 `json:"title"`
+	Capability    string                 `json:"capability"`
+	Enabled       bool                   `json:"enabled"`
+	Fields        []WorkflowFieldMapping `json:"fields"`
+	WorkflowJSON  map[string]any         `json:"workflowJson,omitempty"`
+	WorkflowGraph map[string]any         `json:"workflowGraph,omitempty"`
+}
+
+type WorkflowSummary struct {
+	Provider   string  `json:"provider"`
+	Kind       string  `json:"kind"`
+	WorkflowID string  `json:"workflowId"`
+	Title      string  `json:"title"`
+	Capability string  `json:"capability"`
+	Enabled    bool    `json:"enabled"`
 }
 
 // ModelCost 模型算力点配置。
@@ -38,6 +93,7 @@ type ModelCost struct {
 // PublicModelChannelSetting 公开模型渠道配置。
 type PublicModelChannelSetting struct {
 	AvailableModels        []string                 `json:"availableModels"`
+	AvailableWorkflows     []string                 `json:"availableWorkflows"`
 	ModelCosts             []ModelCost              `json:"modelCosts"`
 	Channels               []PublicModelChannelInfo `json:"channels"`
 	DefaultModel           string                   `json:"defaultModel"`
@@ -59,15 +115,16 @@ type SystemPromptSetting struct {
 }
 
 type PublicModelChannelInfo struct {
-	ID       string   `json:"id"`
-	Protocol string   `json:"protocol"`
-	Name     string   `json:"name"`
-	BaseURL  string   `json:"baseUrl"`
-	Models   []string `json:"models"`
-	Weight   int      `json:"weight"`
-	Timeout  int      `json:"timeout"`
-	Enabled  bool     `json:"enabled"`
-	Remark   string   `json:"remark"`
+	ID        string            `json:"id"`
+	Protocol  string            `json:"protocol"`
+	Name      string            `json:"name"`
+	BaseURL   string            `json:"baseUrl"`
+	Models    []string          `json:"models"`
+	Weight    int               `json:"weight"`
+	Timeout   int               `json:"timeout"`
+	Enabled   bool              `json:"enabled"`
+	Remark    string            `json:"remark"`
+	Workflows []WorkflowSummary `json:"workflows,omitempty"`
 }
 
 // PublicSetting 公开配置。

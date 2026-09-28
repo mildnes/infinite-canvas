@@ -22,12 +22,14 @@ import { deleteStoredMedia, downloadRemoteMedia, resolveMediaUrl, uploadMediaFil
 import { deleteStoredImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { deleteVideoGenerationLogs, fetchVideoGenerationLogs, saveVideoGenerationLogs } from "@/services/api/generation-logs";
 import { createVideoGenerationTask, deleteVideoGenerationTask, listVideoGenerationTasks, pollVideoGenerationTaskStatus, VIDEO_POLL_INTERVAL_MS, VideoRequestError, type VideoResponse } from "@/services/api/video";
+import { getWorkflowTask, isRetryableWorkflowError, submitWorkflowTask, workflowMediaSource, workflowMediaStorageKey } from "@/services/api/workflow-generation";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { channelProtocolForConfig, normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig, type VideoElementItem, type VideoElementReference } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
+import { parseWorkflowRef, type WorkflowRef } from "@/lib/workflow-channel";
 
 const cogVideoX3DurationOptions = COGVIDEOX3_DURATIONS.map((value) => ({ value, label: `${value}s` }));
 
@@ -50,6 +52,7 @@ type GenerationResult = {
     prompt: string;
     negativePrompt?: string;
     model: string;
+    providerWorkflowRef?: WorkflowRef;
     config: GenerationLogConfig;
     references: ReferenceImage[];
     firstFrame?: ReferenceImage | null;
@@ -73,6 +76,7 @@ type GenerationLog = {
     prompt: string;
     time: string;
     model: string;
+    providerWorkflowRef?: WorkflowRef;
     config: GenerationLogConfig;
     references: ReferenceImage[];
     firstFrame?: ReferenceImage | null;
@@ -97,6 +101,7 @@ type GenerationLogConfig = Pick<AiConfig, "channelMode" | "activeChannelId" | "v
 type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
 type WorkbenchLayout = "side" | "bottom";
 type AssetPickerTarget = "general" | "image" | "video" | "audio" | "firstFrame" | "lastFrame" | "element";
+type WorkflowPollContext = { token: string; signal: AbortSignal };
 
 const WORKBENCH_LAYOUT_KEY = "infinite-canvas:video-workbench-layout";
 const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" });
@@ -120,6 +125,7 @@ export default function VideoPage() {
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
     const token = useUserStore((state) => state.token);
+    const userId = useUserStore((state) => state.user?.id || "");
     const isUserReady = useUserStore((state) => state.isReady);
     const [prompt, setPrompt] = useState("");
     const [negativePrompt, setNegativePrompt] = useState("");
@@ -147,16 +153,17 @@ export default function VideoPage() {
     const pollingLogIdsRef = useRef(new Set<string>());
     const logsRef = useRef<GenerationLog[]>([]);
     const effectiveConfigRef = useRef(videoConfig);
+    const workflowSubmissionRef = useRef(0);
 
     const model = effectiveConfig.videoModel || effectiveConfig.model;
-    const referenceLimits = channelProtocolForConfig({ ...videoConfig, model, videoModel: model }) === "ark" && modelKey(model).includes("seedance-2-5") ? ARK_SEEDANCE_REFERENCE_LIMITS : SEEDANCE_REFERENCE_LIMITS;
-    const canGenerate = Boolean(prompt.trim());
+    const referenceLimits = !videoConfig.videoWorkflowRef && channelProtocolForConfig({ ...videoConfig, model, videoModel: model }) === "ark" && modelKey(model).includes("seedance-2-5") ? ARK_SEEDANCE_REFERENCE_LIMITS : SEEDANCE_REFERENCE_LIMITS;
+    const canGenerate = Boolean(prompt.trim() || videoConfig.videoWorkflowRef);
     const pendingCount = results.filter((item) => item.status === "pending").length;
-    const klingWorkbench = resolveKlingWorkbenchConfig(videoConfig, model);
+    const klingWorkbench = videoConfig.videoWorkflowRef ? null : resolveKlingWorkbenchConfig(videoConfig, model);
     const klingWorkbenchVariant = klingWorkbench?.variant || "";
     const klingWorkbenchProvider = klingWorkbench?.provider || "apimart";
     const isKlingWorkbench = Boolean(klingWorkbench);
-    const klingOmni = kieKlingOmniVariant(videoConfig, model);
+    const klingOmni = videoConfig.videoWorkflowRef ? "" : kieKlingOmniVariant(videoConfig, model);
     const klingAcceptsVideoReferences = klingOmni === "reference-to-video" || klingOmni === "transformation";
     const referenceImageLimit = klingOmni === "text-to-video" ? 0 : klingOmni === "image-to-video" ? 2 : klingOmni === "transformation" ? 4 : isKlingWorkbench && klingOmni !== "reference-to-video" ? 2 : referenceLimits.images;
     const videoReferenceLimit = klingAcceptsVideoReferences ? 1 : referenceLimits.videos;
@@ -169,16 +176,17 @@ export default function VideoPage() {
         setResults((value) => mergePendingLogResults(value, pendingLogs));
     };
 
-    const pollPendingLogsOnce = (sourceLogs: GenerationLog[]) => {
+    const pollPendingLogsOnce = (sourceLogs: GenerationLog[], context: WorkflowPollContext) => {
         const pendingLogs = sourceLogs.filter((log) => log.status === "生成中" && log.task && !log.video);
         if (!pendingLogs.length) return;
         pendingLogs.forEach((log) => {
             if (pollingLogIdsRef.current.has(log.id)) return;
             const resumeConfig = buildResumeVideoConfig(effectiveConfigRef.current, log);
             const taskId = videoLogTaskId(log);
-            if (!taskId || !isAiConfigReady(resumeConfig, log.model)) return;
+            if (!taskId || (!log.providerWorkflowRef && !isAiConfigReady(resumeConfig, log.model))) return;
+            if (log.providerWorkflowRef && !context.token) return;
             if (isLocalClientVideoLog(log) && !usesBackendVideoTasks(resumeConfig)) return;
-            void pollPendingLogOnce(log, resumeConfig);
+            void pollPendingLogOnce(log, resumeConfig, context);
         });
     };
 
@@ -189,15 +197,23 @@ export default function VideoPage() {
     }, [pendingCount, pendingLogCount]);
 
     useEffect(() => {
-        if (!pendingLogCount) return;
-        const timer = window.setInterval(() => {
-            pollPendingLogsOnce(logsRef.current);
-        }, VIDEO_POLL_INTERVAL_MS);
-        return () => window.clearInterval(timer);
-    }, [pendingLogCount]);
+        logsRef.current = logs;
+    }, [logs]);
 
     useEffect(() => {
-        void refreshLogs().then((items) => syncBackendVideoTasks(items));
+        if (!pendingLogCount) return;
+        const controller = new AbortController();
+        const context = { token: token || "", signal: controller.signal };
+        const timer = window.setInterval(() => {
+            pollPendingLogsOnce(logsRef.current, context);
+        }, VIDEO_POLL_INTERVAL_MS);
+        return () => {
+            controller.abort();
+            window.clearInterval(timer);
+        };
+    }, [pendingLogCount, token, userId]);
+
+    useEffect(() => {
         try {
             const storedLayout = window.localStorage?.getItem(WORKBENCH_LAYOUT_KEY);
             if (storedLayout === "side" || storedLayout === "bottom") setWorkbenchLayoutState(storedLayout);
@@ -205,10 +221,6 @@ export default function VideoPage() {
             // Keep the default layout when localStorage is unavailable.
         }
     }, []);
-
-    useEffect(() => {
-        logsRef.current = logs;
-    }, [logs]);
 
     useEffect(() => {
         effectiveConfigRef.current = videoConfig;
@@ -219,8 +231,12 @@ export default function VideoPage() {
     }, [logs]);
 
     useEffect(() => {
-        if (!isUserReady || !token) return;
-        void loadAccountVideoHistory(token).then((items) => syncBackendVideoTasks(items || logsRef.current));
+        if (!isUserReady) return;
+        if (token) {
+            void loadAccountVideoHistory().then((items) => syncBackendVideoTasks(items));
+            return;
+        }
+        void refreshLogs().then((items) => syncBackendVideoTasks(items));
     }, [isUserReady, token]);
 
     const setWorkbenchLayout = (layout: WorkbenchLayout) => {
@@ -558,9 +574,13 @@ export default function VideoPage() {
         await submitGenerationSnapshot(snapshot);
     };
 
-    const buildRequestSnapshot = ({ promptText = prompt, negativePromptText, referenceItems = references, firstFrameItem = firstFrame, lastFrameItem = lastFrame, videoReferenceItems = videoReferences, audioReferenceItems = audioReferences, taskCountValue = taskCount, configValue = videoConfig, modelValue = model }: { promptText?: string; negativePromptText?: string; referenceItems?: ReferenceImage[]; firstFrameItem?: ReferenceImage | null; lastFrameItem?: ReferenceImage | null; videoReferenceItems?: ReferenceVideo[]; audioReferenceItems?: ReferenceAudio[]; taskCountValue?: number; configValue?: AiConfig; modelValue?: string } = {}) => {
+    const buildRequestSnapshot = ({ promptText = prompt, negativePromptText, referenceItems = references, firstFrameItem = firstFrame, lastFrameItem = lastFrame, videoReferenceItems = videoReferences, audioReferenceItems = audioReferences, taskCountValue = taskCount, configValue = videoConfig, modelValue = model, workflowRef = videoConfig.videoWorkflowRef }: { promptText?: string; negativePromptText?: string; referenceItems?: ReferenceImage[]; firstFrameItem?: ReferenceImage | null; lastFrameItem?: ReferenceImage | null; videoReferenceItems?: ReferenceVideo[]; audioReferenceItems?: ReferenceAudio[]; taskCountValue?: number; configValue?: AiConfig; modelValue?: string; workflowRef?: WorkflowRef | null } = {}) => {
         const text = promptText.trim();
         const currentNegativePrompt = (negativePromptText ?? configValue.videoNegativePrompt ?? negativePrompt).trim();
+        if (workflowRef) {
+            if (!token) { message.error("工作流生成需要先登录"); return null; }
+            return { text, model: modelValue, config: { ...configValue, videoNegativePrompt: currentNegativePrompt }, references: [...referenceItems], firstFrame: firstFrameItem, lastFrame: lastFrameItem, videoReferences: [...videoReferenceItems], audioReferences: [...audioReferenceItems], taskCount: normalizeVideoCount(taskCountValue), workflowRef };
+        }
         const klingV26 = isAPIMartKlingV26Config(configValue, modelValue);
         const klingV3 = isKlingV3Config(configValue, modelValue);
         const kling = klingV26 || klingV3;
@@ -624,36 +644,78 @@ export default function VideoPage() {
         return { text, model: modelValue, config: normalizedConfig, references: imageReferences, firstFrame: frameReferencesEnabled ? firstFrameItem : null, lastFrame: frameReferencesEnabled ? lastFrameItem : null, videoReferences: acceptsVideoReferences ? [...videoReferenceItems].slice(0, 1) : kling ? [] : [...videoReferenceItems], audioReferences: kling ? [] : [...audioReferenceItems], taskCount: normalizeVideoCount(taskCountValue) };
     };
 
-    const submitGenerationSnapshot = async (snapshot: { text: string; model: string; config: AiConfig; references: ReferenceImage[]; firstFrame?: ReferenceImage | null; lastFrame?: ReferenceImage | null; videoReferences: ReferenceVideo[]; audioReferences: ReferenceAudio[]; taskCount: number }) => {
+    const submitGenerationSnapshot = async (snapshot: { text: string; model: string; config: AiConfig; references: ReferenceImage[]; firstFrame?: ReferenceImage | null; lastFrame?: ReferenceImage | null; videoReferences: ReferenceVideo[]; audioReferences: ReferenceAudio[]; taskCount: number; workflowRef?: WorkflowRef | null }) => {
+        const workflowToken = snapshot.workflowRef ? useUserStore.getState().token : "";
+        const submissionId = snapshot.workflowRef ? ++workflowSubmissionRef.current : 0;
+        const active = () => !snapshot.workflowRef || useUserStore.getState().token === workflowToken;
         setRunning(true);
         setPreviewLog(null);
         setNow(Date.now());
         const pendingLogs = Array.from({ length: snapshot.taskCount }, () => {
             const clientTaskId = `client_video_task_${nanoid()}`;
             const task: VideoResponse = { id: clientTaskId, task_id: clientTaskId, model: snapshot.model, status: "queued", progress: 0, created_at: Date.now(), size: snapshot.config.size, seconds: snapshot.config.videoSeconds };
-            return buildLog({ prompt: snapshot.text, model: snapshot.model, config: snapshot.config, references: snapshot.references, firstFrame: snapshot.firstFrame, lastFrame: snapshot.lastFrame, videoReferences: snapshot.videoReferences, audioReferences: snapshot.audioReferences, durationMs: 0, status: "生成中", task, taskCount: snapshot.taskCount, lastPolledAt: Date.now() });
+            return buildLog({ prompt: snapshot.text, model: snapshot.model, config: snapshot.config, references: snapshot.references, firstFrame: snapshot.firstFrame, lastFrame: snapshot.lastFrame, videoReferences: snapshot.videoReferences, audioReferences: snapshot.audioReferences, durationMs: 0, status: "生成中", task, taskCount: snapshot.taskCount, lastPolledAt: Date.now(), providerWorkflowRef: snapshot.workflowRef || undefined });
         });
-        await Promise.all(pendingLogs.map((log) => logStore.setItem(log.id, serializeLog(log))));
-        setLogs((value) => sortVideoLogs([...pendingLogs, ...value]));
-        setResults((value) => sortVideoResults([...pendingLogs.map((log) => createResultFromLog(log, "pending")), ...value]));
         try {
-            const settled = await Promise.allSettled(pendingLogs.map((log) => runVideoTask(log, snapshot)));
+            await Promise.all(pendingLogs.map((log) => logStore.setItem(log.id, serializeLog(log))));
+            if (!active()) return;
+            setLogs((value) => sortVideoLogs([...pendingLogs, ...value]));
+            setResults((value) => sortVideoResults([...pendingLogs.map((log) => createResultFromLog(log, "pending")), ...value]));
+            const settled = await Promise.allSettled(pendingLogs.map((log) => runVideoTask(log, snapshot, workflowToken, active)));
+            if (!active()) return;
             const nextLogs = settled
                 .map((item) => (item.status === "fulfilled" ? item.value : null))
                 .filter((item): item is NonNullable<typeof item> => Boolean(item));
             const storedLogs = await readStoredLogs();
+            if (!active()) return;
             setLogs(storedLogs);
             const createdCount = nextLogs.filter((item) => item.status === "生成中").length;
             const failedCount = nextLogs.filter((item) => item.status === "失败").length;
             createdCount ? message.success(`已创建 ${createdCount} 个视频任务`) : message.error("视频任务创建失败");
             if (failedCount) message.warning(`${failedCount} 个视频任务创建失败`);
         } finally {
-            setRunning(false);
+            if (!snapshot.workflowRef || workflowSubmissionRef.current === submissionId) setRunning(false);
         }
     };
 
-    const runVideoTask = async (pendingLog: GenerationLog, snapshot: { text: string; model: string; config: AiConfig; references: ReferenceImage[]; firstFrame?: ReferenceImage | null; lastFrame?: ReferenceImage | null; videoReferences: ReferenceVideo[]; audioReferences: ReferenceAudio[]; taskCount: number }) => {
+    const runVideoTask = async (pendingLog: GenerationLog, snapshot: { text: string; model: string; config: AiConfig; references: ReferenceImage[]; firstFrame?: ReferenceImage | null; lastFrame?: ReferenceImage | null; videoReferences: ReferenceVideo[]; audioReferences: ReferenceAudio[]; taskCount: number; workflowRef?: WorkflowRef | null }, workflowToken: string, active: () => boolean) => {
         try {
+            if (snapshot.workflowRef) {
+                if (!workflowToken) throw new Error("工作流生成需要先登录");
+                const referenceImages = [snapshot.firstFrame, ...snapshot.references, snapshot.lastFrame].filter((item): item is ReferenceImage => Boolean(item));
+                const [workflowImages, workflowVideos, workflowAudios] = await Promise.all([
+                    Promise.all(referenceImages.map((item) => workflowMediaSource(item.dataUrl, item.storageKey))),
+                    Promise.all(snapshot.videoReferences.map((item) => workflowMediaSource(item.url, item.storageKey))),
+                    Promise.all(snapshot.audioReferences.map((item) => workflowMediaSource(item.url, item.storageKey))),
+                ]);
+                if (!active()) throw new Error("登录状态已变化");
+                const submitted = await submitWorkflowTask(workflowToken, {
+                    ref: snapshot.workflowRef,
+                    expectedCapability: "video",
+                    prompt: snapshot.text,
+                    systemPrompt: snapshot.config.systemPrompts.video || snapshot.config.systemPrompt,
+                    referenceImages: workflowImages,
+                    referenceVideos: workflowVideos,
+                    referenceAudios: workflowAudios,
+                    size: snapshot.config.size,
+                    videoSeconds: snapshot.config.videoSeconds,
+                    videoQuality: snapshot.config.vquality,
+                    videoGenerateAudio: boolConfig(snapshot.config.videoGenerateAudio, false),
+                    videoWatermark: boolConfig(snapshot.config.videoWatermark, false),
+                    source: "video-workbench",
+                    sourceId: pendingLog.id,
+                    clientTaskId: pendingLog.task?.id,
+                });
+                if (!active()) throw new Error("登录状态已变化");
+                const task: VideoResponse = { id: submitted.id, task_id: submitted.id, status: submitted.status, progress: submitted.progress, model: snapshot.model, workflowRef: JSON.stringify(snapshot.workflowRef), size: snapshot.config.size, seconds: snapshot.config.videoSeconds };
+                const nextLog = { ...pendingLog, task, lastPolledAt: Date.now() };
+                await saveGenerationLog(nextLog, active);
+                if (!active()) throw new Error("登录状态已变化");
+                await persistVideoLog(nextLog);
+                if (!active()) throw new Error("登录状态已变化");
+                setResults((value) => updateResultByLogId(value, pendingLog.id, { task, progress: task.progress, lastPolledAt: nextLog.lastPolledAt }));
+                return nextLog;
+            }
             const created = await createVideoGenerationTask(snapshot.config, snapshot.text, { references: snapshot.references, firstFrame: snapshot.firstFrame, lastFrame: snapshot.lastFrame, videoReferences: snapshot.videoReferences, audioReferences: snapshot.audioReferences }, (progress) => {
                 setResults((value) => updateResultByLogId(value, pendingLog.id, { progress }));
             }, { clientTaskId: pendingLog.task?.id, source: "video-workbench" });
@@ -662,10 +724,13 @@ export default function VideoPage() {
             setResults((value) => updateResultByLogId(value, pendingLog.id, { progress: created.task.progress, task: created.task, taskLogId: nextLog.id, lastPolledAt: nextLog.lastPolledAt }));
             return nextLog;
         } catch (error) {
+            if (!active()) throw error;
             const durationMs = Date.now() - pendingLog.createdAt;
             const nextLog = { ...pendingLog, status: "失败" as const, durationMs, lastPolledAt: Date.now(), error: errorMessage(error), errorDetail: errorDetail(error) };
-            await saveGenerationLog(nextLog);
+            await saveGenerationLog(nextLog, active);
+            if (!active()) throw error;
             await persistVideoLog(nextLog);
+            if (!active()) throw error;
             setResults((value) => updateResultByLogId(value, pendingLog.id, { status: "failed", taskLogId: nextLog.id, error: nextLog.error, errorDetail: nextLog.errorDetail, durationMs }));
             return nextLog;
         }
@@ -673,7 +738,7 @@ export default function VideoPage() {
 
     const retryResult = (result: GenerationResult) => {
         const retryChannelId = videoTaskChannelId(result.task);
-        const snapshot = buildRequestSnapshot({ promptText: result.prompt, negativePromptText: result.config.videoNegativePrompt || "", referenceItems: result.references, firstFrameItem: result.firstFrame, lastFrameItem: result.lastFrame, videoReferenceItems: result.videoReferences, audioReferenceItems: result.audioReferences, taskCountValue: 1, configValue: { ...videoConfig, ...result.config, ...(retryChannelId ? { videoChannelId: retryChannelId, activeChannelId: retryChannelId } : {}), model: result.model, videoModel: result.model }, modelValue: result.model });
+        const snapshot = buildRequestSnapshot({ promptText: result.prompt, negativePromptText: result.config.videoNegativePrompt || "", referenceItems: result.references, firstFrameItem: result.firstFrame, lastFrameItem: result.lastFrame, videoReferenceItems: result.videoReferences, audioReferenceItems: result.audioReferences, taskCountValue: 1, configValue: { ...videoConfig, ...result.config, ...(retryChannelId ? { videoChannelId: retryChannelId, activeChannelId: retryChannelId } : {}), model: result.model, videoModel: result.model }, modelValue: result.model, workflowRef: result.providerWorkflowRef || null });
         if (!snapshot) return;
         setResults((value) => value.filter((item) => item.id !== result.id));
         void submitGenerationSnapshot(snapshot);
@@ -689,6 +754,7 @@ export default function VideoPage() {
         setLastFrame(result.lastFrame || null);
         setVideoReferences(result.videoReferences || []);
         setAudioReferences(result.audioReferences || []);
+        updateConfig("videoWorkflowRef", result.providerWorkflowRef);
         const nextModel = result.config.videoModel || result.model;
         const nextChannelId = resolveVideoChannelId(effectiveConfig, nextModel, videoTaskChannelId(result.task), result.config.videoChannelId, result.config.activeChannelId);
         if (nextModel) updateConfig("videoModel", nextModel);
@@ -920,10 +986,10 @@ export default function VideoPage() {
         }
     };
 
-    const loadAccountVideoHistory = async (currentToken: string) => {
+    const loadAccountVideoHistory = async () => {
         try {
             const localLogs = await readStoredLogs();
-            const remoteLogs = await fetchVideoGenerationLogs<GenerationLog>(currentToken);
+            const remoteLogs = await fetchVideoGenerationLogs<GenerationLog>(token);
             const mergedLogs = await mergeVideoLogs(remoteLogs, localLogs);
             await replaceStoredVideoHistory(mergedLogs);
             setLogs(mergedLogs);
@@ -939,54 +1005,75 @@ export default function VideoPage() {
         await saveVideoGenerationLogs(token, [serializeLog(log)]).catch(() => undefined);
     };
 
-    const saveGenerationLog = async (log: GenerationLog) => {
+    const saveGenerationLog = async (log: GenerationLog, active: () => boolean = () => true) => {
+        if (!active()) return;
         await logStore.setItem(log.id, serializeLog(log));
+        if (!active()) return;
         setLogs((value) => sortVideoLogs([log, ...value.filter((item) => item.id !== log.id)]));
     };
 
-    const finalizeGenerationLog = async (log: GenerationLog) => {
-        await saveGenerationLog(log);
+    const finalizeGenerationLog = async (log: GenerationLog, active: () => boolean = () => true) => {
+        await saveGenerationLog(log, active);
+        if (!active()) return;
         const nextLogs = await readStoredLogs();
+        if (!active()) return;
         setLogs(nextLogs);
         await persistVideoLog(log);
     };
 
-    const pollPendingLogOnce = async (log: GenerationLog, resumeConfig: AiConfig) => {
+    const pollPendingLogOnce = async (log: GenerationLog, resumeConfig: AiConfig, context: WorkflowPollContext) => {
+        const active = () => !log.providerWorkflowRef || (!context.signal.aborted && useUserStore.getState().token === context.token);
+        if (!active()) return;
         pollingLogIdsRef.current.add(log.id);
         const startedAt = log.createdAt || Date.now();
         try {
-            const task = await pollVideoGenerationTaskStatus(resumeConfig, log.task!);
+            const workflowTask = log.providerWorkflowRef ? await getWorkflowTask(context.token, videoLogTaskId(log), context.signal) : null;
+            if (!active()) return;
+            const workflowURL = workflowTask?.urls?.[0] || "";
+            const task = workflowTask ? { ...log.task!, status: workflowTask.status, progress: workflowTask.progress, video_url: workflowURL, url: workflowURL, storageKey: workflowTask.storageKey || workflowMediaStorageKey(workflowURL) || undefined, mimeType: workflowTask.mimeType, bytes: workflowTask.bytes, width: workflowTask.width, height: workflowTask.height, error: workflowTask.error ? { message: workflowTask.error } : undefined } : await pollVideoGenerationTaskStatus(resumeConfig, log.task!);
+            if (!active()) return;
             const durationMs = Date.now() - startedAt;
             const baseLog = { ...log, task, durationMs, lastPolledAt: Date.now() };
             if (isFailedVideoTask(task)) {
                 const nextLog = { ...baseLog, status: "失败" as const, error: task.error?.message || "视频生成失败", errorDetail: errorDetail(new VideoRequestError(task.error?.message || "视频生成失败", task)) };
-                await finalizeGenerationLog(nextLog);
+                await finalizeGenerationLog(nextLog, active);
+                if (!active()) return;
                 setResults((value) => updateResultByLogId(value, log.id, { status: "failed", task, error: nextLog.error, errorDetail: nextLog.errorDetail, durationMs: nextLog.durationMs, lastPolledAt: nextLog.lastPolledAt }));
                 return;
             }
             if (isCompletedVideoTask(task)) {
                 if (!task.video_url && !task.url) {
                     const nextLog = { ...baseLog, status: "失败" as const, error: "视频生成完成但没有返回视频地址", errorDetail: errorDetail(new VideoRequestError("视频生成完成但没有返回视频地址", task)) };
-                    await finalizeGenerationLog(nextLog);
+                    await finalizeGenerationLog(nextLog, active);
+                    if (!active()) return;
                     setResults((value) => updateResultByLogId(value, log.id, { status: "failed", task, error: nextLog.error, errorDetail: nextLog.errorDetail, durationMs: nextLog.durationMs, lastPolledAt: nextLog.lastPolledAt }));
                     return;
                 }
-                const video = videoFromTaskResponse(task, durationMs);
+                const workflowVideo = workflowTask && !workflowMediaStorageKey(task.video_url || task.url || "") ? await downloadRemoteMedia(task.video_url || task.url || "") : null;
+                if (!active()) return;
+                const uploaded = workflowVideo ? await uploadMediaFile(workflowVideo, "workflow-video", undefined, context.token) : null;
+                if (!active()) return;
+                const video = uploaded ? { ...videoFromTaskResponse(task, durationMs), url: uploaded.url, storageKey: uploaded.storageKey, bytes: uploaded.bytes, mimeType: uploaded.mimeType, width: uploaded.width || 1280, height: uploaded.height || 720 } : videoFromTaskResponse(task, durationMs);
                 const nextLog = { ...baseLog, status: "成功" as const, video, error: undefined, errorDetail: undefined };
-                await finalizeGenerationLog(nextLog);
+                await finalizeGenerationLog(nextLog, active);
+                if (!active()) return;
                 setResults((value) => value.filter((item) => item.taskLogId !== log.id && item.id !== log.id));
                 return;
             }
-            await saveGenerationLog(baseLog);
+            await saveGenerationLog(baseLog, active);
+            if (!active()) return;
             setResults((value) => updateResultByLogId(value, log.id, { task, progress: task.progress, durationMs, lastPolledAt: baseLog.lastPolledAt }));
         } catch (error) {
+            if (!active() || error instanceof Error && error.name === "AbortError") return;
             const nextLog = { ...log, durationMs: Date.now() - startedAt, lastPolledAt: Date.now(), error: errorMessage(error), errorDetail: errorDetail(error) };
             if (isTransientVideoPollError(error)) {
-                await saveGenerationLog({ ...nextLog, status: "生成中" });
+                await saveGenerationLog({ ...nextLog, status: "生成中" }, active);
+                if (!active()) return;
                 setResults((value) => updateResultByLogId(value, log.id, { error: nextLog.error, errorDetail: nextLog.errorDetail, durationMs: nextLog.durationMs, lastPolledAt: nextLog.lastPolledAt }));
                 return;
             }
-            await finalizeGenerationLog({ ...nextLog, status: "失败" });
+            await finalizeGenerationLog({ ...nextLog, status: "失败" }, active);
+            if (!active()) return;
             setResults((value) => updateResultByLogId(value, log.id, { status: "failed", error: nextLog.error, errorDetail: nextLog.errorDetail, durationMs: nextLog.durationMs, lastPolledAt: nextLog.lastPolledAt }));
         } finally {
             pollingLogIdsRef.current.delete(log.id);
@@ -1002,6 +1089,7 @@ export default function VideoPage() {
         setLastFrame(log.lastFrame || null);
         setVideoReferences(log.videoReferences || []);
         setAudioReferences(log.audioReferences || []);
+        updateConfig("videoWorkflowRef", log.providerWorkflowRef);
         const nextModel = log.config.videoModel || log.model;
         const nextChannelId = resolveVideoChannelId(effectiveConfig, nextModel, videoTaskChannelId(log.task), log.config.videoChannelId, log.config.activeChannelId);
         if (nextModel) updateConfig("videoModel", nextModel);
@@ -1024,7 +1112,7 @@ export default function VideoPage() {
 
     const retryGenerationLog = (log: GenerationLog) => {
         const retryChannelId = videoTaskChannelId(log.task);
-        const snapshot = buildRequestSnapshot({ promptText: log.prompt, negativePromptText: log.config.videoNegativePrompt || "", referenceItems: log.references || [], firstFrameItem: log.firstFrame || null, lastFrameItem: log.lastFrame || null, videoReferenceItems: log.videoReferences || [], audioReferenceItems: log.audioReferences || [], taskCountValue: 1, configValue: { ...videoConfig, ...log.config, ...(retryChannelId ? { videoChannelId: retryChannelId, activeChannelId: retryChannelId } : {}), model: log.model, videoModel: log.model }, modelValue: log.model });
+        const snapshot = buildRequestSnapshot({ promptText: log.prompt, negativePromptText: log.config.videoNegativePrompt || "", referenceItems: log.references || [], firstFrameItem: log.firstFrame || null, lastFrameItem: log.lastFrame || null, videoReferenceItems: log.videoReferences || [], audioReferenceItems: log.audioReferences || [], taskCountValue: 1, configValue: { ...videoConfig, ...log.config, ...(retryChannelId ? { videoChannelId: retryChannelId, activeChannelId: retryChannelId } : {}), model: log.model, videoModel: log.model }, modelValue: log.model, workflowRef: log.providerWorkflowRef || null });
         if (!snapshot) return;
         void submitGenerationSnapshot(snapshot);
     };
@@ -1356,17 +1444,17 @@ function WorkbenchPanel({
     bottomSettingsCollapsed?: boolean;
     setBottomSettingsCollapsed?: (value: boolean) => void;
 }) {
-    const frameReferencesEnabled = supportsVideoFrameReferences(model, channelProtocolForConfig({ ...config, model }));
-    const referenceLimits = channelProtocolForConfig({ ...config, model, videoModel: model }) === "ark" && modelKey(model).includes("seedance-2-5") ? ARK_SEEDANCE_REFERENCE_LIMITS : SEEDANCE_REFERENCE_LIMITS;
-    const cogVideoX3 = isCogVideoX3Model(model);
-    const audioGenerationEnabled = supportsVideoAudioGeneration(model);
+    const frameReferencesEnabled = Boolean(config.videoWorkflowRef) || supportsVideoFrameReferences(model, channelProtocolForConfig({ ...config, model }));
+    const referenceLimits = !config.videoWorkflowRef && channelProtocolForConfig({ ...config, model, videoModel: model }) === "ark" && modelKey(model).includes("seedance-2-5") ? ARK_SEEDANCE_REFERENCE_LIMITS : SEEDANCE_REFERENCE_LIMITS;
+    const cogVideoX3 = !config.videoWorkflowRef && isCogVideoX3Model(model);
+    const audioGenerationEnabled = supportsVideoAudioGeneration(model, channelProtocolForConfig({ ...config, model, videoModel: model }));
     const generateAudio = boolConfig(config.videoGenerateAudio, false);
-    const klingBottomConfig = resolveKlingWorkbenchConfig(config, model);
+    const klingBottomConfig = config.videoWorkflowRef ? null : resolveKlingWorkbenchConfig(config, model);
     const klingBottomVariant = klingBottomConfig?.variant || "";
     const klingBottomProvider = klingBottomConfig?.provider || "apimart";
     const klingBottom = Boolean(klingBottomConfig);
     const showAudioSwitch = klingBottom || audioGenerationEnabled;
-    const motionControl = isAPIMartKlingMotionControlConfig(config, model) || isKIEKlingMotionControlConfig(config, model);
+    const motionControl = !config.videoWorkflowRef && (isAPIMartKlingMotionControlConfig(config, model) || isKIEKlingMotionControlConfig(config, model));
     const bottomSettingsGridClass = motionControl
         ? showAudioSwitch ? "lg:grid-cols-[1.3fr_0.8fr_0.8fr_0.7fr_0.8fr_0.8fr_0.7fr_auto_auto]" : "lg:grid-cols-[1.3fr_0.8fr_0.8fr_0.7fr_0.8fr_0.7fr_auto_auto]"
         : showAudioSwitch ? "lg:grid-cols-[1.3fr_0.8fr_0.8fr_0.7fr_0.8fr_0.7fr_auto_auto]" : "lg:grid-cols-[1.3fr_0.8fr_0.8fr_0.7fr_0.7fr_auto_auto]";
@@ -1417,7 +1505,7 @@ function WorkbenchPanel({
                         <div className={`grid grid-cols-2 gap-2 sm:grid-cols-3 ${bottomSettingsGridClass} ${bottomSettingsCollapsed ? "hidden lg:grid" : "grid"}`}>
                             <label className="grid gap-1 text-xs text-stone-500 dark:text-stone-400">
                                 模型
-                                <ModelPicker config={config} value={model} channelId={config.videoChannelId} onChange={(value, channelId) => { updateConfig("videoModel", value); if (channelId) updateConfig("videoChannelId", channelId); }} capability="video" className="canvas-compact-control !h-11 !rounded-xl" onMissingConfig={() => openConfigDialog(false)} fullWidth />
+                                <ModelPicker config={config} value={model} channelId={config.videoChannelId} workflowRef={config.videoWorkflowRef} onWorkflowChange={(value) => updateConfig("videoWorkflowRef", value)} onChange={(value, channelId) => { updateConfig("videoModel", value); if (channelId) updateConfig("videoChannelId", channelId); }} capability="video" className="canvas-compact-control !h-11 !rounded-xl" onMissingConfig={() => openConfigDialog(false)} fullWidth />
                             </label>
                             {klingBottom ? (
                                 <KlingV26BottomSettings config={config} updateConfig={updateConfig} generateAudio={generateAudio} isKlingV3={klingBottomVariant === "v3"} />
@@ -1439,9 +1527,9 @@ function WorkbenchPanel({
                         {firstFrame || lastFrame || references.length || videoReferences.length || audioReferences.length ? (
                             <div className="grid gap-2">
                                 {firstFrame || lastFrame ? <FrameReferenceStrip firstFrame={firstFrame} lastFrame={lastFrame} compact onUploadFrame={onUploadFrame} onRemoveFrame={onRemoveFrame} /> : null}
-                                {references.length ? <ReferenceImageStrip references={references} compact maxCount={referenceLimits.images} onRemoveReference={onRemoveReference} onMoveReference={onMoveReference} /> : null}
-                                {videoReferences.length ? <ReferenceVideoStrip references={videoReferences} compact maxCount={referenceLimits.videos} onRemoveReference={onRemoveVideoReference} onMoveReference={onMoveVideoReference} /> : null}
-                                {audioReferences.length ? <ReferenceAudioStrip references={audioReferences} compact maxCount={referenceLimits.audios} onRemoveReference={onRemoveAudioReference} onMoveReference={onMoveAudioReference} /> : null}
+                                {references.length ? <ReferenceImageStrip references={references} compact onRemoveReference={onRemoveReference} onMoveReference={onMoveReference} /> : null}
+                                {videoReferences.length ? <ReferenceVideoStrip references={videoReferences} compact onRemoveReference={onRemoveVideoReference} onMoveReference={onMoveVideoReference} /> : null}
+                                {audioReferences.length ? <ReferenceAudioStrip references={audioReferences} compact onRemoveReference={onRemoveAudioReference} onMoveReference={onMoveAudioReference} /> : null}
                             </div>
                         ) : null}
                     </div>
@@ -1710,11 +1798,11 @@ function QuickSelect({ label, value, options, onChange }: { label: string; value
     );
 }
 
-function QuickNumber({ label, value, min, max, onChange, clampOnChange = true }: { label: string; value: string; min: number; max: number; onChange: (value: string) => void; clampOnChange?: boolean }) {
+function QuickNumber({ label, value, min, max, onChange, clampOnChange = true, normalizeOnBlur }: { label: string; value: string; min: number; max: number; onChange: (value: string) => void; clampOnChange?: boolean; normalizeOnBlur?: (value: string) => string }) {
     return (
         <label className="grid gap-1 text-xs text-stone-500 dark:text-stone-400">
             {label}
-            <input className="h-11 min-w-0 rounded-xl border border-stone-200 bg-background px-3 text-sm text-stone-900 outline-none dark:border-stone-800 dark:text-stone-100" type="number" min={min} max={max} value={value} onChange={(event) => onChange(clampOnChange ? clampQuickNumberValue(event.target.value, min, max) : event.target.value)} onBlur={(event) => onChange(clampQuickNumberValue(event.target.value, min, max))} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} />
+            <input className="h-11 min-w-0 rounded-xl border border-stone-200 bg-background px-3 text-sm text-stone-900 outline-none dark:border-stone-800 dark:text-stone-100" type="number" min={min} max={max} value={value} onChange={(event) => onChange(clampOnChange ? clampQuickNumberValue(event.target.value, min, max) : event.target.value)} onBlur={(event) => onChange(normalizeOnBlur ? normalizeOnBlur(event.target.value) : clampQuickNumberValue(event.target.value, min, max))} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} />
         </label>
     );
 }
@@ -1755,7 +1843,7 @@ function GenerationSettings({ config, model, updateConfig, openConfigDialog }: {
     return (
         <div className="space-y-3">
             <WorkbenchSection title="模型">
-                <ModelPicker config={config} value={model} channelId={config.videoChannelId} onChange={(value, channelId) => { updateConfig("videoModel", value); if (channelId) updateConfig("videoChannelId", channelId); }} capability="video" fullWidth onMissingConfig={() => openConfigDialog(false)} />
+                <ModelPicker config={config} value={model} channelId={config.videoChannelId} workflowRef={config.videoWorkflowRef} onWorkflowChange={(value) => updateConfig("videoWorkflowRef", value)} onChange={(value, channelId) => { updateConfig("videoModel", value); if (channelId) updateConfig("videoChannelId", channelId); }} capability="video" fullWidth onMissingConfig={() => openConfigDialog(false)} />
             </WorkbenchSection>
             <VideoSettingsPanel config={config} modelName={model} onConfigChange={(key, value) => updateConfig(key, value)} theme={theme} showTitle={false} className="space-y-3" />
         </div>
@@ -2058,6 +2146,7 @@ function createResultFromLog(log: GenerationLog, status: GenerationResult["statu
         createdAt: log.createdAt,
         prompt: log.prompt,
         model: log.model,
+        providerWorkflowRef: log.providerWorkflowRef,
         config: log.config,
         references: log.references || [],
         firstFrame: log.firstFrame || null,
@@ -2178,6 +2267,7 @@ function mergeDuplicateVideoLog(existing: GenerationLog, incoming: GenerationLog
         lastFrame: preferred.lastFrame || fallback.lastFrame,
         videoReferences: preferred.videoReferences?.length ? preferred.videoReferences : fallback.videoReferences,
         audioReferences: preferred.audioReferences?.length ? preferred.audioReferences : fallback.audioReferences,
+        providerWorkflowRef: preferred.providerWorkflowRef || fallback.providerWorkflowRef,
         task: preferred.task && !isLocalClientVideoTask(preferred.task) ? preferred.task : fallback.task,
         video: preferred.video || fallback.video,
         error: preferred.error || fallback.error,
@@ -2241,6 +2331,7 @@ function backendTaskToLog(task: VideoResponse, fallbackConfig: AiConfig): Genera
         prompt: request.prompt || "",
         time: new Date(createdAt).toLocaleString("zh-CN", { hour12: false }),
         model,
+        providerWorkflowRef: parseWorkflowRef(task.workflowRef),
         config,
         references: [],
         firstFrame: null,
@@ -2264,7 +2355,8 @@ function mergeBackendTaskIntoLog(existing: GenerationLog | undefined, incoming: 
     if (!existing) return incoming;
     const durationMs = Math.max(existing.durationMs || 0, incoming.durationMs || 0);
     const baseConfig = { ...existing.config, videoChannelId: incoming.config.videoChannelId || existing.config.videoChannelId, activeChannelId: incoming.config.activeChannelId || existing.config.activeChannelId };
-    const base = { ...existing, task, config: baseConfig, durationMs, lastPolledAt: Date.now() };
+    const providerWorkflowRef = existing.providerWorkflowRef || incoming.providerWorkflowRef;
+    const base = { ...existing, providerWorkflowRef, task, config: baseConfig, durationMs, lastPolledAt: Date.now() };
     if (existing.status === "成功" || existing.video) {
         return { ...base, status: "成功", video: existing.video || incoming.video, error: undefined, errorDetail: undefined };
     }
@@ -2489,10 +2581,10 @@ function videoFromTaskResponse(task: VideoResponse, durationMs: number): Generat
         url: task.video_url || task.url || "",
         storageKey: task.storageKey || "",
         durationMs,
-        width: size.width,
-        height: size.height,
-        bytes: 0,
-        mimeType: "video/mp4",
+        width: task.width || size.width,
+        height: task.height || size.height,
+        bytes: task.bytes || 0,
+        mimeType: task.mimeType || "video/mp4",
     };
 }
 
@@ -2510,9 +2602,10 @@ function isFailedVideoTask(task: VideoResponse) {
 }
 
 function isTransientVideoPollError(error: unknown) {
+    if (isRetryableWorkflowError(error)) return true;
     if (!axios.isAxiosError(error)) return false;
     const status = error.response?.status;
-    return !error.response || status === 500 || status === 502 || status === 503 || status === 504;
+    return !error.response || status === 408 || status === 429 || Boolean(status && status >= 500);
 }
 
 function isRecoverableBackendVideoTask(task: VideoResponse) {
@@ -2609,6 +2702,7 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
         prompt: log.prompt || "",
         time: log.time || new Date().toLocaleString("zh-CN", { hour12: false }),
         model: log.model || config.videoModel || "",
+        providerWorkflowRef: log.providerWorkflowRef,
         config,
         references,
         firstFrame,
@@ -2707,7 +2801,7 @@ function normalizeLogConfig(log: Partial<GenerationLog>): GenerationLogConfig {
     };
 }
 
-function buildLog({ prompt, model, config, references, firstFrame, lastFrame, videoReferences, audioReferences, taskCount, durationMs, status, task, video, error, errorDetail, lastPolledAt }: { prompt: string; model: string; config: AiConfig; references: ReferenceImage[]; firstFrame?: ReferenceImage | null; lastFrame?: ReferenceImage | null; videoReferences: ReferenceVideo[]; audioReferences: ReferenceAudio[]; taskCount?: number; durationMs: number; status: GenerationLog["status"]; task?: VideoResponse; video?: GeneratedVideo; error?: string; errorDetail?: string; lastPolledAt?: number }): GenerationLog {
+function buildLog({ prompt, model, config, references, firstFrame, lastFrame, videoReferences, audioReferences, taskCount, durationMs, status, task, video, error, errorDetail, lastPolledAt, providerWorkflowRef }: { prompt: string; model: string; config: AiConfig; references: ReferenceImage[]; firstFrame?: ReferenceImage | null; lastFrame?: ReferenceImage | null; videoReferences: ReferenceVideo[]; audioReferences: ReferenceAudio[]; taskCount?: number; durationMs: number; status: GenerationLog["status"]; task?: VideoResponse; video?: GeneratedVideo; error?: string; errorDetail?: string; lastPolledAt?: number; providerWorkflowRef?: WorkflowRef }): GenerationLog {
     const logConfig = {
         channelMode: config.channelMode,
         activeChannelId: config.activeChannelId,
@@ -2734,6 +2828,7 @@ function buildLog({ prompt, model, config, references, firstFrame, lastFrame, vi
         prompt,
         time: new Date().toLocaleString("zh-CN", { hour12: false }),
         model,
+        providerWorkflowRef,
         config: logConfig,
         references,
         firstFrame: firstFrame || null,

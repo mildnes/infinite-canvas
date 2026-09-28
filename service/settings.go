@@ -23,7 +23,11 @@ var adminModelHTTPClient = &http.Client{Timeout: 30 * time.Second}
 func PublicSettings() (model.PublicSetting, error) {
 	settings, err := repository.GetSettings()
 	settings = normalizeSettings(settings)
-	settings.Public.ModelChannel.Channels = publicChannelInfos(settings.Private.Channels)
+	settings.Public.ModelChannel.Channels = publicChannelInfos(
+		settings.Private.Channels,
+		settings.Public.ModelChannel.AvailableModels,
+		settings.Public.ModelChannel.AvailableWorkflows,
+	)
 	// Storage synchronization is intentionally exposed as a read-only public
 	// capability flag; provider credentials remain in the private settings.
 	settings.Public.Storage.AutoSyncAllAssets = settings.Private.Storage.AutoSyncAllAssets
@@ -154,6 +158,9 @@ func normalizePublicSettingWithChannels(setting model.PublicSetting, channels []
 	if setting.ModelChannel.AvailableModels == nil {
 		setting.ModelChannel.AvailableModels = []string{}
 	}
+	if setting.ModelChannel.AvailableWorkflows == nil {
+		setting.ModelChannel.AvailableWorkflows = []string{}
+	}
 	if setting.ModelChannel.ModelCosts == nil {
 		setting.ModelChannel.ModelCosts = []model.ModelCost{}
 	}
@@ -176,6 +183,20 @@ func normalizePublicSettingWithChannels(setting model.PublicSetting, channels []
 		setting.ModelChannel.SystemPrompts.WorkflowAgent = DefaultSystemPrompts().WorkflowAgent
 	}
 	setting.ModelChannel.ModelCosts = normalizeModelCosts(setting.ModelChannel.ModelCosts, channels)
+	availableWorkflows := make([]string, 0)
+	for _, channel := range channels {
+		if !channel.Enabled || !isWorkflowChannelProtocol(channel.Protocol) {
+			continue
+		}
+		for _, entry := range channel.Workflows {
+			if entry.Enabled && entry.Provider == channel.Protocol {
+				availableWorkflows = append(availableWorkflows, workflowBillingName(WorkflowRef{
+					Scope: "system", ChannelID: channel.ID, Kind: entry.Kind, WorkflowID: entry.WorkflowID,
+				}))
+			}
+		}
+	}
+	setting.ModelChannel.AvailableWorkflows = filterEnabledModels(setting.ModelChannel.AvailableWorkflows, availableWorkflows)
 	if setting.ModelChannel.AllowCustomChannel == nil {
 		enabled := true
 		setting.ModelChannel.AllowCustomChannel = &enabled
@@ -225,6 +246,22 @@ func normalizeModelCosts(costs []model.ModelCost, channels []model.ModelChannel)
 		for _, channel := range channels {
 			for _, modelName := range channel.Models {
 				if strings.TrimSpace(modelName) != item.Model {
+					continue
+				}
+				matched = true
+				key := costKey{channel.ID, item.Model}
+				if !seen[key] {
+					seen[key] = true
+					result = append(result, model.ModelCost{ChannelID: channel.ID, Model: item.Model, Credits: item.Credits})
+				}
+				break
+			}
+			if matched || !isWorkflowChannelProtocol(channel.Protocol) {
+				continue
+			}
+			for _, entry := range channel.Workflows {
+				billingName := workflowBillingName(WorkflowRef{Scope: "system", ChannelID: channel.ID, Kind: entry.Kind, WorkflowID: entry.WorkflowID})
+				if strings.TrimSpace(billingName) != item.Model {
 					continue
 				}
 				matched = true
@@ -345,6 +382,7 @@ func stableAgentID(name string, index int) string {
 func hidePrivateAPIKeys(settings model.Settings) model.Settings {
 	for i := range settings.Private.Channels {
 		settings.Private.Channels[i].APIKey = ""
+		settings.Private.Channels[i].UploadAPIKey = ""
 	}
 	for i := range settings.Private.Storage.Providers {
 		settings.Private.Storage.Providers[i].SecretAccessKey = ""
@@ -359,11 +397,25 @@ func hidePrivateAPIKeys(settings model.Settings) model.Settings {
 
 func keepPrivateAPIKeys(settings *model.Settings, saved model.Settings) {
 	for i := range settings.Private.Channels {
-		if strings.TrimSpace(settings.Private.Channels[i].APIKey) != "" {
+		if isWorkflowChannelProtocol(settings.Private.Channels[i].Protocol) {
+			for _, channel := range saved.Private.Channels {
+				if channel.ID != settings.Private.Channels[i].ID || channel.Protocol != settings.Private.Channels[i].Protocol {
+					continue
+				}
+				if strings.TrimSpace(settings.Private.Channels[i].APIKey) == "" {
+					settings.Private.Channels[i].APIKey = channel.APIKey
+				}
+				if strings.TrimSpace(settings.Private.Channels[i].UploadAPIKey) == "" {
+					settings.Private.Channels[i].UploadAPIKey = channel.UploadAPIKey
+				}
+				break
+			}
 			continue
 		}
-		if channel, ok := findSavedChannel(settings.Private.Channels[i], saved.Private.Channels, i); ok {
-			settings.Private.Channels[i].APIKey = channel.APIKey
+		if strings.TrimSpace(settings.Private.Channels[i].APIKey) == "" {
+			if channel, ok := findSavedChannel(settings.Private.Channels[i], saved.Private.Channels, i); ok {
+				settings.Private.Channels[i].APIKey = channel.APIKey
+			}
 		}
 	}
 }
@@ -506,12 +558,21 @@ func isArkAgentPlanChannel(channel model.ModelChannel) bool {
 func enabledChannelModels(channels []model.ModelChannel) []string {
 	models := []string{}
 	for _, channel := range channels {
-		if !channel.Enabled {
+		if !channel.Enabled || isWorkflowChannelProtocol(channel.Protocol) {
 			continue
 		}
 		models = append(models, channel.Models...)
 	}
 	return uniqueModelNames(models)
+}
+
+func isWorkflowChannelProtocol(protocol string) bool {
+	switch strings.ToLower(strings.TrimSpace(protocol)) {
+	case "runninghub", "comfyui":
+		return true
+	default:
+		return false
+	}
 }
 
 func filterEnabledModels(models []string, options []string) []string {
@@ -1196,6 +1257,12 @@ func providerSecureHash(parts []string) string {
 func modelChannelsForModel(channels []model.ModelChannel, modelName string) []model.ModelChannel {
 	result := []model.ModelChannel{}
 	for _, channel := range channels {
+		if isWorkflowChannelProtocol(channel.Protocol) {
+			if !channel.Enabled {
+				continue
+			}
+			continue
+		}
 		if !channel.Enabled || channel.BaseURL == "" || channel.APIKey == "" {
 			continue
 		}
@@ -1209,18 +1276,53 @@ func modelChannelsForModel(channels []model.ModelChannel, modelName string) []mo
 	return result
 }
 
-func publicChannelInfos(channels []model.ModelChannel) []model.PublicModelChannelInfo {
+func publicChannelInfos(channels []model.ModelChannel, options ...[]string) []model.PublicModelChannelInfo {
 	result := []model.PublicModelChannelInfo{}
+	availableModels, availableWorkflows := []string(nil), []string(nil)
+	if len(options) > 0 {
+		availableModels = options[0]
+	}
+	if len(options) > 1 {
+		availableWorkflows = options[1]
+	}
+	allowedWorkflows := map[string]bool{}
+	for _, name := range availableWorkflows {
+		allowedWorkflows[name] = true
+	}
 	for _, channel := range channels {
+		if isWorkflowChannelProtocol(channel.Protocol) {
+			workflows := make([]model.WorkflowSummary, 0, len(channel.Workflows))
+			for _, entry := range channel.Workflows {
+				ref := workflowBillingName(WorkflowRef{Scope: "system", ChannelID: channel.ID, Kind: entry.Kind, WorkflowID: entry.WorkflowID})
+				if !entry.Enabled || entry.Provider != channel.Protocol || (len(availableWorkflows) > 0 && !allowedWorkflows[ref]) {
+					continue
+				}
+				workflows = append(workflows, model.WorkflowSummary{
+					Provider: entry.Provider, Kind: entry.Kind, WorkflowID: entry.WorkflowID,
+					Title: entry.Title, Capability: entry.Capability, Enabled: true,
+				})
+			}
+			if len(workflows) > 0 {
+				result = append(result, model.PublicModelChannelInfo{ID: channel.ID, Protocol: channel.Protocol, Name: channel.Name, Workflows: workflows})
+			}
+			continue
+		}
 		if !channel.Enabled || channel.BaseURL == "" || channel.APIKey == "" || len(channel.Models) == 0 {
 			continue
+		}
+		models := append([]string{}, channel.Models...)
+		if len(availableModels) > 0 {
+			models = filterEnabledModels(models, availableModels)
+			if len(models) == 0 {
+				continue
+			}
 		}
 		result = append(result, model.PublicModelChannelInfo{
 			ID:       channel.ID,
 			Protocol: channel.Protocol,
 			Name:     channel.Name,
 			BaseURL:  channel.BaseURL,
-			Models:   append([]string{}, channel.Models...),
+			Models:   models,
 			Weight:   channel.Weight,
 			Timeout:  channel.Timeout,
 			Enabled:  channel.Enabled,

@@ -83,6 +83,28 @@ func DeleteUserCanvasImageTask(userID string, id string) error {
 	return db.Where("user_id = ? AND id = ?", userID, strings.TrimSpace(id)).Delete(&model.CanvasImageTask{}).Error
 }
 
+func HasActiveCanvasImageTasks() (bool, error) {
+	db, err := DB()
+	if err != nil {
+		return false, err
+	}
+	var count int64
+	err = db.Model(&model.CanvasImageTask{}).
+		Where("status IN ?", []string{"queued", "processing", "running", "in_progress"}).
+		Count(&count).Error
+	return count > 0, err
+}
+
+func DeleteFinishedCanvasImageTasksBefore(before string) error {
+	db, err := DB()
+	if err != nil {
+		return err
+	}
+	return db.Where("completed_at <> ? AND completed_at < ?", "", before).
+		Where("status IN ?", []string{"completed", "failed"}).
+		Delete(&model.CanvasImageTask{}).Error
+}
+
 func DeleteUserCanvasTasks(userID string, sourceID string, nodeIDs []string) error {
 	db, err := DB()
 	if err != nil {

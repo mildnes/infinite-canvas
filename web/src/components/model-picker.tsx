@@ -4,8 +4,11 @@ import { useEffect, useId, useMemo, useState } from "react";
 import { Cpu } from "lucide-react";
 
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
+import { isWorkflowProtocol } from "@/lib/model-channel";
 import { cn } from "@/lib/utils";
-import { filterModelsByCapability, normalizeLocalChannels, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import type { WorkflowRef } from "@/lib/workflow-channel";
+import { filterModelsByCapability, normalizeLocalChannels, useConfigStore, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import { useUserStore } from "@/stores/use-user-store";
 
 type ModelPickerProps = {
     config: AiConfig;
@@ -13,6 +16,8 @@ type ModelPickerProps = {
     channelId?: string;
     capability?: ModelCapability;
     onChange: (model: string, channelId?: string) => void;
+    workflowRef?: WorkflowRef;
+    onWorkflowChange?: (ref?: WorkflowRef) => void;
     className?: string;
     fullWidth?: boolean;
     placeholder?: string;
@@ -20,30 +25,56 @@ type ModelPickerProps = {
     side?: "top" | "bottom";
 };
 
-export function ModelPicker({ config, value, channelId, capability, onChange, className, fullWidth = false, placeholder = "选择模型", onMissingConfig, side = "bottom" }: ModelPickerProps) {
+type PickerBase = { key: string; channelId?: string; channelName: string; protocol?: string; baseUrl?: string };
+type PickerOption = (PickerBase & { model: string }) | (PickerBase & { model: ""; workflowRef: WorkflowRef; label: string });
+
+export function ModelPicker({ config, value, channelId, capability, onChange, workflowRef, onWorkflowChange, className, fullWidth = false, placeholder = "选择模型", onMissingConfig, side = "bottom" }: ModelPickerProps) {
     const pickerId = useId();
     const [open, setOpen] = useState(false);
-    const channelOptions = useMemo(() => {
+    const token = useUserStore((state) => state.token);
+    const userReady = useUserStore((state) => state.isReady);
+    const publicSettings = useConfigStore((state) => state.publicSettings);
+    const workflowEnabled = Boolean(onWorkflowChange && capability && capability !== "text");
+    const channelOptions = useMemo<PickerOption[]>(() => {
         const channels =
             config.channelMode === "remote"
-                ? config.publicChannels.map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "云端渠道", baseUrl: channel.baseUrl, models: channel.models }))
-                : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "本地渠道", baseUrl: channel.baseUrl, models: channel.models }));
-        const allowedModels = config.channelMode === "remote" ? new Set(config.models) : null;
-        const models = channels.flatMap((channel) => (channel.models ?? []).filter((model) => !allowedModels || allowedModels.has(model)).map((model) => ({ key: `${channel.id}::${model}`, channelId: channel.id, channelName: channel.name, protocol: channel.protocol, model })));
-        if (!capability) return models;
-        return models.filter((item) => filterModelsByCapability([item.model], capability, item.protocol || "").length > 0);
-    }, [capability, config]);
+                ? config.publicChannels.map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "云端渠道", baseUrl: channel.baseUrl, models: channel.models, workflows: channel.workflows || [] }))
+                : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "本地渠道", baseUrl: channel.baseUrl, models: channel.models, workflows: channel.workflowSummaries || [] }));
+        const models = channels.filter((channel) => !isWorkflowProtocol(channel.protocol || "")).flatMap((channel) => (channel.models ?? []).map((model) => ({ key: `${channel.id}::${model}`, channelId: channel.id, channelName: channel.name, protocol: channel.protocol, baseUrl: channel.baseUrl, model })));
+        const filtered = capability ? models.filter((item) => filterModelsByCapability([item.model], capability, item.protocol || "").length > 0) : models;
+        if (!workflowEnabled || !token) return filtered;
+        const scope = config.channelMode === "remote" ? "system" : "personal";
+        return [...filtered, ...channels.flatMap((channel) => isWorkflowProtocol(channel.protocol || "") ? channel.workflows.filter((entry) => entry.enabled && entry.capability === capability && entry.provider === channel.protocol).map((entry) => {
+            const ref: WorkflowRef = { scope, channelId: channel.id || "", kind: entry.kind, workflowId: entry.workflowId };
+            return { key: `workflow:${JSON.stringify([ref.scope, ref.channelId, ref.kind, ref.workflowId])}`, channelId: channel.id, channelName: channel.name, protocol: channel.protocol, baseUrl: channel.baseUrl, model: "", workflowRef: ref, label: entry.title || entry.workflowId };
+        }) : [])];
+    }, [capability, config, token, workflowEnabled]);
+    const modelLabel = (model: string, _option?: unknown) => model;
     const currentOption = useMemo(() => {
+        if (workflowRef && workflowEnabled) return channelOptions.find((item) => "workflowRef" in item && item.key === `workflow:${JSON.stringify([workflowRef.scope, workflowRef.channelId, workflowRef.kind, workflowRef.workflowId])}`);
         if (!value) return undefined;
         return channelOptions.find((item) => item.model === value && item.channelId === channelId) || channelOptions.find((item) => item.model === value);
-    }, [channelId, channelOptions, value]);
+    }, [channelId, channelOptions, value, workflowEnabled, workflowRef]);
     const options = channelOptions;
-    const current = value || "";
+    const current = workflowRef && workflowEnabled
+        ? (currentOption && "label" in currentOption ? currentOption.label : "")
+        : currentOption
+            ? "workflowRef" in currentOption ? currentOption.label : currentOption.model
+            : config.channelMode !== "remote" ? value || "" : "";
     const currentValue = current && currentOption ? currentOption.key : "";
 
-    useEffect(() => {
-        if (value && currentOption?.channelId && channelId !== currentOption.channelId) onChange(value, currentOption.channelId);
-    }, [channelId, currentOption?.channelId, onChange, value]);
+	useEffect(() => {
+		if (workflowRef && workflowEnabled) {
+			const workflowOptionsReady = workflowRef.scope === "system"
+				? publicSettings !== null
+				: config.workflowSyncTouched === true;
+			if (token && userReady && workflowOptionsReady && !currentOption && channelOptions.some((item) => !("workflowRef" in item))) {
+				onWorkflowChange?.(undefined);
+            }
+            return;
+        }
+        if (value && currentOption?.channelId && !("workflowRef" in currentOption) && channelId !== currentOption.channelId) onChange(value, currentOption.channelId);
+	}, [channelId, channelOptions, config.workflowSyncTouched, currentOption, onChange, onWorkflowChange, publicSettings, token, userReady, value, workflowEnabled, workflowRef]);
 
     useEffect(() => {
         const closeOtherPicker = (event: Event) => {
@@ -67,7 +98,9 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
             }}
             onValueChange={(nextValue) => {
                 const option = options.find((item) => item.key === nextValue);
-                if (option) onChange(option.model, option.channelId);
+                if (!option) return;
+                if ("workflowRef" in option) onWorkflowChange?.(option.workflowRef);
+                else { onChange(option.model, option.channelId); if (workflowRef) onWorkflowChange?.(undefined); }
             }}
         >
             <SelectTrigger
@@ -79,10 +112,10 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
                 )}
                 onMouseDown={(event) => event.stopPropagation()}
                 onPointerDown={(event) => event.stopPropagation()}
-                title={current || placeholder}
+                title={workflowRef && workflowEnabled && !currentOption ? "工作流已停用、未公开或删除，请重新选择" : current || placeholder}
             >
                 <ModelIcon model={current} />
-                <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{current || placeholder}</span>
+                <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{workflowRef && workflowEnabled ? current || "工作流已停用、未公开或删除，请重新选择" : modelLabel(current, currentOption) || placeholder}</span>
             </SelectTrigger>
             <SelectContent
                 data-canvas-no-zoom
@@ -96,8 +129,8 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
             >
                 {options.length ? (
                     options.map((option) => (
-                        <SelectItem key={option.key} value={option.key} textValue={`${option.model} ${option.channelName}`}>
-                            <ModelLabel model={option.model} channelName={option.channelName} />
+                        <SelectItem key={option.key} value={option.key} textValue={`${"workflowRef" in option ? option.label : modelLabel(option.model, option)} ${option.model} ${option.channelName}`}>
+                            <ModelLabel model={"workflowRef" in option ? option.workflowRef.workflowId : option.model} label={"workflowRef" in option ? `工作流 · ${option.label}` : modelLabel(option.model, option)} channelName={option.channelName} />
                         </SelectItem>
                     ))
                 ) : (
@@ -110,11 +143,11 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
     );
 }
 
-function ModelLabel({ model, channelName }: { model: string; channelName?: string }) {
+function ModelLabel({ model, label, channelName }: { model: string; label?: string; channelName?: string }) {
     return (
         <span className="flex min-w-0 items-center gap-2">
             <ModelIcon model={model} />
-            <span className="truncate">{model}</span>
+            <span className="truncate" title={model}>{label || model}</span>
             {channelName ? <span className="ml-auto max-w-24 shrink-0 truncate text-xs opacity-50">{channelName}</span> : null}
         </span>
     );

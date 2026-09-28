@@ -2,18 +2,21 @@
 
 import { CheckCircleOutlined, DeleteOutlined, FormatPainterOutlined, LoadingOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import { json } from "@codemirror/lang-json";
-import { App, Button, Card, Checkbox, Col, Collapse, Drawer, Flex, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from "antd";
+import { App, Button, Card, Col, Drawer, Flex, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from "antd";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { EditorView } from "@uiw/react-codemirror";
 
-import { modelChannelApiKeyUrls, modelChannelDefaultBaseUrls } from "@/lib/model-channel";
-import { fetchAdminSettings, fetchChannelModels, fetchMCPServerTools, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminMCPServer, type AdminMCPTool, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider } from "@/services/api/admin";
-import { clearStorageConfigCache as clearFileStorageConfigCache } from "@/services/file-storage";
+import { ChannelModelSelectorModal } from "@/components/channel-model-selector-modal";
+import type { WorkflowChannelSettings } from "@/components/workflow/workflow-channel-pane";
+import { isWorkflowProtocol, modelChannelApiKeyUrls, modelChannelDefaultBaseUrls, modelChannelProtocolOptions } from "@/lib/model-channel";
+import { fetchAdminSettings, fetchChannelModels, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider } from "@/services/api/admin";
+import { clearStorageConfigCache as clearMediaStorageConfigCache } from "@/services/file-storage";
 import { clearStorageConfigCache as clearImageStorageConfigCache } from "@/services/image-storage";
 import { useUserStore } from "@/stores/use-user-store";
 
 const CodeMirror = dynamic(() => import("@uiw/react-codemirror"), { ssr: false });
+const WorkflowChannelPane = dynamic(() => import("@/components/workflow/workflow-channel-pane").then((module) => module.WorkflowChannelPane), { ssr: false });
 const jsonEditorTheme = EditorView.theme({
     "&": { backgroundColor: "var(--ant-color-bg-container)", color: "var(--ant-color-text)" },
     ".cm-content": { caretColor: "var(--ant-color-text)", padding: "12px 0" },
@@ -31,6 +34,7 @@ const emptySettings: AdminSettings = {
     public: {
         modelChannel: {
             availableModels: [],
+            availableWorkflows: [],
             modelCosts: [],
             channels: [],
             defaultModel: "",
@@ -43,19 +47,16 @@ const emptySettings: AdminSettings = {
             allowUserRemoteChannel: false,
         },
         auth: { allowRegister: true, linuxDo: { enabled: false } },
-        storage: { mode: "local_indexeddb", allowUserProvider: false, autoSyncAllAssets: false },
-        agent: { mcpServers: [] },
+        storage: { mode: "local_indexeddb", allowUserProvider: false },
     },
     private: { channels: [], agent: { mcpServers: [] }, promptSync: { enabled: true, cron: "0 0 * * *" }, aiLog: { localDirectReportEnabled: false, cleanup: { enabled: false, retentionDays: 14, cron: "0 3 * * *" } }, auth: { linuxDo: { clientId: "", clientSecret: "" } }, storage: { mode: "local_indexeddb", allowUserProvider: false, allowUserGlobalProvider: true, autoSyncAllAssets: false, providers: [], roundRobinCursor: 0, capacityCheck: { enabled: false, cron: "0 */6 * * *" }, capacityLimitBytes: 9 * 1024 * 1024 * 1024 } },
 };
 const emptyChannel: AdminModelChannel = { id: "", protocol: "openai", name: "", baseUrl: modelChannelDefaultBaseUrls.openai, apiKey: "", models: [], weight: 1, timeout: 600, enabled: true, remark: "" };
 const emptyS3StorageProvider: AdminStorageProvider = { id: "", name: "", type: "s3", endpoint: "", region: "auto", bucket: "", accessKeyId: "", secretAccessKey: "", publicBaseUrl: "", pathPrefix: "canvas", username: "", password: "", weight: 1, enabled: true, ownerUserId: "", capacityBytes: 0, capacityCheckedAt: "", capacityExceeded: false };
 const emptyWebDAVStorageProvider: AdminStorageProvider = { ...emptyS3StorageProvider, name: "", type: "webdav", region: "" };
-const emptyMCPServer: AdminMCPServer = { id: "", name: "", endpoint: "", apiKey: "", transport: "streamable_http", command: "", args: [], env: {}, workingDirectory: "", description: "", tools: [], enabled: true, allowUsers: true };
 
 type SettingsTabKey = "public" | "private";
 type EditorMode = "visual" | "json";
-type ModelSelectTabKey = "new" | "current";
 
 export default function AdminSettingsPage() {
     const token = useUserStore((state) => state.token);
@@ -68,42 +69,32 @@ export default function AdminSettingsPage() {
     const [channelForm] = Form.useForm<AdminModelChannel>();
     const [editingChannelIndex, setEditingChannelIndex] = useState<number | null>(null);
     const [isChannelDrawerOpen, setIsChannelDrawerOpen] = useState(false);
+    const [workflowChannelDraft, setWorkflowChannelDraft] = useState<AdminModelChannel>(emptyChannel);
     const [testChannelIndex, setTestChannelIndex] = useState<number | null>(null);
     const [testKeyword, setTestKeyword] = useState("");
     const [selectedTestModels, setSelectedTestModels] = useState<string[]>([]);
     const [testingModels, setTestingModels] = useState<string[]>([]);
     const [testResults, setTestResults] = useState<Record<string, { status: "success" | "error"; duration?: string; message: string }>>({});
     const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
-    const [modelSelectSource, setModelSelectSource] = useState<string[]>([]);
-    const [modelSelectExisting, setModelSelectExisting] = useState<string[]>([]);
-    const [modelSelectSelected, setModelSelectSelected] = useState<string[]>([]);
-    const [modelSelectKeyword, setModelSelectKeyword] = useState("");
-    const [modelSelectNewModel, setModelSelectNewModel] = useState("");
-    const [modelSelectTab, setModelSelectTab] = useState<ModelSelectTabKey>("new");
-    const [isFetchingChannelModels, setIsFetchingChannelModels] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [measuringProviderIndex, setMeasuringProviderIndex] = useState<number | null>(null);
-    const [fetchingMCPToolsIndex, setFetchingMCPToolsIndex] = useState<number | null>(null);
+    const [modelCosts, setModelCosts] = useState<AdminModelCost[]>([]);
     const [knownModels, setKnownModels] = useState<string[]>([]);
     const publicModels = Form.useWatch(["public", "modelChannel", "availableModels"], form) || [];
-    const modelCosts = Form.useWatch(["public", "modelChannel", "modelCosts"], { form, preserve: true }) as AdminModelCost[] | undefined;
-    const modelCostIndex = useMemo(() => new Map<string, number>((modelCosts || []).map((item) => [modelCostKey(item.channelId, item.model), item.credits])), [modelCosts]);
+    const publicWorkflows = Form.useWatch(["public", "modelChannel", "availableWorkflows"], form) || [];
     const storageProviders = Form.useWatch(["private", "storage", "providers"], form) || [];
-    const agentMCPServers = Form.useWatch(["private", "agent", "mcpServers"], form) || [];
     const channelProtocol = Form.useWatch("protocol", channelForm);
+    const channelBaseUrl = Form.useWatch("baseUrl", channelForm);
     const channelApiKeyUrl = channelProtocol ? modelChannelApiKeyUrls[channelProtocol] : undefined;
+    const modelLabel = (model: string, _channel?: unknown) => model;
+    const publicModelLabel = (model: string) => model;
     const channelModels = useMemo(() => collectChannelModels(channels), [channels]);
+    const channelWorkflows = useMemo(() => collectChannelWorkflows(channels), [channels]);
     const channelTableData = useMemo(() => channels.map((channel, index) => ({ ...channel, _index: index, _rowKey: `${index}-${channel.name}-${channel.baseUrl}` })), [channels]);
     const activeMode = editorMode[activeTab];
     const activeJsonText = jsonText[activeTab];
     const jsonError = activeMode === "json" ? getJsonError(activeJsonText) : "";
-    const modelSelectGroups = useMemo(() => buildModelSelectGroups(modelSelectSource, modelSelectExisting), [modelSelectSource, modelSelectExisting]);
-    const activeModelSelectModels = useMemo(() => {
-        const keyword = modelSelectKeyword.trim().toLowerCase();
-        return modelSelectGroups[modelSelectTab].filter((model) => model.toLowerCase().includes(keyword));
-    }, [modelSelectGroups, modelSelectKeyword, modelSelectTab]);
-    const activeSelectedCount = activeModelSelectModels.filter((model) => modelSelectSelected.includes(model)).length;
 
     const loadSettings = async () => {
         if (!token) return;
@@ -112,6 +103,7 @@ export default function AdminSettingsPage() {
             const data = normalizeSettings(await fetchAdminSettings(token));
             form.setFieldsValue(data);
             setChannels(data.private.channels);
+            setModelCosts(data.public.modelChannel.modelCosts);
             setKnownModels(collectKnownModels(data));
             setJsonText({
                 public: JSON.stringify(data.public, null, 2),
@@ -142,10 +134,11 @@ export default function AdminSettingsPage() {
         try {
             const saved = normalizeSettings(await saveAdminSettings(token, values));
             clearImageStorageConfigCache();
-            clearFileStorageConfigCache();
+            clearMediaStorageConfigCache();
             const merged = mergeChannelApiKeys(values.private.channels, saved);
             form.setFieldsValue(merged);
             setChannels(merged.private.channels);
+            setModelCosts(merged.public.modelChannel.modelCosts);
             rememberKnownModels(merged);
             setJsonText({
                 public: JSON.stringify(merged.public, null, 2),
@@ -175,6 +168,7 @@ export default function AdminSettingsPage() {
         }
         form.setFieldsValue({ [tab]: parsed } as Partial<AdminSettings>);
         if (tab === "private") setChannels((parsed as AdminSettings["private"]).channels);
+        if (tab === "public") setModelCosts((parsed as AdminSettings["public"]).modelChannel.modelCosts);
         rememberKnownModels({ ...normalizeSettings(form.getFieldsValue(true) as AdminSettings), [tab]: parsed });
         setEditorMode((current) => ({ ...current, [tab]: nextMode }));
     };
@@ -185,6 +179,7 @@ export default function AdminSettingsPage() {
             message.error("JSON 格式不正确");
             return;
         }
+        if (tab === "public") setModelCosts((parsed as AdminSettings["public"]).modelChannel.modelCosts);
         setJsonText((current) => ({
             ...current,
             [tab]: JSON.stringify(parsed, null, 2),
@@ -196,6 +191,7 @@ export default function AdminSettingsPage() {
         setIsChannelDrawerOpen(true);
         const channel = index === null ? emptyChannel : normalizeChannel(channels[index]);
         channelForm.setFieldsValue(channel);
+        setWorkflowChannelDraft(channel);
         rememberModels(channel.models);
     };
 
@@ -206,7 +202,12 @@ export default function AdminSettingsPage() {
     };
 
     const saveChannel = async () => {
-        const channel = normalizeChannel(await channelForm.validateFields());
+        const values = await channelForm.validateFields();
+        const channel = normalizeChannel(isWorkflowProtocol(values.protocol) ? { ...workflowChannelDraft, ...channelForm.getFieldsValue(true), ...values } : values);
+        if (channel.protocol === "runninghub" && (!channel.baseUrl.trim() || (!channel.apiKey.trim() && editingChannelIndex === null))) {
+            message.error("请填写 RunningHub Base URL 和积分 API Key");
+            return;
+        }
         rememberModels(channel.models);
         const nextChannels = [...channels];
         if (editingChannelIndex === null) nextChannels.push(channel);
@@ -226,75 +227,17 @@ export default function AdminSettingsPage() {
             message.warning("请先填写 API Key");
             return;
         }
-        setIsFetchingChannelModels(true);
-        try {
-            const channelModels = await fetchChannelModels(token, { index: editingChannelIndex ?? undefined, channel: normalizeChannel(channel) });
-            const current = isModelSelectorOpen ? uniqueModels(modelSelectSelected) : uniqueModels(channelForm.getFieldValue("models") || []);
-            rememberModels(channelModels);
-            if (!channelModels.length) {
-                message.warning("上游未返回模型列表，请手动输入模型名称");
-                return;
-            }
-            setModelSelectExisting(current);
-            setModelSelectSource(uniqueModels(channelModels));
-            setModelSelectSelected(uniqueModels([...channelModels, ...current]));
-            setModelSelectKeyword("");
-            setModelSelectNewModel("");
-            setModelSelectTab("new");
-            setIsModelSelectorOpen(true);
-            message.success(`已获取 ${channelModels.length} 个模型，请选择后确认`);
-        } catch (error) {
-            message.error(error instanceof Error ? error.message : "读取模型失败");
-        } finally {
-            setIsFetchingChannelModels(false);
-        }
+        return fetchChannelModels(token, { index: editingChannelIndex ?? undefined, channel: normalizeChannel(channel) });
     };
 
-    const openChannelModelSelector = (sourceModels?: string[]) => {
-        const current = uniqueModels(channelForm.getFieldValue("models") || []);
-        const source = uniqueModels(sourceModels !== undefined ? sourceModels : [...knownModels, ...current]);
-        setModelSelectExisting(current);
-        setModelSelectSource(source);
-        setModelSelectSelected(sourceModels ? uniqueModels([...current, ...source]) : current);
-        setModelSelectKeyword("");
-        setModelSelectNewModel("");
-        setModelSelectTab(sourceModels ? "new" : "current");
-        setIsModelSelectorOpen(true);
-    };
+    const openChannelModelSelector = () => setIsModelSelectorOpen(true);
 
-    const closeChannelModelSelector = () => {
-        setIsModelSelectorOpen(false);
-        setModelSelectKeyword("");
-        setModelSelectNewModel("");
-    };
+    const closeChannelModelSelector = () => setIsModelSelectorOpen(false);
 
-    const confirmChannelModelSelector = () => {
-        const models = uniqueModels(modelSelectSelected);
+    const confirmChannelModelSelector = (models: string[]) => {
         channelForm.setFieldValue("models", models);
         rememberModels(models);
         closeChannelModelSelector();
-    };
-
-    const toggleSelectedModel = (model: string, checked: boolean) => {
-        setModelSelectSelected((current) => (checked ? uniqueModels([...current, model]) : current.filter((item) => item !== model)));
-    };
-
-    const selectActiveModels = () => {
-        setModelSelectSelected((current) => uniqueModels([...current, ...activeModelSelectModels]));
-    };
-
-    const clearActiveModels = () => {
-        const active = new Set(activeModelSelectModels);
-        setModelSelectSelected((current) => current.filter((model) => !active.has(model)));
-    };
-
-    const addModelInSelector = () => {
-        const model = modelSelectNewModel.trim();
-        if (!model) return;
-        setModelSelectExisting((current) => uniqueModels([...current, model]));
-        setModelSelectSelected((current) => uniqueModels([...current, model]));
-        setModelSelectNewModel("");
-        setModelSelectTab("current");
     };
 
     function rememberModels(models: string[]) {
@@ -349,22 +292,24 @@ export default function AdminSettingsPage() {
     };
 
     const testChannel = testChannelIndex === null ? null : normalizeChannel(channels[testChannelIndex]);
-    const testModels = (testChannel?.models || []).filter((model) => model.toLowerCase().includes(testKeyword.trim().toLowerCase()));
+    const testModels = (testChannel?.models || []).filter((model) => `${model} ${modelLabel(model, testChannel)}`.toLowerCase().includes(testKeyword.trim().toLowerCase()));
 
     async function persistChannels(nextChannels: AdminModelChannel[]) {
-        if (!token) return;
+        if (!token) throw new Error("请先登录");
         const values = normalizeSettings(form.getFieldsValue(true) as AdminSettings);
         const nextChannelModels = collectChannelModels(nextChannels);
+        const nextChannelWorkflows = collectChannelWorkflows(nextChannels);
         const nextSettings = normalizeSettings({
             ...values,
-            public: { ...values.public, modelChannel: { ...values.public.modelChannel, availableModels: filterModels(values.public.modelChannel.availableModels, nextChannelModels) } },
+            public: { ...values.public, modelChannel: { ...values.public.modelChannel, availableModels: filterModels(values.public.modelChannel.availableModels, nextChannelModels), availableWorkflows: filterModels(values.public.modelChannel.availableWorkflows, nextChannelWorkflows.map((item) => item.value)) } },
             private: { ...values.private, channels: nextChannels },
         });
         const saved = normalizeSettings(await saveAdminSettings(token, nextSettings));
         clearImageStorageConfigCache();
-        clearFileStorageConfigCache();
+        clearMediaStorageConfigCache();
         const merged = mergeChannelApiKeys(nextChannels, saved);
         setChannels(merged.private.channels);
+        setModelCosts(merged.public.modelChannel.modelCosts);
         rememberKnownModels(merged);
         form.setFieldsValue(merged);
         setJsonText({
@@ -372,27 +317,6 @@ export default function AdminSettingsPage() {
             private: JSON.stringify(merged.private, null, 2),
         });
         message.success("已保存");
-    }
-
-    async function loadMCPToolsAt(index: number) {
-        if (!token) return;
-        const server = form.getFieldValue(["private", "agent", "mcpServers", index]) as AdminMCPServer | undefined;
-        const transport = server?.transport === "stdio" ? "stdio" : "streamable_http";
-        if (transport === "stdio" ? !server?.command?.trim() : !server?.endpoint?.trim()) {
-            message.warning(transport === "stdio" ? "请先填写 MCP Command" : "请先填写 MCP 服务地址");
-            return;
-        }
-        setFetchingMCPToolsIndex(index);
-        try {
-            const tools = await fetchMCPServerTools(token, { server: normalizeMCPServer(server) });
-            form.setFieldValue(["private", "agent", "mcpServers", index, "tools"], tools);
-            form.setFieldValue(["private", "agent", "mcpServers", index, "toolsJson"], JSON.stringify(tools, null, 2));
-            message.success(`已读取 ${tools.length} 个 MCP 工具`);
-        } catch (error) {
-            message.error(error instanceof Error ? error.message : "读取 MCP 工具失败");
-        } finally {
-            setFetchingMCPToolsIndex(null);
-        }
     }
 
     async function measureStorageProviderAt(index: number) {
@@ -470,27 +394,30 @@ export default function AdminSettingsPage() {
                                 <Row gutter={16}>
                                     <Col span={24}>
                                         <Form.Item name={["public", "modelChannel", "availableModels"]} label="系统可用模型(请先在私有配置里配置渠道)" extra="可选项来自已启用渠道中选择的模型，最终开放哪些模型由这里勾选决定">
-                                            <Select mode="multiple" placeholder="请选择系统可用模型" options={channelModels.map((item) => ({ label: item, value: item }))} />
+                                            <Select mode="multiple" showSearch={{ optionFilterProp: ["label", "value"] }} placeholder="请选择系统可用模型" options={channelModels.map((item) => ({ label: publicModelLabel(item), value: item }))} />
+                                        </Form.Item>
+                                        <Form.Item name={["public", "modelChannel", "availableWorkflows"]} label="系统可用工作流" extra="先在私有渠道启用工作流，再在这里勾选对用户开放的工作流">
+                                            <Select mode="multiple" showSearch={{ optionFilterProp: ["label", "value"] }} placeholder="请选择系统可用工作流" options={channelWorkflows} />
                                         </Form.Item>
                                     </Col>
                                     <Col xs={24} md={6}>
                                         <Form.Item name={["public", "modelChannel", "defaultModel"]} label="默认模型">
-                                            <Select showSearch allowClear options={publicModels.map((item) => ({ label: item, value: item }))} />
+                                            <Select showSearch={{ optionFilterProp: ["label", "value"] }} allowClear options={publicModels.map((item) => ({ label: publicModelLabel(item), value: item }))} />
                                         </Form.Item>
                                     </Col>
                                     <Col xs={24} md={6}>
                                         <Form.Item name={["public", "modelChannel", "defaultImageModel"]} label="默认图片模型">
-                                            <Select showSearch allowClear options={publicModels.map((item) => ({ label: item, value: item }))} />
+                                            <Select showSearch={{ optionFilterProp: ["label", "value"] }} allowClear options={publicModels.map((item) => ({ label: publicModelLabel(item), value: item }))} />
                                         </Form.Item>
                                     </Col>
                                     <Col xs={24} md={6}>
                                         <Form.Item name={["public", "modelChannel", "defaultVideoModel"]} label="默认视频模型">
-                                            <Select showSearch allowClear options={publicModels.map((item) => ({ label: item, value: item }))} />
+                                            <Select showSearch={{ optionFilterProp: ["label", "value"] }} allowClear options={publicModels.map((item) => ({ label: publicModelLabel(item), value: item }))} />
                                         </Form.Item>
                                     </Col>
                                     <Col xs={24} md={6}>
                                         <Form.Item name={["public", "modelChannel", "defaultTextModel"]} label="默认文本模型">
-                                            <Select showSearch allowClear options={publicModels.map((item) => ({ label: item, value: item }))} />
+                                            <Select showSearch={{ optionFilterProp: ["label", "value"] }} allowClear options={publicModels.map((item) => ({ label: publicModelLabel(item), value: item }))} />
                                         </Form.Item>
                                     </Col>
                                     <Col span={24}>
@@ -542,32 +469,41 @@ export default function AdminSettingsPage() {
                                         </Form.Item>
                                     </Col>
                                     <Col span={24}>
-                                        <Typography.Title level={5}>模型算力点</Typography.Title>
-                                        <Typography.Text type="secondary">每个渠道的模型独立定价；未设置时为 0 点，多图按生成张数扣除。</Typography.Text>
-                                        <Collapse className="mt-3" size="small" items={channels.map((channel) => ({
-                                            key: channel.id,
-                                            label: <Space>{channel.name || channel.id}<Tag>{channel.protocol}</Tag>{!channel.enabled && <Tag color="default">已停用</Tag>}<Typography.Text type="secondary">{uniqueModels(channel.models).length} 个模型</Typography.Text></Space>,
-                                            children: <Table
-                                                rowKey="model"
-                                                pagination={false}
-                                                size="small"
-                                                dataSource={uniqueModels(channel.models).map((model) => ({ model, credits: modelCostIndex.get(modelCostKey(channel.id, model)) ?? 0 }))}
-                                                columns={[
-                                                    { title: "模型", dataIndex: "model" },
-                                                    {
-                                                        title: "每次调用扣除",
-                                                        dataIndex: "credits",
-                                                        width: 220,
-                                                        render: (_, item) => (
-                                                            <Space.Compact className="!w-full">
-                                                                <InputNumber min={0} step={1} precision={0} className="!w-full" value={item.credits} onChange={(value) => setModelCost(form, channel.id, item.model, Number(value) || 0)} />
-                                                                <span className="flex h-8 items-center rounded-r-md border border-l-0 border-stone-200 bg-stone-50 px-3 text-sm text-stone-500 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-300">点</span>
-                                                            </Space.Compact>
-                                                        ),
-                                                    },
-                                                ]}
-                                            />,
-                                        }))} />
+                                        <Typography.Title level={5}>模型／工作流算力点</Typography.Title>
+                                        <Table
+                                            rowKey={(item) => `${item.channelId || "legacy"}:${item.model}`}
+                                            pagination={false}
+                                            size="small"
+                                            dataSource={[
+                                                ...channels.flatMap((channel) => (channel.models || []).map((model) => ({ channelId: channel.id, model, label: `${channel.name || channel.id} · ${publicModelLabel(model)}`, credits: modelCostCredits(modelCosts, channel.id, model) }))),
+                                                ...publicModels.filter((model) => !channels.some((channel) => (channel.models || []).includes(model))).map((model) => ({ channelId: "", model, label: publicModelLabel(model), credits: modelCostCredits(modelCosts, "", model) })),
+                                                ...channels.flatMap((channel) => isWorkflowProtocol(channel.protocol) ? (channel.workflows || []).filter((entry) => entry.enabled && publicWorkflows.includes(`workflow:system:${channel.id}:${entry.kind}:${entry.workflowId}`)).map((entry) => {
+                                                    const model = `workflow:system:${channel.id}:${entry.kind}:${entry.workflowId}`;
+                                                    return { channelId: channel.id, model, label: `${channel.name} · ${entry.title || entry.workflowId}（工作流）`, credits: modelCostCredits(modelCosts, channel.id, model) };
+                                                }) : []),
+                                            ]}
+                                            columns={[
+                                                { title: "模型 / 工作流", dataIndex: "model", render: (_, item) => <span title={item.label}>{item.label}</span> },
+                                                {
+                                                    title: (
+                                                        <span className="grid leading-tight">
+                                                            <span>计费单价</span>
+                                                            <span className="text-xs font-normal text-[var(--ant-color-text-secondary)]">视频模型按秒，工作流按次</span>
+                                                        </span>
+                                                    ),
+                                                    dataIndex: "credits",
+                                                    width: 220,
+                                                    render: (_, item) => (
+                                                        <Space.Compact className="!w-full">
+                                                            <InputNumber min={0} step={0.01} precision={2} className="!w-full" value={item.credits} onChange={(value) => setModelCost(form, setModelCosts, item.channelId, item.model, Number(value) || 0)} />
+                                                            <span className="flex h-8 items-center rounded-r-md border border-l-0 border-stone-200 bg-stone-50 px-3 text-sm text-stone-500 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-300">
+                                                                点
+                                                            </span>
+                                                        </Space.Compact>
+                                                    ),
+                                                },
+                                            ]}
+                                        />
                                     </Col>
                                 </Row>
                             </Form>
@@ -660,122 +596,25 @@ export default function AdminSettingsPage() {
                                         </Col>
                                     </Row>
                                 </Card>
-                                <Card size="small" title="画布 Agent MCP">
-                                    <Flex vertical gap={12}>
-                                        <Typography.Text type="secondary">MCP 工具由后端代理调用，API Key、stdio 命令和环境变量不会下发给普通用户。</Typography.Text>
-                                        <Form.List name={["private", "agent", "mcpServers"]}>
-                                            {(fields, { add, remove }) => (
-                                                <Flex vertical gap={10}>
-                                                    <Button icon={<PlusOutlined />} onClick={() => add({ ...emptyMCPServer })}>
-                                                        新增 MCP 服务
-                                                    </Button>
-                                                    {fields.map((field) => {
-                                                        const server = agentMCPServers[field.name] || emptyMCPServer;
-                                                        const isStdio = server.transport === "stdio";
-                                                        return (
-                                                            <Card key={field.key} size="small" title={server.name || `MCP ${field.name + 1}`} extra={<Button danger size="small" icon={<DeleteOutlined />} onClick={() => remove(field.name)} />}>
-                                                                <Form.Item name={[field.name, "id"]} hidden>
-                                                                    <Input />
-                                                                </Form.Item>
-                                                                <Row gutter={12}>
-                                                                    <Col xs={24} md={7}>
-                                                                        <Form.Item name={[field.name, "name"]} label="名称">
-                                                                            <Input placeholder="视频生成 MCP" />
-                                                                        </Form.Item>
-                                                                    </Col>
-                                                                    <Col xs={24} md={7}>
-                                                                        <Form.Item name={[field.name, "transport"]} label="传输方式">
-                                                                            <Select options={[{ label: "Streamable HTTP", value: "streamable_http" }, { label: "stdio 本地进程", value: "stdio" }]} />
-                                                                        </Form.Item>
-                                                                    </Col>
-                                                                    <Col xs={12} md={5}>
-                                                                        <Form.Item name={[field.name, "enabled"]} label="启用" valuePropName="checked">
-                                                                            <Switch />
-                                                                        </Form.Item>
-                                                                    </Col>
-                                                                    <Col xs={12} md={5}>
-                                                                        <Form.Item name={[field.name, "allowUsers"]} label="允许普通用户" valuePropName="checked">
-                                                                            <Switch />
-                                                                        </Form.Item>
-                                                                    </Col>
-                                                                    {isStdio ? (
-                                                                        <>
-                                                                            <Col xs={24} md={12}>
-                                                                                <Form.Item name={[field.name, "command"]} label="Command">
-                                                                                    <Input placeholder="例如：video-mcp" />
-                                                                                </Form.Item>
-                                                                            </Col>
-                                                                            <Col xs={24} md={12}>
-                                                                                <Form.Item name={[field.name, "workingDirectory"]} label="工作目录">
-                                                                                    <Input placeholder="可选，默认后端工作目录" />
-                                                                                </Form.Item>
-                                                                            </Col>
-                                                                            <Col span={24}>
-                                                                                <Form.Item name={[field.name, "argsText"]} label="Args" extra="每行一个参数">
-                                                                                    <Input.TextArea rows={3} placeholder={"--port\n3000"} />
-                                                                                </Form.Item>
-                                                                            </Col>
-                                                                            <Col span={24}>
-                                                                                <Form.Item name={[field.name, "envJson"]} label="Env JSON">
-                                                                                    <Input.TextArea rows={3} placeholder='{"API_KEY":"..."}' />
-                                                                                </Form.Item>
-                                                                            </Col>
-                                                                        </>
-                                                                    ) : (
-                                                                        <>
-                                                                            <Col xs={24} md={12}>
-                                                                                <Form.Item name={[field.name, "endpoint"]} label="HTTP Endpoint">
-                                                                                    <Input placeholder="https://example.com/mcp" />
-                                                                                </Form.Item>
-                                                                            </Col>
-                                                                            <Col xs={24} md={12}>
-                                                                                <Form.Item name={[field.name, "apiKey"]} label="API Key">
-                                                                                    <Input.Password placeholder="留空沿用已保存的 Key" />
-                                                                                </Form.Item>
-                                                                            </Col>
-                                                                        </>
-                                                                    )}
-                                                                    <Col span={24}>
-                                                                        <Form.Item name={[field.name, "description"]} label="说明">
-                                                                            <Input />
-                                                                        </Form.Item>
-                                                                    </Col>
-                                                                    <Col span={24}>
-                                                                        <Form.Item name={[field.name, "toolsJson"]} label={`工具定义 JSON（${server.tools?.length || 0}）`} extra="标准 MCP tools/list 返回的 tools 数组；也可以自动读取">
-                                                                            <Input.TextArea rows={6} placeholder='[{"name":"generate_video","description":"生成视频","inputSchema":{"type":"object","properties":{}}}]' />
-                                                                        </Form.Item>
-                                                                        <Button loading={fetchingMCPToolsIndex === field.name} onClick={() => void loadMCPToolsAt(field.name)}>
-                                                                            读取工具列表
-                                                                        </Button>
-                                                                    </Col>
-                                                                </Row>
-                                                            </Card>
-                                                        );
-                                                    })}
-                                                </Flex>
-                                            )}
-                                        </Form.List>
-                                    </Flex>
-                                </Card>
                                 <Card size="small" title="数据存储">
                                     <Row gutter={16}>
-                                        <Col xs={24} md={8}>
-                                            <Form.Item label="存储模式" extra="自动检测：当配置并启用任意对象存储时，系统自动开启云端同步。">
+                                        <Col xs={24} md={6}>
+                                            <Form.Item label="存储模式" extra="根据对象存储配置和启用状态自动识别。">
                                                 <Input disabled value="自动识别 (动态切换)" />
                                             </Form.Item>
                                         </Col>
-                                        <Col xs={24} md={8}>
+                                        <Col xs={24} md={6}>
                                             <Form.Item name={["private", "storage", "allowUserProvider"]} label="允许用户配置 S3/WebDAV" valuePropName="checked">
                                                 <Switch />
                                             </Form.Item>
                                         </Col>
-                                        <Col xs={24} md={8}>
+                                        <Col xs={24} md={6}>
                                             <Form.Item name={["private", "storage", "allowUserGlobalProvider"]} label="允许用户使用全局配置渠道" valuePropName="checked">
                                                 <Switch />
                                             </Form.Item>
                                         </Col>
-                                        <Col xs={24} md={8}>
-                                            <Form.Item name={["private", "storage", "autoSyncAllAssets"]} label="全部素材云端同步" extra="新上传和生成的图片、视频、音频自动同步到可用云存储；失败时保留原始素材。" valuePropName="checked">
+                                        <Col xs={24} md={6}>
+                                            <Form.Item name={["private", "storage", "autoSyncAllAssets"]} label="全部素材云端同步" extra="上传、导入及生成的图片、视频、音频自动同步到可用云存储；关闭保持原有行为" valuePropName="checked">
                                                 <Switch />
                                             </Form.Item>
                                         </Col>
@@ -950,13 +789,13 @@ export default function AdminSettingsPage() {
                                     columns={[
                                         { title: "名称", dataIndex: "name", render: (value) => value || "未命名渠道" },
                                         { title: "协议", dataIndex: "protocol", width: 96, render: (value) => <Tag>{value || "openai"}</Tag> },
-                                        { title: "状态", dataIndex: "enabled", width: 96, render: (value) => <Tag color={value ? "success" : "default"}>{value ? "已启用" : "已停用"}</Tag> },
+                                        { title: "状态", dataIndex: "enabled", width: 120, render: (value, item) => isWorkflowProtocol(item.protocol) ? <Tag>{`启用 ${(item.workflows || []).filter((entry) => entry.enabled).length} / ${(item.workflows || []).length} 条`}</Tag> : <Tag color={value ? "success" : "default"}>{value ? "已启用" : "已停用"}</Tag> },
                                         {
                                             title: "模型",
                                             dataIndex: "models",
-                                            render: (value: string[]) => (
+                                            render: (value: string[], item) => (
                                                 <Typography.Text ellipsis style={{ maxWidth: 360 }}>
-                                                    {modelSummary(value || [])}
+                                                    {isWorkflowProtocol(item.protocol) ? (item.workflows || []).map((entry) => entry.title || entry.workflowId).join("、") || "未配置工作流" : modelSummary(value || [])}
                                                 </Typography.Text>
                                             ),
                                         },
@@ -966,12 +805,9 @@ export default function AdminSettingsPage() {
                                             title: "操作",
                                             key: "actions",
                                             width: 220,
-                                            align: "right",
                                             render: (_, item) => (
                                                 <Space size={4}>
-                                                    <Button size="small" onClick={() => openTestDialog(item._index)}>
-                                                        测试
-                                                    </Button>
+                                                    {!isWorkflowProtocol(item.protocol) ? <Button size="small" onClick={() => openTestDialog(item._index)}>测试</Button> : null}
                                                     <Button size="small" onClick={() => openChannelDrawer(item._index)}>
                                                         编辑
                                                     </Button>
@@ -1009,7 +845,7 @@ export default function AdminSettingsPage() {
                 <Drawer
                     title={editingChannelIndex === null ? "新增渠道" : "编辑渠道"}
                     open={isChannelDrawerOpen}
-                    size={560}
+                    size={isWorkflowProtocol(channelProtocol) ? "75vw" : 560}
                     onClose={closeChannelDrawer}
                     extra={
                         <Space>
@@ -1031,23 +867,15 @@ export default function AdminSettingsPage() {
                             <Col span={12}>
                                 <Form.Item name="protocol" label="协议">
                                     <Select
-                                        options={[
-                                            { label: "OpenAI", value: "openai" },
-                                            { label: "Gemini", value: "gemini" },
-                                            { label: "Grok2API", value: "grok2api" },
-                                            { label: "xAI", value: "xai" },
-                                            { label: "MiniMax & METASO", value: "metaso" },
-                                            { label: "APIMart", value: "apimart" },
-                                            { label: "KIE", value: "kie" },
-                                            { label: "MiMo", value: "mimo" },
-                                            { label: "火山方舟", value: "ark" },
-                                        ]}
+                                        options={modelChannelProtocolOptions}
                                         onChange={(protocol: AdminModelChannel["protocol"]) => {
                                             channelForm.setFieldValue("baseUrl", modelChannelDefaultBaseUrls[protocol]);
+                                            setWorkflowChannelDraft((current) => ({ ...current, protocol, baseUrl: modelChannelDefaultBaseUrls[protocol] }));
                                         }}
                                     />
                                 </Form.Item>
                             </Col>
+                            {!isWorkflowProtocol(channelProtocol) ? <>
                             <Col span={12}>
                                 <Form.Item name="weight" label="权重">
                                     <InputNumber min={1} step={1} className="!w-full" />
@@ -1092,12 +920,37 @@ export default function AdminSettingsPage() {
                                 <Form.Item label="渠道可用模型">
                                     <Space.Compact style={{ width: "100%" }}>
                                         <Form.Item name="models" noStyle>
-                                            <Select mode="tags" maxTagCount="responsive" tokenSeparators={[",", "\n"]} options={knownModels.map((model) => ({ label: model, value: model }))} />
+                                            <Select mode="tags" showSearch={{ optionFilterProp: ["label", "value"] }} maxTagCount="responsive" tokenSeparators={[",", "\n"]} options={knownModels.map((model) => ({ label: modelLabel(model, { protocol: channelProtocol, baseUrl: channelBaseUrl }), value: model }))} />
                                         </Form.Item>
                                         <Button onClick={() => openChannelModelSelector()}>选择模型</Button>
                                     </Space.Compact>
                                 </Form.Item>
                             </Col>
+                            </> : <Col span={24} className="mb-3">
+                                <WorkflowChannelPane
+                                    key={`${editingChannelIndex ?? "new"}:${workflowChannelDraft.id}:${workflowChannelDraft.protocol}`}
+                                    channel={workflowChannelDraft as WorkflowChannelSettings}
+                                    workflows={workflowChannelDraft.workflows || []}
+                                    token={token || ""}
+                                    admin={{ index: editingChannelIndex ?? undefined, channel: workflowChannelDraft }}
+                                    onChannelChange={(patch) => { channelForm.setFieldsValue(patch); setWorkflowChannelDraft((current) => ({ ...current, ...patch })); }}
+                                    onBridgeDeleted={(bridgeId) => {
+                                        const nextChannels = channels.map((channel) => channel.protocol === "comfyui" && channel.bridgeId === bridgeId ? { ...channel, bridgeId: "" } : channel);
+                                        setChannels(nextChannels);
+                                        form.setFieldValue(["private", "channels"], nextChannels);
+                                        channelForm.setFieldValue("bridgeId", "");
+                                        setWorkflowChannelDraft((current) => current.bridgeId === bridgeId ? { ...current, bridgeId: "" } : current);
+                                    }}
+                                    onWorkflowsChange={(workflows) => { channelForm.setFieldValue("workflows", workflows); setWorkflowChannelDraft((current) => ({ ...current, workflows })); }}
+                                    onBeforeTest={async () => {
+                                        const saved = editingChannelIndex === null ? undefined : channels[editingChannelIndex];
+                                        if (!saved?.id) throw new Error("请先保存渠道后再测试");
+                                        const draft = normalizeChannel({ ...workflowChannelDraft, ...channelForm.getFieldsValue(true) });
+                                        if (JSON.stringify(draft) !== JSON.stringify(normalizeChannel(saved))) throw new Error("当前配置有未保存修改，请先保存后再测试");
+                                        return saved.id;
+                                    }}
+                                />
+                            </Col>}
                             <Col span={24}>
                                 <Form.Item name="remark" label="备注">
                                     <Input.TextArea rows={3} />
@@ -1106,77 +959,17 @@ export default function AdminSettingsPage() {
                         </Row>
                     </Form>
                 </Drawer>
-                <Modal
-                    title={
-                        <Space size={12}>
-                            选择渠道模型
-                            <Typography.Text type="secondary">
-                                已选择 {modelSelectSelected.length} / {uniqueModels([...modelSelectSource, ...modelSelectExisting]).length}
-                            </Typography.Text>
-                        </Space>
-                    }
-                    open={isModelSelectorOpen}
-                    width={960}
-                    onCancel={closeChannelModelSelector}
-                    footer={
-                        <Space>
-                            <Button onClick={closeChannelModelSelector}>取消</Button>
-                            <Button type="primary" onClick={confirmChannelModelSelector}>
-                                确定
-                            </Button>
-                        </Space>
-                    }
-                    destroyOnHidden
-                >
-                    <Flex vertical gap={14}>
-                        <Flex gap={12} wrap>
-                            <Input.Search placeholder="搜索模型" allowClear value={modelSelectKeyword} onChange={(event) => setModelSelectKeyword(event.target.value)} style={{ flex: "1 1 260px" }} />
-                            <Space.Compact style={{ flex: "1 1 320px" }}>
-                                <Input value={modelSelectNewModel} placeholder="输入模型名称" onChange={(event) => setModelSelectNewModel(event.target.value)} onPressEnter={addModelInSelector} />
-                                <Button onClick={addModelInSelector}>增加模型</Button>
-                                <Button icon={<ReloadOutlined />} loading={isFetchingChannelModels} onClick={() => void fetchChannelModelList()}>
-                                    拉取模型列表
-                                </Button>
-                            </Space.Compact>
-                        </Flex>
-                        <Tabs
-                            activeKey={modelSelectTab}
-                            onChange={(key) => setModelSelectTab(key as ModelSelectTabKey)}
-                            items={[
-                                { key: "new", label: `新获取的模型 (${modelSelectGroups.new.length})` },
-                                { key: "current", label: `已有的模型 (${modelSelectGroups.current.length})` },
-                            ]}
-                        />
-                        <Flex justify="space-between" align="center" gap={12} wrap>
-                            <Typography.Text type="secondary">
-                                当前列表已选择 {activeSelectedCount} / {activeModelSelectModels.length}
-                            </Typography.Text>
-                            <Space size={8}>
-                                <Button size="small" disabled={!activeModelSelectModels.length || activeSelectedCount === activeModelSelectModels.length} onClick={selectActiveModels}>
-                                    全选当前列表
-                                </Button>
-                                <Button size="small" disabled={!activeSelectedCount} onClick={clearActiveModels}>
-                                    取消当前列表
-                                </Button>
-                            </Space>
-                        </Flex>
-                        <div style={{ maxHeight: 420, overflowY: "auto", borderTop: "1px solid var(--ant-color-border-secondary)", paddingTop: 12 }}>
-                            {activeModelSelectModels.length ? (
-                                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", columnGap: 24, rowGap: 12 }}>
-                                    {activeModelSelectModels.map((model) => (
-                                        <Checkbox key={model} checked={modelSelectSelected.includes(model)} onChange={(event) => toggleSelectedModel(model, event.target.checked)}>
-                                            <Typography.Text style={{ wordBreak: "break-all" }}>{model}</Typography.Text>
-                                        </Checkbox>
-                                    ))}
-                                </div>
-                            ) : (
-                                <div style={{ padding: "48px 0", textAlign: "center" }}>
-                                    <Typography.Text type="secondary">没有匹配的模型</Typography.Text>
-                                </div>
-                            )}
-                        </div>
-                    </Flex>
-                </Modal>
+                {isModelSelectorOpen ? (
+                    <ChannelModelSelectorModal
+                        channel={channelForm.getFieldsValue()}
+                        models={channelForm.getFieldValue("models") || []}
+                        sourceModels={knownModels}
+                        onCancel={closeChannelModelSelector}
+                        onConfirm={confirmChannelModelSelector}
+                        onFetchModels={fetchChannelModelList}
+                        onModelsFetched={rememberModels}
+                    />
+                ) : null}
                 <Modal
                     title={
                         <Space>
@@ -1209,7 +1002,7 @@ export default function AdminSettingsPage() {
                                 onChange: (keys) => setSelectedTestModels(keys.map(String)),
                             }}
                             columns={[
-                                { title: "模型名称", dataIndex: "model", render: (value) => <Typography.Text strong>{value}</Typography.Text> },
+                                { title: "模型名称", dataIndex: "model", render: (value) => <Typography.Text strong title={value}>{modelLabel(value, testChannel)}</Typography.Text> },
                                 {
                                     title: "状态",
                                     dataIndex: "model",
@@ -1233,7 +1026,6 @@ export default function AdminSettingsPage() {
                                     title: "操作",
                                     key: "actions",
                                     width: 120,
-                                    align: "right",
                                     render: (_, item) => (
                                         <Button size="small" loading={testingModels.includes(item.model)} onClick={() => void testModelOnline(item.model)}>
                                             测试
@@ -1266,6 +1058,7 @@ function normalizePublicSetting(setting: Partial<AdminSettings["public"]> = {}):
             ...emptySettings.public.modelChannel,
             ...(setting.modelChannel || {}),
             availableModels: setting.modelChannel?.availableModels || [],
+            availableWorkflows: setting.modelChannel?.availableWorkflows || [],
             modelCosts: normalizeModelCosts(setting.modelChannel?.modelCosts || []),
             channels: setting.modelChannel?.channels || [],
             systemPrompts: {
@@ -1286,16 +1079,14 @@ function normalizePublicSetting(setting: Partial<AdminSettings["public"]> = {}):
         storage: {
             mode: setting.storage?.mode || "local_indexeddb",
             allowUserProvider: setting.storage?.allowUserProvider === true,
+            allowUserGlobalProvider: setting.storage?.allowUserGlobalProvider === true,
             autoSyncAllAssets: setting.storage?.autoSyncAllAssets === true,
-        },
-        agent: {
-            mcpServers: (setting.agent?.mcpServers || []).map(normalizeMCPServer),
         },
     };
 }
 
 function normalizeModelCosts(items: Partial<AdminSettings["public"]["modelChannel"]["modelCosts"][number]>[]) {
-    return items.filter((item) => item.model).map((item) => ({ channelId: item.channelId || "", model: item.model || "", credits: Math.max(0, Number(item.credits) || 0) }));
+    return items.filter((item) => item.model).map((item) => ({ ...(item.channelId ? { channelId: item.channelId } : {}), model: item.model || "", credits: Math.max(0, Number(item.credits) || 0) }));
 }
 
 function normalizePrivateSetting(setting: Partial<AdminSettings["private"]> = {}): AdminSettings["private"] {
@@ -1338,6 +1129,27 @@ function normalizePrivateSetting(setting: Partial<AdminSettings["private"]> = {}
     };
 }
 
+function normalizeMCPServer(item: Partial<AdminSettings["private"]["agent"]["mcpServers"][number]> = {}) {
+    return {
+        id: item.id || "",
+        name: item.name || "",
+        description: item.description || "",
+        tools: Array.isArray(item.tools) ? item.tools : [],
+        endpoint: item.endpoint || "",
+        apiKey: item.apiKey || "",
+        transport: item.transport === "stdio" ? "stdio" as const : "streamable_http" as const,
+        command: item.command || "",
+        args: Array.isArray(item.args) ? item.args : [],
+        env: item.env || {},
+        workingDirectory: item.workingDirectory || "",
+        enabled: item.enabled === true,
+        allowUsers: item.allowUsers === true,
+        ...(item.toolsJson ? { toolsJson: item.toolsJson } : {}),
+        ...(item.argsText ? { argsText: item.argsText } : {}),
+        ...(item.envJson ? { envJson: item.envJson } : {}),
+    };
+}
+
 function normalizeStorageProvider(item: Partial<AdminStorageProvider> = {}): AdminStorageProvider {
     const type = item.type === "webdav" ? "webdav" : "s3";
     return {
@@ -1370,6 +1182,11 @@ function normalizeChannel(item: Partial<AdminModelChannel> = {}): AdminModelChan
         baseUrl: item.baseUrl || "",
         apiKey: item.apiKey || "",
         models: item.models || [],
+        uploadApiKey: item.uploadApiKey || "",
+        bridgeId: item.bridgeId || "",
+        comfyUrl: item.comfyUrl || "",
+        workflowDir: item.workflowDir || "",
+        workflows: item.workflows || [],
         weight: Math.max(1, Number(item.weight) || 1),
         timeout: Math.max(1, Number(item.timeout) || 600),
         enabled: item.enabled !== false,
@@ -1377,71 +1194,25 @@ function normalizeChannel(item: Partial<AdminModelChannel> = {}): AdminModelChan
     };
 }
 
-function normalizeMCPServer(item: Partial<AdminMCPServer> = {}): AdminMCPServer {
-    const tools = typeof item.toolsJson === "string" && item.toolsJson.trim() ? parseMCPTools(item.toolsJson, item.tools || []) : (item.tools || []).map(normalizeMCPTool);
-    const args = typeof item.argsText === "string" ? item.argsText.split(/\r?\n/).map((value) => value.trim()).filter(Boolean) : item.args || [];
-    const env = typeof item.envJson === "string" && item.envJson.trim() ? parseMCPEnv(item.envJson, item.env || {}) : item.env || {};
-    return {
-        ...emptyMCPServer,
-        ...item,
-        id: item.id || "",
-        name: item.name || "",
-        endpoint: item.endpoint || "",
-        apiKey: item.apiKey || "",
-        command: item.command || "",
-        workingDirectory: item.workingDirectory || "",
-        description: item.description || "",
-        transport: item.transport === "stdio" ? "stdio" : "streamable_http",
-        tools,
-        args,
-        env,
-        toolsJson: JSON.stringify(tools, null, 2),
-        argsText: args.join("\n"),
-        envJson: JSON.stringify(env, null, 2),
-        enabled: item.enabled !== false,
-        allowUsers: item.allowUsers !== false,
-    };
+function modelCostCredits(items: AdminSettings["public"]["modelChannel"]["modelCosts"], channelId: string, model: string) {
+    const scoped = items.find((item) => item.model === model && item.channelId === channelId);
+    if (scoped) return scoped.credits;
+    return items.find((item) => item.model === model && !item.channelId)?.credits || 0;
 }
 
-function parseMCPTools(value: string, fallback: Partial<AdminMCPTool>[] = []): AdminMCPTool[] {
-    try {
-        const parsed = JSON.parse(value);
-        return Array.isArray(parsed) ? parsed.map(normalizeMCPTool).filter((item) => item.name) : [];
-    } catch {
-        return fallback.map(normalizeMCPTool);
-    }
-}
-
-function parseMCPEnv(value: string, fallback: Record<string, string> = {}) {
-    try {
-        const parsed = JSON.parse(value);
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return fallback;
-        return Object.fromEntries(Object.entries(parsed).filter(([, item]) => typeof item === "string")) as Record<string, string>;
-    } catch {
-        return fallback;
-    }
-}
-
-function normalizeMCPTool(item: Partial<AdminMCPTool> = {}): AdminMCPTool {
-    return { name: item.name || "", description: item.description || "", inputSchema: item.inputSchema && typeof item.inputSchema === "object" ? item.inputSchema : {} };
-}
-
-function modelCostKey(channelId: string, model: string) {
-    return JSON.stringify([channelId, model]);
-}
-
-function setModelCost(form: any, channelId: string, model: string, credits: number) {
+function setModelCost(form: any, setModelCosts: (items: AdminModelCost[]) => void, channelId: string, model: string, credits: number) {
     const current = (form.getFieldValue(["public", "modelChannel", "modelCosts"]) || []) as AdminSettings["public"]["modelChannel"]["modelCosts"];
-    const next = current.filter((item) => item.channelId !== channelId || item.model !== model);
-    next.push({ channelId, model, credits: Math.max(0, credits) });
+    const next = current.filter((item) => !(item.model === model && item.channelId === channelId));
+    next.push({ ...(channelId ? { channelId } : {}), model, credits: Math.max(0, credits) });
     form.setFieldValue(["public", "modelChannel", "modelCosts"], next);
+    setModelCosts(next);
 }
 
 function mergeChannelApiKeys(currentChannels: AdminModelChannel[], saved: AdminSettings): AdminSettings {
-    const channels = saved.private.channels.map((item, index) => ({
-        ...item,
-        apiKey: currentChannels[index]?.apiKey || item.apiKey,
-    }));
+    const channels = saved.private.channels.map((item, index) => {
+        const source = isWorkflowProtocol(item.protocol) ? currentChannels.find((channel) => channel.id === item.id && channel.protocol === item.protocol) : currentChannels[index];
+        return { ...item, apiKey: source?.apiKey || item.apiKey, uploadApiKey: source?.uploadApiKey || item.uploadApiKey };
+    });
     return {
         public: saved.public,
         private: { ...saved.private, channels },
@@ -1449,21 +1220,15 @@ function mergeChannelApiKeys(currentChannels: AdminModelChannel[], saved: AdminS
 }
 
 function collectChannelModels(channels: AdminModelChannel[]) {
-    return uniqueModels(channels.filter((channel) => channel.enabled).flatMap((channel) => channel.models || []));
+    return uniqueModels(channels.filter((channel) => !isWorkflowProtocol(channel.protocol)).flatMap((channel) => channel.models || []));
+}
+
+function collectChannelWorkflows(channels: AdminModelChannel[]) {
+    return channels.flatMap((channel) => isWorkflowProtocol(channel.protocol) ? (channel.workflows || []).filter((entry) => entry.enabled && entry.provider === channel.protocol).map((entry) => ({ label: `${channel.name} · ${entry.title || entry.workflowId}（工作流）`, value: `workflow:system:${channel.id}:${entry.kind}:${entry.workflowId}` })) : []);
 }
 
 function collectKnownModels(settings: AdminSettings) {
     return uniqueModels([...(settings.public.modelChannel.availableModels || []), ...(settings.public.modelChannel.modelCosts || []).map((item) => item.model), ...settings.private.channels.flatMap((channel) => channel.models || [])]);
-}
-
-function buildModelSelectGroups(sourceModels: string[], existingModels: string[]): Record<ModelSelectTabKey, string[]> {
-    const source = uniqueModels(sourceModels);
-    const existing = uniqueModels(existingModels);
-    const existingSet = new Set(existing);
-    return {
-        new: source.filter((model) => !existingSet.has(model)),
-        current: existing,
-    };
 }
 
 function uniqueModels(models: string[]) {
@@ -1523,6 +1288,7 @@ async function collectSettings(form: any, editorMode: Record<SettingsTabKey, Edi
         values.private = privateSetting;
     }
     values.public.modelChannel.availableModels = filterModels(values.public.modelChannel.availableModels, collectChannelModels(values.private.channels));
+    values.public.modelChannel.availableWorkflows = filterModels(values.public.modelChannel.availableWorkflows, collectChannelWorkflows(values.private.channels).map((item) => item.value));
     values.public.modelChannel.systemPrompt = values.public.modelChannel.systemPrompts.image || values.public.modelChannel.systemPrompts.text || "";
     return normalizeSettings(values);
 }

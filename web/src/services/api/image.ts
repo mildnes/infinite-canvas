@@ -49,6 +49,7 @@ export type CanvasImageTask = {
     channelId?: string;
     userChannelId?: string;
     channelName?: string;
+    workflowRef?: string;
     model?: string;
     prompt?: string;
     status: "queued" | "processing" | "completed" | "failed" | string;

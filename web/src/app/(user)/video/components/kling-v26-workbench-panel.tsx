@@ -320,7 +320,7 @@ export function KlingV26WorkbenchPanel({
                     </KlingSection>
                 )) : null}
                 <KlingSection title={TEXT.model}>
-                    <ModelPicker config={config} value={model} channelId={config.videoChannelId} onChange={(value, channelId) => { updateConfig("videoModel", value); if (channelId) updateConfig("videoChannelId", channelId); }} capability="video" fullWidth onMissingConfig={() => openConfigDialog(false)} />
+                    <ModelPicker config={config} value={model} channelId={config.videoChannelId} workflowRef={config.videoWorkflowRef} onWorkflowChange={(value) => updateConfig("videoWorkflowRef", value)} onChange={(value, channelId) => { updateConfig("videoModel", value); if (channelId) updateConfig("videoChannelId", channelId); }} capability="video" fullWidth onMissingConfig={() => openConfigDialog(false)} />
                 </KlingSection>
                 <KlingSection title={TEXT.mode}>
                     <OptionGrid columns={isKlingV3 ? 3 : 2} options={isKlingV3 ? [{ value: "std", label: "720P" }, { value: "pro", label: "1080P" }, { value: "4k", label: "4K" }] : [{ value: "std", label: TEXT.std }, { value: "pro", label: TEXT.pro }]} value={mode} onChange={setMode} />

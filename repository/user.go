@@ -79,7 +79,7 @@ func SaveUser(user model.User) (model.User, error) {
 	return user, db.Save(&user).Error
 }
 
-func ConsumeUserCredits(id string, credits int, now string) (model.User, bool, error) {
+func ConsumeUserCredits(id string, credits int, now string, log model.CreditLog, task any) (model.User, bool, error) {
 	db, err := DB()
 	if err != nil {
 		return model.User{}, false, err
@@ -88,15 +88,34 @@ func ConsumeUserCredits(id string, credits int, now string) (model.User, bool, e
 		user, ok, err := GetUserByID(id)
 		return user, ok, err
 	}
-	tx := db.Model(&model.User{}).Where("id = ? AND credits >= ?", id, credits).Updates(map[string]any{
-		"credits":    gorm.Expr("credits - ?", credits),
-		"updated_at": now,
+	var user model.User
+	consumed := false
+	err = db.Transaction(func(tx *gorm.DB) error {
+		update := tx.Model(&model.User{}).Where("id = ? AND credits >= ?", id, credits).Updates(map[string]any{
+			"credits":    gorm.Expr("credits - ?", credits),
+			"updated_at": now,
+		})
+		if update.Error != nil || update.RowsAffected == 0 {
+			return update.Error
+		}
+		current, found, err := findUser(tx, "id = ?", id)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return gorm.ErrRecordNotFound
+		}
+		user, consumed = current, true
+		log.Balance = user.Credits
+		if err := tx.Save(&log).Error; err != nil {
+			return err
+		}
+		if task != nil {
+			return tx.Create(task).Error
+		}
+		return nil
 	})
-	if tx.Error != nil {
-		return model.User{}, false, tx.Error
-	}
-	user, ok, err := GetUserByID(id)
-	return user, ok && tx.RowsAffected > 0, err
+	return user, consumed, err
 }
 
 func RefundUserCredits(id string, credits int, now string) (model.User, bool, error) {
@@ -104,9 +123,12 @@ func RefundUserCredits(id string, credits int, now string) (model.User, bool, er
 	if err != nil {
 		return model.User{}, false, err
 	}
+	return refundUserCredits(db, id, credits, now)
+}
+
+func refundUserCredits(db *gorm.DB, id string, credits int, now string) (model.User, bool, error) {
 	if credits <= 0 {
-		user, ok, err := GetUserByID(id)
-		return user, ok, err
+		return findUser(db, "id = ?", id)
 	}
 	tx := db.Model(&model.User{}).Where("id = ?", id).Updates(map[string]any{
 		"credits":    gorm.Expr("credits + ?", credits),
@@ -115,7 +137,7 @@ func RefundUserCredits(id string, credits int, now string) (model.User, bool, er
 	if tx.Error != nil {
 		return model.User{}, false, tx.Error
 	}
-	user, ok, err := GetUserByID(id)
+	user, ok, err := findUser(db, "id = ?", id)
 	return user, ok && tx.RowsAffected > 0, err
 }
 

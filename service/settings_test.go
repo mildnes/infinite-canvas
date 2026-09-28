@@ -174,3 +174,49 @@ func TestPublicPricingCandidatesExcludeUnusableChannels(t *testing.T) {
 		t.Fatalf("quote candidates = %#v, want only the selectable channel", infos)
 	}
 }
+
+func TestWorkflowPricingUsesChannelScopedBillingName(t *testing.T) {
+	channels := []model.ModelChannel{
+		{
+			ID:       "runninghub-a",
+			Protocol: "runninghub",
+			Workflows: []model.WorkflowEntry{{Provider: "runninghub", Kind: "workflow", WorkflowID: "wf-a", Enabled: true}},
+		},
+		{
+			ID:       "runninghub-b",
+			Protocol: "runninghub",
+			Workflows: []model.WorkflowEntry{{Provider: "runninghub", Kind: "workflow", WorkflowID: "wf-a", Enabled: true}},
+		},
+	}
+	billingName := workflowBillingName(WorkflowRef{Scope: "system", ChannelID: "runninghub-a", Kind: "workflow", WorkflowID: "wf-a"})
+	costs := normalizeModelCosts([]model.ModelCost{{Model: billingName, Credits: 13}}, channels)
+	if got := modelCostForChannel(costs, "runninghub-a", billingName); got != 13 {
+		t.Fatalf("workflow legacy price = %d, want 13", got)
+	}
+	if got := modelCostForChannel(costs, "runninghub-b", billingName); got != 0 {
+		t.Fatalf("workflow price must not leak to another channel = %d", got)
+	}
+	if got := modelCostForChannel(costs, "runninghub-b", workflowBillingName(WorkflowRef{Scope: "system", ChannelID: "runninghub-b", Kind: "workflow", WorkflowID: "wf-a"})); got != 0 {
+		t.Fatalf("unpriced workflow channel = %d", got)
+	}
+}
+
+func TestPublicChannelInfosIncludesAllowedWorkflowSummaries(t *testing.T) {
+	ref := WorkflowRef{Scope: "system", ChannelID: "comfy-a", Kind: "workflow", WorkflowID: "portrait"}
+	name := workflowBillingName(ref)
+	infos := publicChannelInfos([]model.ModelChannel{{
+		ID:       "comfy-a",
+		Protocol: "comfyui",
+		Workflows: []model.WorkflowEntry{{Provider: "comfyui", Kind: "workflow", WorkflowID: "portrait", Title: "Portrait", Capability: "image", Enabled: true}},
+	}}, nil, []string{name})
+	if len(infos) != 1 || len(infos[0].Workflows) != 1 || infos[0].Workflows[0].WorkflowID != "portrait" {
+		t.Fatalf("workflow public config = %#v", infos)
+	}
+	if filtered := publicChannelInfos([]model.ModelChannel{{
+		ID:       "comfy-a",
+		Protocol: "comfyui",
+		Workflows: []model.WorkflowEntry{{Provider: "comfyui", Kind: "workflow", WorkflowID: "portrait", Enabled: true}},
+	}}, nil, []string{"workflow:system:comfy-a:workflow:other"}); len(filtered) != 0 {
+		t.Fatalf("unlisted workflow should be hidden: %#v", filtered)
+	}
+}

@@ -48,11 +48,19 @@ func CreateCanvasImageTask(w http.ResponseWriter, r *http.Request) {
 		Fail(w, "缺少模型渠道")
 		return
 	}
-	channel, resolvedUserChannelID, err := selectAIRequestChannel(user, modelName, channelID, userChannelID)
+	channel, resolvedUserChannelID, err := selectAIRequestChannel(user, modelName, channelID, userChannelID, true)
 	if err != nil {
 		log.Printf("canvas image task select channel failed: model=%s err=%v", modelName, err)
 		failAIChannelSelect(w, err, "AI 接口请求失败")
 		return
+	}
+	credits := 0
+	if resolvedUserChannelID == "" {
+		credits, err = service.ModelCost(channel.ID, modelName)
+		if err != nil {
+			failAIChannelSelect(w, err, "AI 接口请求失败")
+			return
+		}
 	}
 	task, err := service.CreateCanvasImageTask(service.CanvasImageTaskCreateInput{
 		UserID:          user.ID,
@@ -65,6 +73,9 @@ func CreateCanvasImageTask(w http.ResponseWriter, r *http.Request) {
 		ChannelID:       channel.ID,
 		UserChannelID:   resolvedUserChannelID,
 		ChannelName:     channel.Name,
+		Credits:         credits,
+		BillingName:     modelName,
+		BillingPath:     endpoint,
 		Prompt:          prompt,
 		GenerationType:  strings.TrimPrefix(endpoint, "/images/"),
 		Endpoint:        endpoint,
@@ -201,11 +212,19 @@ func CreateCanvasAudioTask(w http.ResponseWriter, r *http.Request) {
 		Fail(w, "缺少模型渠道")
 		return
 	}
-	channel, resolvedUserChannelID, err := selectAIRequestChannel(user, modelName, channelID, userChannelID)
+	channel, resolvedUserChannelID, err := selectAIRequestChannel(user, modelName, channelID, userChannelID, true)
 	if err != nil {
 		log.Printf("canvas audio task select channel failed: model=%s err=%v", modelName, err)
 		failAIChannelSelect(w, err, "AI 接口请求失败")
 		return
+	}
+	credits := 0
+	if resolvedUserChannelID == "" {
+		credits, err = service.ModelCost(channel.ID, modelName)
+		if err != nil {
+			failAIChannelSelect(w, err, "AI 接口请求失败")
+			return
+		}
 	}
 	task, err := service.CreateCanvasAudioTask(service.CanvasAudioTaskCreateInput{
 		UserID:          user.ID,
@@ -217,6 +236,9 @@ func CreateCanvasAudioTask(w http.ResponseWriter, r *http.Request) {
 		ChannelID:       channel.ID,
 		UserChannelID:   resolvedUserChannelID,
 		ChannelName:     channel.Name,
+		Credits:         credits,
+		BillingName:     modelName,
+		BillingPath:     endpoint,
 		Prompt:          prompt,
 		Endpoint:        endpoint,
 		ContentType:     contentType,
@@ -420,6 +442,9 @@ func executeCanvasAIRequest(user model.AuthUser, endpoint string, body []byte, c
 }
 
 func saveFailedCanvasImageTask(task model.CanvasImageTask, message string, detail string) {
+	if task.Credits > 0 && task.ChannelID != "" {
+		_ = service.RefundUserCredits(task.UserID, task.ChannelID, task.Model, task.Credits, task.Endpoint)
+	}
 	task.Status = "failed"
 	task.CompletedAt = taskTime()
 	task.Error = boundedTaskError(firstNonEmpty(message, "图片生成失败"), 1000)
@@ -428,6 +453,9 @@ func saveFailedCanvasImageTask(task model.CanvasImageTask, message string, detai
 }
 
 func saveFailedCanvasAudioTask(task model.CanvasAudioTask, message string, detail string) {
+	if task.Credits > 0 && task.ChannelID != "" {
+		_ = service.RefundUserCredits(task.UserID, task.ChannelID, task.Model, task.Credits, task.Endpoint)
+	}
 	task.Status = "failed"
 	task.CompletedAt = taskTime()
 	task.Error = boundedTaskError(firstNonEmpty(message, "音频生成失败"), 1000)

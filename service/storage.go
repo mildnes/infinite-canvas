@@ -34,6 +34,8 @@ type UploadedStorageObject struct {
 	StorageKey string `json:"storageKey"`
 	Bytes      int64  `json:"bytes"`
 	MimeType   string `json:"mimeType"`
+	Width      int    `json:"width,omitempty"`
+	Height     int    `json:"height,omitempty"`
 }
 
 type DirectStorageObjectInput struct {
@@ -1005,6 +1007,12 @@ func extensionForContentType(contentType string) string {
 		return ".gif"
 	case "image/png":
 		return ".png"
+	case "video/mp4":
+		return ".mp4"
+	case "video/webm":
+		return ".webm"
+	case "video/quicktime":
+		return ".mov"
 	case "audio/mpeg", "audio/mp3":
 		return ".mp3"
 	case "audio/wav", "audio/x-wav":

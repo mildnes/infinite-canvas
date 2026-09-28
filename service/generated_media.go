@@ -1,11 +1,16 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"net/http"
 	"os"
@@ -19,6 +24,7 @@ import (
 	"github.com/tigerowo/infinite-canvas/config"
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/repository"
+	"gorm.io/gorm"
 )
 
 const generatedMediaProviderID = "local-generated"
@@ -39,10 +45,41 @@ func GeneratedMediaDir() string {
 
 // SaveGeneratedMedia persists bytes before writing the task's short reference.
 func SaveGeneratedMedia(userID, contentType string, data []byte) (UploadedStorageObject, error) {
+	return saveGeneratedMedia(userID, contentType, data, uuid.NewString())
+}
+
+// SaveGeneratedMediaStable uses a deterministic result key for retried uploads.
+// The caller must scope stableKey to the owning task and output identifier.
+func SaveGeneratedMediaStable(userID, contentType string, data []byte, stableKey string) (UploadedStorageObject, error) {
+	stableKey = strings.TrimSpace(stableKey)
+	if stableKey == "" {
+		return UploadedStorageObject{}, errors.New("生成媒体结果标识无效")
+	}
+	objectID := uuid.NewSHA1(uuid.NameSpaceURL, []byte("infinite-canvas/generated-media/"+stableKey)).String()
+	return saveGeneratedMedia(userID, contentType, data, objectID)
+}
+
+func saveGeneratedMedia(userID, contentType string, data []byte, objectID string) (UploadedStorageObject, error) {
 	if userID == "" || len(data) == 0 {
 		return UploadedStorageObject{}, errors.New("生成媒体内容无效")
 	}
-	objectID := uuid.NewString()
+	contentType = strings.TrimSpace(strings.Split(contentType, ";")[0])
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	sum := sha256.Sum256(data)
+	checksum := hex.EncodeToString(sum[:])
+	if existing, err := repository.GetStorageObject(objectID); err == nil {
+		if existing.ProviderID != generatedMediaProviderID || existing.CreatedBy != userID || existing.SHA256 != checksum || existing.MimeType != contentType || existing.Bytes != int64(len(data)) {
+			return UploadedStorageObject{}, errors.New("生成媒体结果标识已被其他内容占用")
+		}
+		return UploadedStorageObject{
+			ID: objectID, URL: "/api/files/" + objectID + "/content", StorageKey: "server:" + objectID,
+			Bytes: existing.Bytes, MimeType: existing.MimeType, Width: existing.Width, Height: existing.Height,
+		}, nil
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return UploadedStorageObject{}, err
+	}
 	name := objectID + extensionForContentType(contentType)
 	dir := GeneratedMediaDir()
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -81,10 +118,10 @@ func SaveGeneratedMedia(userID, contentType string, data []byte) (UploadedStorag
 		_ = os.Remove(filepath.Join(dir, name))
 		return UploadedStorageObject{}, err
 	}
-	sum := sha256.Sum256(data)
+	width, height := generatedMediaDimensions(data)
 	object := model.StorageObject{
 		ID: objectID, ProviderID: generatedMediaProviderID, ObjectKey: name,
-		MimeType: contentType, Bytes: int64(len(data)), SHA256: hex.EncodeToString(sum[:]),
+		MimeType: contentType, Bytes: int64(len(data)), SHA256: checksum, Width: width, Height: height,
 		CreatedBy: userID, CreatedAt: now(),
 	}
 	if _, err := repository.SaveStorageObject(object); err != nil {
@@ -93,8 +130,16 @@ func SaveGeneratedMedia(userID, contentType string, data []byte) (UploadedStorag
 	}
 	return UploadedStorageObject{
 		ID: objectID, URL: "/api/files/" + objectID + "/content", StorageKey: "server:" + objectID,
-		Bytes: object.Bytes, MimeType: contentType,
+		Bytes: object.Bytes, MimeType: contentType, Width: width, Height: height,
 	}, nil
+}
+
+func generatedMediaDimensions(data []byte) (int, int) {
+	config, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil || config.Width <= 0 || config.Height <= 0 {
+		return 0, 0
+	}
+	return config.Width, config.Height
 }
 
 // DiscardGeneratedMedia is used only when persisting the owning task failed.

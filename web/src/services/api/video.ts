@@ -9,13 +9,12 @@ import { isKIEGrokVideoModel, isKIEKlingV3Config, kieKlingOmniVariant } from "./
 import { isAgnesVideoV25Model, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
 import { resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer } from "@/services/file-storage";
 import { autoSyncToCloud, imageToDataUrl, resolveImageUrl } from "@/services/image-storage";
-import { getStorageObjectInfo } from "@/services/api/storage";
 import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig, type VideoElementReference } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
-export type VideoResponse = { id: string; task_id?: string; video_id?: string; source_id?: string; sourceId?: string; channelId?: string; userChannelId?: string; channelName?: string; channel_id?: string; user_channel_id?: string; channel_name?: string; status?: string; video_url?: string; url?: string; storageKey?: string; width?: number; height?: number; bytes?: number; mimeType?: string; progress?: number; error?: { message?: string }; size?: string; seconds?: string; model?: string; created_at?: string | number; createdAt?: string | number; started_at?: string | number; startedAt?: string | number; request_body?: string };
+export type VideoResponse = { id: string; task_id?: string; video_id?: string; source_id?: string; sourceId?: string; channelId?: string; userChannelId?: string; channelName?: string; workflowRef?: string; channel_id?: string; user_channel_id?: string; channel_name?: string; status?: string; video_url?: string; url?: string; storageKey?: string; progress?: number; error?: { message?: string }; size?: string; seconds?: string; model?: string; mimeType?: string; bytes?: number; width?: number; height?: number; created_at?: string | number; createdAt?: string | number; started_at?: string | number; startedAt?: string | number; request_body?: string };
 type ApiVideoEnvelope = { code: number; data?: VideoResponse | VideoResponse[] | null; msg?: string; message?: string };
 type ApiVideoResponse = VideoResponse | ApiVideoEnvelope;
 export type VideoGenerationResult = { id: string; url: string; durationMs: number; width: number; height: number; bytes: number; mimeType: string; task: VideoResponse };
@@ -90,19 +89,6 @@ function refreshRemoteUser(config: AiConfig) {
     if (usesAccountProxy(config)) void useUserStore.getState().hydrateUser();
 }
 
-function videoSyncKey(config: AiConfig, task: VideoResponse) {
-    const channelId = config.channelMode === "remote" ? channelIdForActiveModel(config) : localChannelForActiveModel(config)?.id;
-    return `${config.channelMode}:${channelId || config.baseUrl}:${task.id || ""}:${task.task_id || ""}:${task.video_id || ""}`;
-}
-
-async function syncGeneratedVideo(task: VideoResponse, config: AiConfig): Promise<VideoResponse> {
-    const url = task.video_url || task.url || "";
-    const status = (task.status || "").toLowerCase();
-    if (task.storageKey || isFailedVideoStatus(status) || !url || (status && !isCompletedVideoStatus(status))) return task;
-    const media = await autoSyncToCloud(`video:${videoSyncKey(config, task)}`, () => uploadRemoteMediaToServer(url, "video"));
-    return media ? { ...task, url: media.url, video_url: media.url, storageKey: media.storageKey, width: media.width, height: media.height, bytes: media.bytes, mimeType: media.mimeType } : task;
-}
-
 export type VideoReferenceInput = {
     references?: ReferenceImage[];
     videoReferences?: ReferenceVideo[];
@@ -167,7 +153,7 @@ export async function pollCreatedVideoGenerationTask(config: AiConfig, task: Vid
     try {
         if (initialDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, initialDelayMs));
         for (; ;) {
-            const video = await cacheProtectedGeminiVideo(config, model, await pollOnce());
+            const video = await cacheProtectedVideo(config, model, await cacheProtectedGeminiVideo(config, model, await pollOnce()));
             onPoll?.(video);
             if (isFailedVideoStatus(video.status)) throw new VideoRequestError(video.error?.message || "视频生成失败", video);
             if (typeof video.progress === "number") onProgress?.(video.progress, video);
@@ -177,7 +163,6 @@ export async function pollCreatedVideoGenerationTask(config: AiConfig, task: Vid
             }
             await new Promise((resolve) => setTimeout(resolve, VIDEO_POLL_INTERVAL_MS));
         }
-        completed = await syncGeneratedVideo(completed, config);
         const videoUrl = completed?.video_url || completed?.url || "";
         if (!videoUrl) throw new VideoRequestError("视频生成完成但没有返回视频地址", completed);
         const result = buildVideoGenerationResult(completed, videoUrl, Date.now() - startedAt);
@@ -199,7 +184,24 @@ export async function pollVideoGenerationTaskStatus(config: AiConfig, task: Vide
     const result = directProvider
         ? await (await import("@/services/api/direct-ai")).pollDirectVideoTask(config, directProvider, pollId)
         : unwrapVideoResponseForConfig(config, model, (await axios.get<ApiVideoResponse>(aiVideoPollUrl(config, model, pollId), { headers: aiHeaders(config), params: usesAccountProxy(config) ? { model } : undefined })).data);
-    return syncGeneratedVideo(await cacheProtectedGeminiVideo(config, model, await cacheProtectedGrokVideo(config, model, result)), config);
+    return syncGeneratedVideo(await cacheProtectedGeminiVideo(config, model, await cacheProtectedVideo(config, model, result)), config, true);
+}
+
+function videoSyncKey(config: AiConfig, task: VideoResponse) {
+    const channelId = config.channelMode === "remote" ? channelIdForActiveModel(config) : localChannelForActiveModel(config)?.id;
+    return `${config.channelMode}:${channelId || config.baseUrl}:${task.id}:${task.task_id || ""}:${task.video_id || ""}`;
+}
+
+async function syncGeneratedVideo(task: VideoResponse, config: AiConfig, contentResolved = false): Promise<VideoResponse> {
+    const url = task.video_url || task.url || "";
+    if (task.storageKey || isFailedVideoStatus(task.status) || (!isCompletedVideoStatus(task.status) && !url)) return task;
+    const media = await autoSyncToCloud(`video:${videoSyncKey(config, task)}`, async () => {
+        const model = config.model || config.videoModel;
+        const cached = contentResolved ? task : await cacheProtectedGeminiVideo(config, model, await cacheProtectedVideo(config, model, task));
+        if (cached.storageKey) return { url: cached.video_url || cached.url || url, storageKey: cached.storageKey };
+        return url ? uploadRemoteMediaToServer(url, "video") : null;
+    });
+    return media ? { ...task, url: media.url, video_url: media.url, storageKey: media.storageKey } : task;
 }
 
 export async function listVideoGenerationTasks(config: AiConfig) {
@@ -219,54 +221,35 @@ export async function deleteVideoGenerationTask(config: AiConfig, task?: VideoRe
 
 function isGrok2APIVideoConfig(config: AiConfig, model: string) {
     const normalizedModel = model.trim().toLowerCase();
-    const protocol = videoChannelProtocol(config, model);
-    return normalizedModel.startsWith("grok-imagine-video") && (protocol === "grok2api" || protocol === "xai");
+    return (normalizedModel === "grok-imagine-video" || normalizedModel === "grok-imagine-video-1.5") && videoChannelProtocol(config, model) === "grok2api";
 }
 
-async function cacheProtectedGrokVideo(config: AiConfig, model: string, task: VideoResponse) {
+async function cacheProtectedVideo(config: AiConfig, model: string, task: VideoResponse) {
     const url = task.video_url || task.url || "";
-    if (!isCompletedVideoStatus(task.status) || task.storageKey || !isGrok2APIVideoConfig(config, model) || !/\/v1\/videos\/[^/]+\/content(?:[?#]|$)/.test(url)) return task;
+    const needsGrokContent = isGrok2APIVideoConfig(config, model) && /\/v1\/videos\/[^/]+\/content(?:[?#]|$)/.test(url);
+    if (!isCompletedVideoStatus(task.status) || task.storageKey || !needsGrokContent) return task;
     const taskId = task.task_id || task.id || task.video_id || "";
     const response = await fetch(`${aiApiUrl(config, `/videos/${encodeURIComponent(taskId)}/content`)}?model=${encodeURIComponent(model)}`, { headers: aiHeaders(config) });
     if (!response.ok) throw new VideoRequestError(`视频内容下载失败：${response.status}`, task);
     const media = await uploadMediaFile(await response.blob(), "generated-video", `video-content:${videoSyncKey(config, task)}`);
-    return { ...task, url: media.url, video_url: media.url, storageKey: media.storageKey, width: media.width, height: media.height, bytes: media.bytes, mimeType: media.mimeType };
+    return { ...task, url: media.url, video_url: media.url, storageKey: media.storageKey };
 }
 
 async function createGrok2APIVideoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
-    const references = [input.firstFrame, ...input.references, input.lastFrame].filter((reference): reference is ReferenceImage => Boolean(reference));
-    const urls = await Promise.all(references.map((reference) => imageToDataUrl(reference)));
-    const multiReferenceMode = urls.length > 1;
     const body: Record<string, unknown> = {
         model,
         prompt,
-        duration: normalizeGrok2APIVideoDuration(config.videoSeconds),
-        resolution: normalizeGrok2APIVideoResolution(config.vquality, multiReferenceMode),
+        duration: Number(normalizeVideoSeconds(config.videoSeconds)),
+        resolution: normalizeVideoResolution(config.vquality),
     };
-    const aspectRatio = normalizeGrok2APIVideoAspectRatio(config.size);
-    if (aspectRatio) body.aspect_ratio = aspectRatio;
+    const aspectRatio = normalizeSeedanceRatio(config.size);
+    if (aspectRatio !== "adaptive") body.aspect_ratio = aspectRatio;
+
+    const urls = await Promise.all(input.references.map((reference) => imageToDataUrl(reference)));
     if (urls.length === 1) body.image = { url: urls[0] };
-    if (urls.length > 1) body.reference_images = urls.map((url) => ({ url }));
+    else if (urls.length > 1) body.reference_images = urls.map((url) => ({ url }));
 
     return body;
-}
-
-function normalizeGrok2APIVideoResolution(value: string, multiReferenceMode = false) {
-    if (multiReferenceMode) return "720p";
-    const normalized = String(value || "").toLowerCase();
-    if (normalized.includes("1080") || normalized.includes("2k") || normalized.includes("4k")) return "1080p";
-    return "720p";
-}
-
-function normalizeGrok2APIVideoDuration(value: string) {
-    const seconds = Math.floor(Number(value) || 6);
-    return Math.max(4, Math.min(15, seconds));
-}
-
-function normalizeGrok2APIVideoAspectRatio(size: string) {
-    const ratio = normalizeSeedanceRatio(size);
-    if (ratio === "adaptive" || ratio === "21:9") return "16:9";
-    return ratio;
 }
 
 async function createAgnesVideoV25RequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
@@ -295,9 +278,9 @@ async function createAgnesVideoV25RequestBody(config: AiConfig, model: string, p
 }
 
 async function createVideoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
+    if (videoChannelProtocol(config, model) === "ark") return createArkSeedanceVideoRequestBody(config, model, prompt, input);
     const size = normalizeVideoSize(config.size);
     if (isGeminiVideoModel(model) && isGeminiConfig(config, model)) return createGeminiVeoRequestBody(config, model, prompt, input);
-    if (videoChannelProtocol(config, model) === "ark") return createArkSeedanceVideoRequestBody(config, model, prompt, input);
     if (isGrok2APIVideoConfig(config, model)) return createGrok2APIVideoRequestBody(config, model, prompt, input);
     if (isMiniMaxH3Config(config, model)) return createMiniMaxH3VideoRequestBody(config, model, prompt, input);
     if (isCogVideoX3Model(model)) return createCogVideoX3RequestBody(config, model, prompt, input);
@@ -389,8 +372,8 @@ async function createArkSeedanceVideoRequestBody(config: AiConfig, model: string
         input.firstFrame ? imageToAgnesReference(input.firstFrame) : "",
         input.lastFrame ? imageToAgnesReference(input.lastFrame) : "",
     ]);
-    const videos = await Promise.all(input.videoReferences.map((reference) => arkMediaReferenceUrl(reference)));
-    const audios = await Promise.all(input.audioReferences.map((reference) => arkMediaReferenceUrl(reference)));
+    const videos = input.videoReferences.map((item) => item.url).filter(Boolean);
+    const audios = input.audioReferences.map((item) => item.url).filter(Boolean);
     return {
         model,
         prompt,
@@ -633,19 +616,6 @@ async function mediaReferenceToFormValue(media: ReferenceVideo | ReferenceAudio)
     return mediaReferenceToFile(media);
 }
 
-async function arkMediaReferenceUrl(media: ReferenceVideo | ReferenceAudio) {
-    const directUrl = publicHttpUrl(media.url);
-    if (directUrl) return directUrl;
-    const storageKey = media.storageKey || "";
-    if (storageKey.startsWith("server:") && !storageKey.startsWith("server:webdav:")) {
-        const info = await getStorageObjectInfo(storageKey.slice("server:".length)).catch(() => null);
-        const publicUrl = publicHttpUrl(info?.publicUrl);
-        if (publicUrl) return publicUrl;
-    }
-    const label = media.type?.toLowerCase().startsWith("audio/") ? "音频" : "视频";
-    throw new VideoRequestError(`火山方舟参考${label}必须具有公网访问地址`);
-}
-
 async function imageToAgnesReference(image: ReferenceImage) {
     const resolvedUrl = await resolveImageUrl(image.storageKey, "");
     for (const url of [image.dataUrl, image.url, resolvedUrl]) {
@@ -708,7 +678,7 @@ function normalizeVideoSecondsForModel(model: string, value: string) {
     const seconds = Number(normalizeVideoSeconds(value));
     const key = modelKey(model);
     if (key.includes("sora-2")) return closestAllowedSeconds(seconds, [4, 8, 12, 16, 20]);
-    if (key.includes("veo3-1") || key.includes("veo-3-1")) return "8";
+    if (key.includes("veo3-1") || key.includes("veo-3-1")) return closestAllowedSeconds(seconds, [4, 6, 8]);
     if (key.includes("minimax-hailuo-02")) return closestAllowedSeconds(seconds, [5, 10]);
     if (key.includes("minimax-hailuo-2-3")) return closestAllowedSeconds(seconds, [6, 10]);
     if (key.includes("omni-flash-ext")) return closestAllowedSeconds(seconds, [4, 6, 8, 10]);
@@ -845,7 +815,7 @@ async function cacheProtectedGeminiVideo(config: AiConfig, model: string, task: 
     );
     if (!response.ok) throw new VideoRequestError(`视频内容下载失败：${response.status}`, task);
     const media = await uploadMediaFile(await response.blob(), "generated-video", `video-content:${videoSyncKey(config, task)}`);
-    return { ...task, url: media.url, video_url: media.url, storageKey: media.storageKey, width: media.width, height: media.height, bytes: media.bytes, mimeType: media.mimeType };
+    return { ...task, url: media.url, video_url: media.url, storageKey: media.storageKey };
 }
 
 function withoutVideoModel(body: FormData | Record<string, unknown>) {
@@ -970,7 +940,7 @@ function normalizeVideoResponse(value: unknown): VideoResponse {
 
 function buildVideoGenerationResult(task: VideoResponse, url: string, durationMs: number): VideoGenerationResult {
     const size = parseVideoSize((task as Record<string, unknown>).size);
-    return { id: task.id, url, durationMs, width: task.width || size.width, height: task.height || size.height, bytes: task.bytes || 0, mimeType: task.mimeType || "video/mp4", task };
+    return { id: task.id, url, durationMs, width: size.width, height: size.height, bytes: 0, mimeType: "video/mp4", task };
 }
 
 function parseVideoSize(value: unknown) {
@@ -1052,7 +1022,7 @@ export async function pollVideoGenerationTask(taskId: string): Promise<VideoResp
     const token = useUserStore.getState().token;
     if (!token) throw new Error("请先登录");
     const response = await axios.get<ApiVideoEnvelope>(aiApiUrl(config, `/videos/${encodeURIComponent(taskId)}?model=`), { headers: { Authorization: `Bearer ${token}` } });
-    return syncGeneratedVideo(unwrapVideoResponse(response.data), config);
+    return unwrapVideoResponse(response.data);
 }
 
 export function storeGeneratedVideo(result: VideoGenerationResult) {
