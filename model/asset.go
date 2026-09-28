@@ -24,7 +24,8 @@ type Asset struct {
 
 // AssetList 素材分页结果。
 type AssetList struct {
-	Items []Asset  `json:"items"`
-	Tags  []string `json:"tags"`
-	Total int      `json:"total"`
+	Items      []Asset  `json:"items"`
+	Tags       []string `json:"tags"`
+	Categories []string `json:"categories"`
+	Total      int      `json:"total"`
 }

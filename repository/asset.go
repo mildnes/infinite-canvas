@@ -26,21 +26,30 @@ func ListAssets(q model.Query) ([]model.Asset, int64, error) {
 	return items, total, err
 }
 
-// ListAssetTags 返回当前素材查询条件下的全部标签。
-func ListAssetTags(q model.Query) ([]string, error) {
+// ListAssetFilters 返回当前素材查询条件下的全部标签和分类。
+func ListAssetFilters(q model.Query) ([]string, []string, error) {
 	db, err := DB()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	q.Normalize()
 	q.Tags = nil
+	q.Category = ""
 	tx := applyAssetFilters(db.Model(&model.Asset{}), q)
 
 	var items []model.Asset
-	if err := tx.Select("tags").Find(&items).Error; err != nil {
-		return nil, err
+	if err := tx.Select("tags", "category").Find(&items).Error; err != nil {
+		return nil, nil, err
 	}
-	return assetTagsFromItems(items), nil
+	categories := []string{}
+	seen := map[string]bool{}
+	for _, item := range items {
+		if item.Category != "" && !seen[item.Category] {
+			seen[item.Category] = true
+			categories = append(categories, item.Category)
+		}
+	}
+	return assetTagsFromItems(items), categories, nil
 }
 
 // SaveAsset 保存素材，并在更新时保留原创建时间。
@@ -70,10 +79,17 @@ func DeleteAsset(id string) error {
 func applyAssetFilters(tx *gorm.DB, q model.Query) *gorm.DB {
 	if q.Keyword != "" {
 		like := "%" + q.Keyword + "%"
-		tx = tx.Where("title LIKE ? OR description LIKE ? OR content LIKE ?", like, like, like)
+		tagsColumn := "CAST(tags AS TEXT)"
+		if tx.Dialector.Name() == "mysql" {
+			tagsColumn = "CAST(tags AS CHAR)"
+		}
+		tx = tx.Where("title LIKE ? OR description LIKE ? OR content LIKE ? OR category LIKE ? OR "+tagsColumn+" LIKE ?", like, like, like, like, like)
 	}
 	if isActiveAssetOption(q.Type) {
 		tx = tx.Where("type = ?", q.Type)
+	}
+	if isActiveAssetOption(q.Category) {
+		tx = tx.Where("category = ?", q.Category)
 	}
 	return applyAssetTagsFilter(tx, q.Tags)
 }

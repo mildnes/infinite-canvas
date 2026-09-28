@@ -23,6 +23,7 @@ type AssetBase<T extends AssetKind> = {
     title: string;
     coverUrl: string;
     tags: string[];
+    category?: string;
     source?: string;
     note?: string;
     createdAt: string;

@@ -296,15 +296,34 @@ function MyAssetsTab({ theme, onAdd, onAssetDragStart, onAssetDragEnd }: { theme
     const assets = useAssetStore((state) => state.assets);
     const [keyword, setKeyword] = useState("");
     const [type, setType] = useState("");
+    const [category, setCategory] = useState("");
+    const [selectedTags, setSelectedTags] = useState<string[]>([]);
+    const [page, setPage] = useState(1);
+    const categories = useMemo(() => Array.from(new Set(assets.flatMap((asset) => asset.category ? [asset.category] : []))), [assets]);
+    const tags = useMemo(() => Array.from(new Set(assets.flatMap((asset) => asset.tags || []))), [assets]);
     const filtered = useMemo(() => {
         const query = keyword.trim().toLowerCase();
-        return assets.filter((asset) => (!type || asset.kind === type) && (!query || [asset.title, ...(asset.tags || [])].join(" ").toLowerCase().includes(query)));
-    }, [assets, keyword, type]);
+        return assets.filter((asset) => (!type || asset.kind === type) && (!category || asset.category === category) && (!selectedTags.length || selectedTags.some((tag) => asset.tags.includes(tag))) && (!query || [asset.title, asset.category || "", ...(asset.tags || [])].join(" ").toLowerCase().includes(query)));
+    }, [assets, keyword, type, category, selectedTags]);
+    const items = filtered.slice((page - 1) * ASSET_PAGE_SIZE, page * ASSET_PAGE_SIZE);
+
+    useEffect(() => setPage((value) => Math.min(value, Math.max(1, Math.ceil(filtered.length / ASSET_PAGE_SIZE)))), [filtered.length]);
+    useEffect(() => setPage(1), [keyword, type, category, selectedTags]);
 
     return (
         <>
             <div className="flex items-center gap-4 px-3 pb-2">
                 {ASSET_TYPE_OPTIONS.map((option) => <AssetSourceTab key={option.value || "all"} label={option.label} active={type === option.value} theme={theme} onClick={() => setType(option.value)} />)}
+            </div>
+            <div className="grid grid-cols-2 gap-2 px-3 pb-2">
+                <div className="min-w-0">
+                    <div className="mb-1 text-xs opacity-50" style={{ color: theme.node.text }}>分类</div>
+                    <Select size="small" className="w-full" value={category} onChange={setCategory} options={[{ label: "全部", value: "" }, ...categories.map((item) => ({ label: item, value: item }))]} />
+                </div>
+                <div className="min-w-0">
+                    <div className="mb-1 text-xs opacity-50" style={{ color: theme.node.text }}>标签</div>
+                    <Select mode="multiple" size="small" className="w-full" value={selectedTags} placeholder="全部" allowClear maxTagCount={1} onChange={(values) => setSelectedTags(values.includes("") ? [] : values)} options={[{ label: "全部", value: "" }, ...tags.map((tag) => ({ label: tag, value: tag }))]} />
+                </div>
             </div>
             <div className="flex items-center gap-2 px-3 pb-2">
                 <Input size="small" allowClear prefix={<Search className="size-3.5 text-stone-400" />} placeholder="搜索素材" value={keyword} onChange={(event) => setKeyword(event.target.value)} />
@@ -314,7 +333,8 @@ function MyAssetsTab({ theme, onAdd, onAssetDragStart, onAssetDragEnd }: { theme
                 </button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-                {filtered.length ? <div className="grid grid-cols-2 gap-2 px-1 pt-1">{filtered.map((asset) => <AssetDragCard key={asset.id} asset={asset} theme={theme} onAssetDragStart={onAssetDragStart} onAssetDragEnd={onAssetDragEnd} />)}</div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无素材" className="pt-16" />}
+                {filtered.length ? <div className="grid grid-cols-2 gap-2 px-1 pt-1">{items.map((asset) => <AssetDragCard key={asset.id} asset={asset} theme={theme} onAssetDragStart={onAssetDragStart} onAssetDragEnd={onAssetDragEnd} />)}</div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无素材" className="pt-16" />}
+                {filtered.length > ASSET_PAGE_SIZE ? <Pagination className="!mt-3 flex justify-center" size="small" current={page} pageSize={ASSET_PAGE_SIZE} total={filtered.length} showSizeChanger={false} onChange={setPage} /> : null}
             </div>
         </>
     );
@@ -323,25 +343,39 @@ function MyAssetsTab({ theme, onAdd, onAssetDragStart, onAssetDragEnd }: { theme
 function LibraryAssetsTab({ theme, onAssetDragStart, onAssetDragEnd }: { theme: CanvasTheme; onAssetDragStart: (payload: InsertAssetPayload) => void; onAssetDragEnd: () => void }) {
     const [keyword, setKeyword] = useState("");
     const [type, setType] = useState("");
+    const [category, setCategory] = useState("");
+    const [selectedTags, setSelectedTags] = useState<string[]>([]);
     const [page, setPage] = useState(1);
     const query = useQuery({
-        queryKey: ["canvas-side-library-assets", keyword, type, page],
-        queryFn: () => fetchAssetLibrary({ keyword, type, page, pageSize: ASSET_PAGE_SIZE }),
+        queryKey: ["canvas-side-library-assets", keyword, type, category, selectedTags, page],
+        queryFn: () => fetchAssetLibrary({ keyword, type, category, tag: selectedTags, page, pageSize: ASSET_PAGE_SIZE }),
         retry: false,
     });
     const items = query.data?.items || [];
+    const categories = query.data?.categories || [];
+    const tags = query.data?.tags || [];
 
-    useEffect(() => setPage(1), [keyword, type]);
+    useEffect(() => setPage(1), [keyword, type, category, selectedTags]);
 
     return (
         <>
+            <div className="grid grid-cols-2 gap-2 px-3 pb-2">
+                <div className="min-w-0">
+                    <div className="mb-1 text-xs opacity-50" style={{ color: theme.node.text }}>分类</div>
+                    <Select size="small" className="w-full" value={category} onChange={setCategory} options={[{ label: "全部", value: "" }, ...categories.map((item) => ({ label: item, value: item }))]} />
+                </div>
+                <div className="min-w-0">
+                    <div className="mb-1 text-xs opacity-50" style={{ color: theme.node.text }}>标签</div>
+                    <Select mode="multiple" size="small" className="w-full" value={selectedTags} placeholder="全部" allowClear maxTagCount={1} onChange={(values) => setSelectedTags(values.includes("") ? [] : values)} options={[{ label: "全部", value: "" }, ...tags.map((tag) => ({ label: tag, value: tag }))]} />
+                </div>
+            </div>
             <div className="flex items-center gap-2 px-3 pb-2">
                 <Input size="small" allowClear prefix={<Search className="size-3.5 text-stone-400" />} placeholder="搜索素材" value={keyword} onChange={(event) => setKeyword(event.target.value)} />
                 <Select size="small" variant="borderless" className="w-16" value={type} onChange={setType} options={ASSET_TYPE_OPTIONS} />
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
                 {query.isLoading ? <div className="flex justify-center pt-16"><Spin size="small" /></div> : items.length ? <div className="grid grid-cols-2 gap-2 px-1 pt-1">{items.map((asset) => <LibraryAssetDragCard key={asset.id} asset={asset} theme={theme} onAssetDragStart={onAssetDragStart} onAssetDragEnd={onAssetDragEnd} />)}</div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无素材" className="pt-16" />}
-                {query.data?.total && query.data.total > ASSET_PAGE_SIZE ? <Pagination className="mt-3 flex justify-center" size="small" current={page} pageSize={ASSET_PAGE_SIZE} total={query.data.total} showSizeChanger={false} onChange={setPage} /> : null}
+                {query.data?.total && query.data.total > ASSET_PAGE_SIZE ? <Pagination className="!mt-3 flex justify-center" size="small" current={page} pageSize={ASSET_PAGE_SIZE} total={query.data.total} showSizeChanger={false} onChange={setPage} /> : null}
             </div>
         </>
     );

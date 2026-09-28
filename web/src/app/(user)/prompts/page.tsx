@@ -84,7 +84,7 @@ export default function PromptsPage() {
                                 </div>
                                 <div className="grid gap-2 sm:grid-cols-[56px_minmax(0,1fr)] sm:items-start">
                                     <div className="pt-2 text-xs font-medium text-stone-500 dark:text-stone-400">标签</div>
-                                    <div className="flex flex-wrap gap-2">
+                                    <div className="thin-scrollbar flex max-h-[112px] flex-wrap gap-2 overflow-y-auto pr-1">
                                         {promptTags.map((tag) => (
                                             <Tag.CheckableTag
                                                 key={tag}

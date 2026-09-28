@@ -17,12 +17,14 @@ export type AssetLibraryItem = {
 export type AssetLibraryResponse = {
     items: AssetLibraryItem[];
     tags: string[];
+    categories: string[];
     total: number;
 };
 
 export type AssetLibraryQuery = {
     keyword?: string;
     type?: string;
+    category?: string;
     tag?: string[];
     page?: number;
     pageSize?: number;

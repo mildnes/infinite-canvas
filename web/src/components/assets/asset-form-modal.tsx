@@ -1,8 +1,8 @@
 "use client";
 
-import { Upload } from "lucide-react";
+import { ChevronDown, Upload } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
-import { App, Button, Form, Input, Modal, Select, Space, Tag, Typography } from "antd";
+import { App, AutoComplete, Button, Form, Input, Modal, Select, Space, Tag, Typography } from "antd";
 
 import { formatBytes, readFileAsDataUrl } from "@/lib/image-utils";
 import { uploadAssetMediaFile } from "@/services/file-storage";
@@ -14,6 +14,7 @@ type AssetFormValues = {
     title: string;
     coverUrl: string;
     tags: string[];
+    category?: string;
     source?: string;
     note?: string;
     content?: string;
@@ -34,6 +35,7 @@ export function AssetFormModal({ open, asset = null, onClose }: AssetFormModalPr
     const coverInputRef = useRef<HTMLInputElement>(null);
     const imageInputRef = useRef<HTMLInputElement>(null);
     const mediaInputRef = useRef<HTMLInputElement>(null);
+    const assets = useAssetStore((state) => state.assets);
     const addAsset = useAssetStore((state) => state.addAsset);
     const updateAsset = useAssetStore((state) => state.updateAsset);
     const [formKind, setFormKind] = useState<AssetKind>("text");
@@ -54,10 +56,11 @@ export function AssetFormModal({ open, asset = null, onClose }: AssetFormModalPr
             title: asset.title,
             coverUrl: asset.coverUrl,
             tags: asset.tags || [],
+            category: asset.category,
             source: asset.source,
             note: asset.note,
             content: asset.kind === "text" ? asset.data.content : asset.kind === "image" ? asset.data.dataUrl : asset.data.url,
-        } : { kind: "text", title: "", coverUrl: "", tags: [], source: "手动添加", note: "", content: "" });
+        } : { kind: "text", title: "", coverUrl: "", tags: [], category: "", source: "手动添加", note: "", content: "" });
     }, [asset, form, open]);
 
     const saveAsset = async () => {
@@ -66,6 +69,7 @@ export function AssetFormModal({ open, asset = null, onClose }: AssetFormModalPr
             title: values.title.trim(),
             coverUrl: values.coverUrl?.trim() || (values.kind === "image" && imageDraft ? imageDraft.dataUrl : ""),
             tags: values.tags || [],
+            category: values.category?.trim(),
             source: values.source?.trim(),
             note: values.note?.trim(),
             metadata: asset?.metadata || { source: "manual" },
@@ -80,7 +84,15 @@ export function AssetFormModal({ open, asset = null, onClose }: AssetFormModalPr
                 message.error("请选择图片文件或填写图片 URL");
                 return;
             }
-            const data = imageDraft || { dataUrl: url, width: 0, height: 0, bytes: 0, mimeType: "image/*" };
+            let data = imageDraft || { dataUrl: url, width: 0, height: 0, bytes: 0, mimeType: "image/*" };
+            if (!imageDraft) {
+                try {
+                    const blob = await (await fetch(url)).blob();
+                    const bitmap = await createImageBitmap(blob);
+                    data = { dataUrl: url, width: bitmap.width, height: bitmap.height, bytes: blob.size, mimeType: blob.type || "image/*" };
+                    bitmap.close();
+                } catch {}
+            }
             const nextAsset = { ...base, coverUrl: base.coverUrl || data.dataUrl, kind: "image" as const, data };
             asset ? updateAsset(asset.id, nextAsset) : addAsset(nextAsset);
         } else if (values.kind === "video") {
@@ -169,13 +181,16 @@ export function AssetFormModal({ open, asset = null, onClose }: AssetFormModalPr
                             <Select mode="tags" tokenSeparators={[",", "，"]} placeholder="输入标签后回车" />
                         </Form.Item>
                         <div className="grid gap-4 sm:grid-cols-2">
-                            <Form.Item name="source" label="来源">
-                                <Input placeholder="手动添加 / 画布 / 提示词库" />
+                            <Form.Item name="category" label="分类">
+                                <AutoComplete allowClear suffixIcon={<ChevronDown className="size-3.5" />} options={Array.from(new Set(assets.flatMap((item) => item.category ? [item.category] : []))).map((value) => ({ value }))} placeholder="选择或输入分类" />
                             </Form.Item>
-                            <Form.Item name="note" label="备注">
-                                <Input placeholder="可选" />
+                            <Form.Item name="source" label="来源">
+                                <Input placeholder="手动添加 / 画布 / 素材库" />
                             </Form.Item>
                         </div>
+                        <Form.Item name="note" label="备注">
+                            <Input placeholder="可选" />
+                        </Form.Item>
                         {formKind === "text" ? (
                             <Form.Item name="content" label="文本内容" rules={[{ required: true, message: "请输入文本内容" }]}>
                                 <Input.TextArea rows={8} placeholder="保存提示词、说明文案、参考描述等文本素材" />

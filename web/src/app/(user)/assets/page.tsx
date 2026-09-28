@@ -29,22 +29,28 @@ export default function AssetsPage() {
     const removeAsset = useAssetStore((state) => state.removeAsset);
     const [keyword, setKeyword] = useState("");
     const [kindFilter, setKindFilter] = useState<AssetKind | "all">("all");
+    const [categoryFilter, setCategoryFilter] = useState("");
+    const [tagFilters, setTagFilters] = useState<string[]>([]);
     const [page, setPage] = useState(1);
-    const [pageSize, setPageSize] = useState(10);
+    const [pageSize, setPageSize] = useState(12);
     const [editingAsset, setEditingAsset] = useState<Asset | null>(null);
     const [isAssetOpen, setIsAssetOpen] = useState(false);
     const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
     const [deletingAsset, setDeletingAsset] = useState<Asset | null>(null);
     const validAssets = useMemo(() => assets.filter((asset) => asset.kind === "text" || asset.kind === "image" || asset.kind === "video" || asset.kind === "audio"), [assets]);
+    const categories = useMemo(() => Array.from(new Set(validAssets.flatMap((asset) => asset.category ? [asset.category] : []))), [validAssets]);
+    const tags = useMemo(() => Array.from(new Set(validAssets.flatMap((asset) => asset.tags))), [validAssets]);
 
     const filteredAssets = useMemo(() => {
         const query = keyword.trim().toLowerCase();
         return validAssets.filter((asset) => {
             if (kindFilter !== "all" && asset.kind !== kindFilter) return false;
+            if (categoryFilter && asset.category !== categoryFilter) return false;
+            if (tagFilters.length && !tagFilters.some((tag) => asset.tags.includes(tag))) return false;
             if (!query) return true;
             return assetSearchText(asset).includes(query);
         });
-    }, [validAssets, keyword, kindFilter]);
+    }, [validAssets, keyword, kindFilter, categoryFilter, tagFilters]);
 
     const visibleAssets = useMemo(() => {
         const start = (page - 1) * pageSize;
@@ -117,7 +123,7 @@ export default function AssetsPage() {
                 <div className="pb-8">
                     <div className="mx-auto max-w-5xl text-center">
                         <h1 className="text-4xl font-semibold tracking-tight text-stone-950 dark:text-stone-100">我的素材</h1>
-                        <p className="mt-3 text-sm text-stone-500 dark:text-stone-400">收藏常用文本和图片，按类型、标题和标签快速查找。</p>
+                        <p className="mt-3 text-sm text-stone-500 dark:text-stone-400">收藏和管理常用素材，按类型、标题、分类和标签快速查找。</p>
                     </div>
 
                     <div className="mx-auto mt-8 w-full max-w-2xl">
@@ -127,7 +133,7 @@ export default function AssetsPage() {
                             allowClear
                             prefix={<Search className="size-4 text-stone-400" />}
                             value={keyword}
-                            placeholder="搜索标题、内容、标签或来源"
+                            placeholder="搜索标题、内容、分类、标签或来源"
                             onChange={(event) => {
                                 setPage(1);
                                 setKeyword(event.target.value);
@@ -183,6 +189,38 @@ export default function AssetsPage() {
                                 </button>
                             </div>
                         </div>
+                        <div className="grid gap-2 sm:grid-cols-[56px_minmax(0,1fr)] sm:items-center">
+                            <div className="text-xs font-medium text-stone-500 dark:text-stone-400">分类</div>
+                            <div className="thin-scrollbar flex max-h-[112px] flex-wrap gap-2 overflow-y-auto pr-1">
+                                {["", ...categories].map((category) => (
+                                    <Tag.CheckableTag key={category || "all"} checked={categoryFilter === category} className={cn("prompt-filter-tag", categoryFilter === category && "is-active")} onChange={() => {
+                                        setPage(1);
+                                        setCategoryFilter(category);
+                                    }}>
+                                        {category || "全部"}
+                                    </Tag.CheckableTag>
+                                ))}
+                            </div>
+                        </div>
+                        <div className="grid gap-2 sm:grid-cols-[56px_minmax(0,1fr)] sm:items-center">
+                            <div className="text-xs font-medium text-stone-500 dark:text-stone-400">标签</div>
+                            <div className="thin-scrollbar flex max-h-[112px] flex-wrap gap-2 overflow-y-auto pr-1">
+                                <Tag.CheckableTag checked={tagFilters.length === 0} className={cn("prompt-filter-tag", tagFilters.length === 0 && "is-active")} onChange={() => {
+                                    setPage(1);
+                                    setTagFilters([]);
+                                }}>
+                                    全部
+                                </Tag.CheckableTag>
+                                {tags.map((tag) => (
+                                    <Tag.CheckableTag key={tag} checked={tagFilters.includes(tag)} className={cn("prompt-filter-tag", tagFilters.includes(tag) && "is-active")} onChange={() => {
+                                        setPage(1);
+                                        setTagFilters((items) => items.includes(tag) ? items.filter((item) => item !== tag) : [...items, tag]);
+                                    }}>
+                                        {tag}
+                                    </Tag.CheckableTag>
+                                ))}
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -201,7 +239,7 @@ export default function AssetsPage() {
                             pageSize={pageSize}
                             total={filteredAssets.length}
                             showSizeChanger
-                            pageSizeOptions={[10, 20, 50, 100]}
+                            pageSizeOptions={[12, 24, 48, 96]}
                             onChange={(nextPage, nextPageSize) => {
                                 setPage(nextPage);
                                 setPageSize(nextPageSize);
@@ -331,10 +369,10 @@ function AssetDrawer({ asset, onClose, onCopy, onDownload }: { asset: Asset | nu
                             </Typography.Text>
                         )}
                     </div>
-                    {asset.note ? (
+                    {asset.category ? (
                         <div>
-                            <Typography.Text type="secondary">备注</Typography.Text>
-                            <Typography.Paragraph className="mt-1">{asset.note}</Typography.Paragraph>
+                            <Typography.Text type="secondary">分类</Typography.Text>
+                            <Typography.Paragraph className="mt-1">{asset.category}</Typography.Paragraph>
                         </div>
                     ) : null}
                     <Space>
@@ -362,7 +400,7 @@ function assetSummary(asset: Asset) {
 }
 
 function assetSearchText(asset: Asset) {
-    return [asset.title, asset.source || "", asset.note || "", (asset.tags || []).join(" "), asset.kind === "text" ? asset.data.content : asset.data.mimeType].join(" ").toLowerCase();
+    return [asset.title, asset.source || "", asset.category || "", (asset.tags || []).join(" "), asset.kind === "text" ? asset.data.content : asset.data.mimeType].join(" ").toLowerCase();
 }
 
 function assetKindLabel(kind: AssetKind) {

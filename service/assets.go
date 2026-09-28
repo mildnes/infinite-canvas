@@ -12,11 +12,11 @@ func ListAssets(q model.Query) (model.AssetList, error) {
 	if err != nil {
 		return model.AssetList{}, err
 	}
-	tags, err := repository.ListAssetTags(q)
+	tags, categories, err := repository.ListAssetFilters(q)
 	if err != nil {
 		return model.AssetList{}, err
 	}
-	return model.AssetList{Items: items, Tags: tags, Total: int(total)}, nil
+	return model.AssetList{Items: items, Tags: tags, Categories: categories, Total: int(total)}, nil
 }
 
 func SaveAsset(item model.Asset) (model.Asset, error) {

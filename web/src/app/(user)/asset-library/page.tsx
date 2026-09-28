@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { App, Button, Card, Drawer, Empty, Image, Input, Pagination, Spin, Tag, Typography } from "antd";
 import { useCopyText } from "@/hooks/use-copy-text";
+import { getProxyUrl } from "@/services/image-storage";
 import { cn } from "@/lib/utils";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { fetchAssetLibrary, type AssetLibraryItem } from "@/services/api/assets";
@@ -16,14 +17,16 @@ export default function AssetLibraryPage() {
     const copyText = useCopyText();
     const [keyword, setKeyword] = useState("");
     const [selectedType, setSelectedType] = useState("");
+    const [selectedCategory, setSelectedCategory] = useState("");
     const [selectedTags, setSelectedTags] = useState<string[]>([]);
     const [page, setPage] = useState(1);
     const [selectedAsset, setSelectedAsset] = useState<AssetLibraryItem | null>(null);
     const addAsset = useAssetStore((state) => state.addAsset);
 
     const query = useQuery({
-        queryKey: ["asset-library", keyword, selectedType, selectedTags, page],
-        queryFn: () => fetchAssetLibrary({ keyword, type: selectedType, tag: selectedTags, page, pageSize: PAGE_SIZE }),
+        queryKey: ["asset-library", keyword, selectedType, selectedCategory, selectedTags, page],
+        queryFn: () => fetchAssetLibrary({ keyword, type: selectedType, category: selectedCategory, tag: selectedTags, page, pageSize: PAGE_SIZE }),
+        placeholderData: (previousData) => previousData,
         retry: false,
     });
 
@@ -33,8 +36,9 @@ export default function AssetLibraryPage() {
         }
     }, [message, query.error, query.isError]);
 
-    const isReady = query.isFetched || query.isError;
+    const isReady = Boolean(query.data) || query.isError;
     const items = query.data?.items || [];
+    const categories = query.data?.categories || [];
     const availableTags = query.data?.tags || [];
     const total = query.data?.total || 0;
 
@@ -44,15 +48,27 @@ export default function AssetLibraryPage() {
 
     const saveToMyAssets = async (asset: AssetLibraryItem) => {
         try {
+            if (useAssetStore.getState().assets.some((item) => item.metadata?.source === "asset-library" && item.metadata.assetId === asset.id)) return void message.info("该素材已在我的素材中");
             if (asset.type === "image") {
+                let media = { width: 0, height: 0, bytes: 0, mimeType: "image/*" };
+                try {
+                    const response = await fetch(getProxyUrl(asset.url));
+                    if (!response.ok) throw new Error("图片读取失败");
+                    const blob = await response.blob();
+                    const bitmap = await createImageBitmap(blob);
+                    media = { width: bitmap.width, height: bitmap.height, bytes: blob.size, mimeType: blob.type || "image/*" };
+                    bitmap.close();
+                } catch { /* 无法读取远程元数据时仍可保存原始 URL。 */ }
+                if (useAssetStore.getState().assets.some((item) => item.metadata?.source === "asset-library" && item.metadata.assetId === asset.id)) return void message.info("该素材已在我的素材中");
                 addAsset({
                     kind: "image",
                     title: asset.title,
                     coverUrl: asset.coverUrl,
                     tags: asset.tags,
-                    source: asset.category,
+                    category: asset.category,
+                    source: "素材库",
                     note: asset.description,
-                    data: { dataUrl: asset.url, width: 0, height: 0, bytes: 0, mimeType: "image/*" },
+                    data: { dataUrl: asset.url, ...media },
                     metadata: { source: "asset-library", assetId: asset.id },
                 });
             } else if (asset.type === "video") {
@@ -61,7 +77,8 @@ export default function AssetLibraryPage() {
                     title: asset.title,
                     coverUrl: asset.coverUrl,
                     tags: asset.tags,
-                    source: asset.category,
+                    category: asset.category,
+                    source: "素材库",
                     note: asset.description,
                     data: { url: asset.url, width: 0, height: 0, bytes: 0, mimeType: "video/mp4" },
                     metadata: { source: "asset-library", assetId: asset.id },
@@ -72,7 +89,8 @@ export default function AssetLibraryPage() {
                     title: asset.title,
                     coverUrl: asset.coverUrl,
                     tags: asset.tags,
-                    source: asset.category,
+                    category: asset.category,
+                    source: "素材库",
                     note: asset.description,
                     data: { url: asset.url, mimeType: "audio/mpeg" },
                     metadata: { source: "asset-library", assetId: asset.id },
@@ -83,7 +101,8 @@ export default function AssetLibraryPage() {
                     title: asset.title,
                     coverUrl: asset.coverUrl,
                     tags: asset.tags,
-                    source: asset.category,
+                    category: asset.category,
+                    source: "素材库",
                     note: asset.description,
                     data: { content: asset.content },
                     metadata: { source: "asset-library", assetId: asset.id },
@@ -117,7 +136,7 @@ export default function AssetLibraryPage() {
                             className="w-full"
                             prefix={<Search className="size-4 text-stone-400" />}
                             value={keyword}
-                            placeholder="按标题查询"
+                            placeholder="搜索标题、内容、分类或标签"
                             onChange={(event) => {
                                 setPage(1);
                                 setKeyword(event.target.value);
@@ -125,8 +144,8 @@ export default function AssetLibraryPage() {
                         />
                     </div>
                     <div className="mx-auto mt-6 max-w-6xl space-y-3">
-                        <div className="grid gap-2 sm:grid-cols-[56px_minmax(0,1fr)] sm:items-start">
-                            <div className="pt-2 text-xs font-medium text-stone-500 dark:text-stone-400">类型</div>
+                        <div className="grid gap-2 sm:grid-cols-[56px_minmax(0,1fr)] sm:items-center">
+                            <div className="text-xs font-medium text-stone-500 dark:text-stone-400">类型</div>
                             <div className="flex flex-wrap gap-2">
                                 {[
                                     { label: "全部", value: "" },
@@ -149,9 +168,22 @@ export default function AssetLibraryPage() {
                                 ))}
                             </div>
                         </div>
-                        <div className="grid gap-2 sm:grid-cols-[56px_minmax(0,1fr)] sm:items-start">
-                            <div className="pt-2 text-xs font-medium text-stone-500 dark:text-stone-400">标签</div>
-                            <div className="flex flex-wrap gap-2">
+                        <div className="grid gap-2 sm:grid-cols-[56px_minmax(0,1fr)] sm:items-center">
+                            <div className="text-xs font-medium text-stone-500 dark:text-stone-400">分类</div>
+                            <div className="thin-scrollbar flex max-h-[112px] flex-wrap gap-2 overflow-y-auto pr-1">
+                                {["", ...categories].map((item) => (
+                                    <Tag.CheckableTag key={item || "all"} checked={selectedCategory === item} className={cn("prompt-filter-tag", selectedCategory === item && "is-active")} onChange={() => {
+                                        setPage(1);
+                                        setSelectedCategory(item);
+                                    }}>
+                                        {item || "全部"}
+                                    </Tag.CheckableTag>
+                                ))}
+                            </div>
+                        </div>
+                        <div className="grid gap-2 sm:grid-cols-[56px_minmax(0,1fr)] sm:items-center">
+                            <div className="text-xs font-medium text-stone-500 dark:text-stone-400">标签</div>
+                            <div className="thin-scrollbar flex max-h-[112px] flex-wrap gap-2 overflow-y-auto pr-1">
                                 <Tag.CheckableTag
                                     checked={selectedTags.length === 0}
                                     className={cn("prompt-filter-tag", selectedTags.length === 0 && "is-active")}
@@ -181,7 +213,7 @@ export default function AssetLibraryPage() {
                 </div>
 
                 <div className="mx-auto flex max-w-7xl flex-col gap-5">
-                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-5">
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                         {items.map((asset) => (
                             <LibraryCard key={asset.id} asset={asset} onOpen={() => setSelectedAsset(asset)} onAdd={() => void saveToMyAssets(asset)} />
                         ))}
