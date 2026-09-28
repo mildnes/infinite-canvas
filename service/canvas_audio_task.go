@@ -52,7 +52,7 @@ func CreateCanvasAudioTask(input CanvasAudioTaskCreateInput) (model.CanvasAudioT
 		CreatedAt:       current,
 		UpdatedAt:       current,
 	}
-	if input.WorkflowRef != "" {
+	if input.WorkflowRef != "" || input.Credits > 0 {
 		return task, ConsumeUserCredits(task.UserID, task.ChannelID, input.BillingName, task.Credits, input.BillingPath, &task)
 	}
 	return repository.SaveCanvasAudioTask(task)

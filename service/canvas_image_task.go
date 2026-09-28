@@ -57,7 +57,7 @@ func CreateCanvasImageTask(input CanvasImageTaskCreateInput) (model.CanvasImageT
 	}
 	saved := task
 	var err error
-	if input.WorkflowRef != "" {
+	if input.WorkflowRef != "" || input.Credits > 0 {
 		err = ConsumeUserCredits(task.UserID, task.ChannelID, input.BillingName, task.Credits, input.BillingPath, &task)
 	} else {
 		saved, err = repository.SaveCanvasImageTask(task)
