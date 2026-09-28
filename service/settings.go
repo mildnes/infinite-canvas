@@ -401,15 +401,32 @@ func findSavedChannel(channel model.ModelChannel, saved []model.ModelChannel, in
 }
 
 func SelectModelChannel(modelName string) (model.ModelChannel, error) {
-	return SelectModelChannelForModel(modelName, "")
+	return SelectModelChannelForModel(modelName, "", true)
 }
 
-func SelectModelChannelForModel(modelName string, channelID string) (model.ModelChannel, error) {
+func SelectModelChannelForModel(modelName string, channelID string, publicOnly ...bool) (model.ModelChannel, error) {
 	settings, err := repository.GetSettings()
 	if err != nil {
 		return model.ModelChannel{}, err
 	}
-	channels := modelChannelsForModel(normalizePrivateSetting(settings.Private).Channels, modelName)
+	settings = normalizeSettings(settings)
+	privateChannels := normalizePrivateSetting(settings.Private).Channels
+	if len(publicOnly) == 0 || publicOnly[0] {
+		allowed := settings.Public.ModelChannel.AvailableModels
+		if len(allowed) > 0 {
+			found := false
+			for _, allowedModel := range allowed {
+				if allowedModel == modelName {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return model.ModelChannel{}, safeMessageError{message: "模型未开放"}
+			}
+		}
+	}
+	channels := modelChannelsForModel(privateChannels, modelName)
 	if len(channels) == 0 {
 		return model.ModelChannel{}, errors.New("没有可用模型渠道")
 	}

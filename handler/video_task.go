@@ -241,7 +241,7 @@ func serveGeminiVideoTaskContent(w http.ResponseWriter, r *http.Request, id stri
 	if strings.TrimSpace(task.UserChannelID) != "" {
 		channel, err = service.SelectUserLocalModelChannelForModel(task.UserID, task.Model, task.UserChannelID)
 	} else {
-		channel, err = service.SelectModelChannelForModel(task.Model, task.ChannelID)
+		channel, err = service.SelectModelChannelForModel(task.Model, task.ChannelID, false)
 	}
 	if err != nil || !service.IsGeminiChannel(channel) {
 		return false
@@ -280,7 +280,7 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 	if strings.TrimSpace(task.UserChannelID) != "" {
 		channel, err = service.SelectUserLocalModelChannelForModel(task.UserID, task.Model, task.UserChannelID)
 	} else {
-		channel, err = service.SelectModelChannelForModel(task.Model, task.ChannelID)
+		channel, err = service.SelectModelChannelForModel(task.Model, task.ChannelID, false)
 	}
 	if err != nil {
 		return service.VideoTaskPollUpdate{}, err
@@ -312,15 +312,14 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 	}
 	payload, status, err := doAIRequest(request, channel)
 	if err != nil {
-		saveAIProxyLog(logContext, 0, "", err.Error())
 		return service.VideoTaskPollUpdate{}, err
 	}
 	if status >= http.StatusBadRequest {
 		message := readUpstreamAIErrorMessage(payload, status)
-		saveAIProxyLog(logContext, status, string(payload), strings.TrimSpace(string(payload)))
 		if status == http.StatusTooManyRequests {
 			return service.VideoTaskPollUpdate{Status: task.Status, ErrorDetail: message, ResponseBody: string(payload)}, nil
 		}
+		saveAIProxyLog(logContext, status, string(payload), strings.TrimSpace(string(payload)))
 		return service.VideoTaskPollUpdate{Status: "failed", Error: message, ErrorDetail: message, ResponseBody: string(payload)}, nil
 	}
 	transformed := transformVideoStatusPayload(payload, request, channel, task.Model)
@@ -340,7 +339,9 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 	if parsed.ErrorDetail == "" && len(payload) > 0 && parsed.Error != "" {
 		parsed.ErrorDetail = string(payload)
 	}
-	saveAIProxyLog(logContext, status, string(transformed), firstNonEmpty(parsed.Error, ""))
+	if service.IsCompletedVideoTaskStatus(parsed.Status) || service.IsFailedVideoTaskStatus(parsed.Status) {
+		saveAIProxyLog(logContext, status, string(transformed), firstNonEmpty(parsed.Error, ""))
+	}
 	return service.VideoTaskPollUpdate{
 		Status:       parsed.Status,
 		Progress:     parsed.Progress,
