@@ -8,7 +8,7 @@ import { ChevronLeft, ChevronRight, Download, Globe2, Home, ImageIcon, Images, L
 import { saveAs } from "file-saver";
 
 import { deleteCanvasProjects, deleteCanvasTasks } from "@/services/api/canvas-tasks";
-import { createCanvasImageTask, pollCanvasImageTaskStatus, requestImageQuestion, type CanvasImageTask } from "@/services/api/image";
+import { batchCanvasImageTaskStatus, createCanvasImageTask, pollCanvasImageTaskStatus, requestImageQuestion, type CanvasImageTask } from "@/services/api/image";
 import { createCanvasAudioTask, pollCanvasAudioTaskStatus, type CanvasAudioTask } from "@/services/api/audio";
 import { createVideoGenerationTask, pollVideoGenerationTaskStatus, VIDEO_POLL_INTERVAL_MS, type VideoResponse } from "@/services/api/video";
 import { getWorkflowTask, submitWorkflowTask, workflowMediaSource, workflowMediaStorageKey, type WorkflowGenerationTask } from "@/services/api/workflow-generation";
@@ -28,6 +28,7 @@ import { cropDataUrl, splitDataUrl, upscaleDataUrl } from "../utils/canvas-image
 import { fitNodeSize, nodeSizeFromRatio } from "../utils/canvas-node-size";
 import { captureVideoFrame, type VideoFramePosition } from "../utils/canvas-video-frame";
 import { PANORAMA_IMAGE_SIZE, PANORAMA_NODE_SIZE, buildPanoramaPrompt, isCanvasImageNodeType, isPanoramaNodeType } from "../utils/canvas-panorama";
+import { canUploadCanvasMediaToServer, nodeNeedsCloudUpload, repairCanvasProjectMedia, uploadCanvasNodeToCloud } from "../utils/canvas-media-persistence";
 import { applyCameraPrompt } from "../utils/canvas-camera";
 import { GROUP_PADDING, findContainingGroupId, findGroupDropTarget, getNodeBounds, snapNodesIntoGroup } from "../utils/canvas-group";
 import { App, Button, Dropdown, Modal, Slider } from "antd";
@@ -349,6 +350,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
     const cleanupAssetImages = useAssetStore((state) => state.cleanupImages);
+    const currentUserToken = useUserStore((state) => state.token);
     const hydrated = useCanvasStore((state) => state.hydrated);
     const createProject = useCanvasStore((state) => state.createProject);
     const openProject = useCanvasStore((state) => state.openProject);
@@ -441,6 +443,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     );
 
     const nodesRef = useRef(nodes);
+    const activeProjectIdRef = useRef(projectId);
+    activeProjectIdRef.current = projectId;
     const consumedAgentRequestProjectRef = useRef<string | null>(null);
     const connectionsRef = useRef(connections);
     const selectedNodeIdsRef = useRef(selectedNodeIds);
@@ -526,9 +530,27 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             return;
         }
 
+        let disposed = false;
+        const ownerToken = currentUserToken;
+        const isCurrentRestore = () => !disposed && activeProjectIdRef.current === projectId && useUserStore.getState().token === ownerToken;
         const restore = async () => {
-            const restoredNodes = await hydrateCanvasImages(resetInterruptedGeneration(project.nodes));
-            const restoredSessions = syncAssistantReferences(project.chatSessions || [], restoredNodes, true);
+            let restoredNodes = resetInterruptedGeneration(project.nodes);
+            let restoredSessions = project.chatSessions || [];
+            try {
+                const recovered = await recoverPersistedCanvasImageTasks(restoredNodes);
+                if (!isCurrentRestore()) return;
+                restoredNodes = recovered.nodes;
+                const repaired = await repairCanvasProjectMedia(restoredNodes, restoredSessions, { allowUpload: true });
+                if (!isCurrentRestore()) return;
+                restoredNodes = repaired.nodes;
+                restoredSessions = repaired.sessions;
+                if (recovered.count > 0) message.success(`已从云端任务记录恢复 ${recovered.count} 张图片`);
+                if (repaired.uploaded > 0) message.success(`已自动上传 ${repaired.uploaded} 个本地媒体到云存储`);
+            } catch {
+                restoredNodes = await hydrateCanvasImages(restoredNodes);
+            }
+            if (!isCurrentRestore()) return;
+            restoredSessions = syncAssistantReferences(restoredSessions, restoredNodes, true);
             setNodes(restoredNodes);
             setConnections(project.connections);
             setChatSessions(restoredSessions);
@@ -556,7 +578,10 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             setProjectLoaded(true);
         };
         void restore();
-    }, [hydrated, openProject, projectId, router]);
+        return () => {
+            disposed = true;
+        };
+    }, [currentUserToken, hydrated, message, openProject, projectId, router]);
 
     useEffect(() => {
         if (!projectLoaded) return;
@@ -2315,6 +2340,39 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             uploadingImageNodeIdsRef.current.delete(node.id);
         }
     }, [message]);
+
+    const uploadBoardMediaToCloud = useCallback(async () => {
+        const targets = nodesRef.current.filter(nodeNeedsCloudUpload);
+        if (!targets.length) return message.info("当前画板没有可上传的媒体");
+        if (!(await canUploadCanvasMediaToServer())) return message.error("未添加云存储或未登录");
+
+        const ownerToken = useUserStore.getState().token;
+        const ownerProjectId = projectId;
+        const isCurrentUpload = () => activeProjectIdRef.current === ownerProjectId && useUserStore.getState().token === ownerToken;
+        const hideLoading = message.loading(`正在上传 ${targets.length} 个媒体到云存储...`, 0);
+        let ok = 0;
+        let fail = 0;
+        try {
+            for (const node of targets) {
+                if (!isCurrentUpload()) return;
+                try {
+                    const { node: next, uploaded } = await uploadCanvasNodeToCloud(node);
+                    if (!isCurrentUpload()) return;
+                    if (uploaded) {
+                        ok += 1;
+                        setNodes((current) => current.map((item) => (item.id === node.id ? next : item)));
+                    }
+                } catch {
+                    fail += 1;
+                }
+            }
+            if (!isCurrentUpload()) return;
+            if (ok) message.success(`已上传 ${ok} 个媒体到云存储`);
+            if (fail) message.warning(`${fail} 个媒体上传失败`);
+        } finally {
+            hideLoading();
+        }
+    }, [message, projectId]);
 
     const saveNodeAsset = useCallback(
         async (node: CanvasNodeData) => {
@@ -4346,6 +4404,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     onUndo={undoCanvas}
                     onRedo={redoCanvas}
                     onUpload={() => handleUploadRequest()}
+                    onUploadBoardToCloud={() => void uploadBoardMediaToCloud()}
                     onDelete={() => deleteNodes(new Set(selectedNodeIds))}
                     onClear={() => setClearConfirmOpen(true)}
                     onCanvasToolChange={setCanvasTool}
@@ -5155,7 +5214,7 @@ async function hydrateCanvasImages(nodes: CanvasNodeData[]) {
         nodes.map(async (node) => {
             const content = node.metadata?.content;
             if ((node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) && node.metadata?.storageKey) return { ...node, metadata: { ...node.metadata, content: await resolveMediaUrl(node.metadata.storageKey, content) } };
-            if (!isCanvasImageNodeType(node.type) || !content) return node;
+            if (!isCanvasImageNodeType(node.type) || (!content && !node.metadata?.storageKey)) return node;
             if (node.metadata?.storageKey) return { ...node, metadata: { ...node.metadata, content: await resolveImageUrl(node.metadata.storageKey, content) } };
             if (!content.startsWith("data:image/")) return node;
             return { ...node, metadata: { ...node.metadata, ...imageMetadata(await uploadImage(content, { localOnly: true })) } };
@@ -5289,6 +5348,35 @@ function canvasImageTaskURLs(task: CanvasImageTask) {
 
 function canvasImageTaskChildIds(nodeId: string, task: CanvasImageTask) {
     return canvasImageTaskURLs(task).map((_, index) => `${nodeId}-result-${index}`);
+}
+
+async function recoverPersistedCanvasImageTasks(nodes: CanvasNodeData[]) {
+    const targets = nodes.filter(
+        (node) =>
+            isCanvasImageNodeType(node.type) &&
+            !node.metadata?.content &&
+            !node.metadata?.storageKey &&
+            Boolean(node.metadata?.imageTaskId) &&
+            (node.metadata?.status === NODE_STATUS_SUCCESS || node.metadata?.mediaStatus === "broken"),
+    );
+    if (!targets.length) return { nodes, count: 0 };
+
+    let tasks: CanvasImageTask[];
+    try {
+        tasks = await batchCanvasImageTaskStatus(undefined, targets.map((node) => node.metadata?.imageTaskId || ""));
+    } catch {
+        return { nodes, count: 0 };
+    }
+    const taskById = new Map(tasks.map((task) => [task.id, task]));
+    let next = nodes;
+    let count = 0;
+    for (const node of targets) {
+        const task = taskById.get(node.metadata?.imageTaskId || "");
+        if (!task || !canvasImageTaskURLs(task).length) continue;
+        next = applyCanvasImageTaskUpdate(next, node.id, task, node.metadata?.startedAt || Date.now(), { width: node.width, height: node.height });
+        count += 1;
+    }
+    return { nodes: next, count };
 }
 
 function applyCanvasImageTaskUpdate(nodes: CanvasNodeData[], nodeId: string, task: CanvasImageTask, startedAt: number, fallbackSize: { width: number; height: number }) {

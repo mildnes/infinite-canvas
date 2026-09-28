@@ -10,7 +10,7 @@ import { EditorView } from "@uiw/react-codemirror";
 import { ChannelModelSelectorModal } from "@/components/channel-model-selector-modal";
 import type { WorkflowChannelSettings } from "@/components/workflow/workflow-channel-pane";
 import { isWorkflowProtocol, modelChannelApiKeyUrls, modelChannelDefaultBaseUrls, modelChannelProtocolOptions } from "@/lib/model-channel";
-import { fetchAdminSettings, fetchChannelModels, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider } from "@/services/api/admin";
+import { fetchAdminSettings, fetchChannelModels, fetchMCPServerTools, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminMCPServer, type AdminMCPTool, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider } from "@/services/api/admin";
 import { clearStorageConfigCache as clearMediaStorageConfigCache } from "@/services/file-storage";
 import { clearStorageConfigCache as clearImageStorageConfigCache } from "@/services/image-storage";
 import { useUserStore } from "@/stores/use-user-store";
@@ -54,6 +54,7 @@ const emptySettings: AdminSettings = {
 const emptyChannel: AdminModelChannel = { id: "", protocol: "openai", name: "", baseUrl: modelChannelDefaultBaseUrls.openai, apiKey: "", models: [], weight: 1, timeout: 600, enabled: true, remark: "" };
 const emptyS3StorageProvider: AdminStorageProvider = { id: "", name: "", type: "s3", endpoint: "", region: "auto", bucket: "", accessKeyId: "", secretAccessKey: "", publicBaseUrl: "", pathPrefix: "canvas", username: "", password: "", weight: 1, enabled: true, ownerUserId: "", capacityBytes: 0, capacityCheckedAt: "", capacityExceeded: false };
 const emptyWebDAVStorageProvider: AdminStorageProvider = { ...emptyS3StorageProvider, name: "", type: "webdav", region: "" };
+const emptyMCPServer: AdminMCPServer = { id: "", name: "", endpoint: "", apiKey: "", transport: "streamable_http", command: "", args: [], env: {}, workingDirectory: "", description: "", tools: [], enabled: true, allowUsers: true };
 
 type SettingsTabKey = "public" | "private";
 type EditorMode = "visual" | "json";
@@ -79,11 +80,13 @@ export default function AdminSettingsPage() {
     const [isLoading, setIsLoading] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [measuringProviderIndex, setMeasuringProviderIndex] = useState<number | null>(null);
+    const [fetchingMCPToolsIndex, setFetchingMCPToolsIndex] = useState<number | null>(null);
     const [modelCosts, setModelCosts] = useState<AdminModelCost[]>([]);
     const [knownModels, setKnownModels] = useState<string[]>([]);
     const publicModels = Form.useWatch(["public", "modelChannel", "availableModels"], form) || [];
     const publicWorkflows = Form.useWatch(["public", "modelChannel", "availableWorkflows"], form) || [];
     const storageProviders = Form.useWatch(["private", "storage", "providers"], form) || [];
+    const agentMCPServers = Form.useWatch(["private", "agent", "mcpServers"], form) || [];
     const channelProtocol = Form.useWatch("protocol", channelForm);
     const channelBaseUrl = Form.useWatch("baseUrl", channelForm);
     const channelApiKeyUrl = channelProtocol ? modelChannelApiKeyUrls[channelProtocol] : undefined;
@@ -317,6 +320,27 @@ export default function AdminSettingsPage() {
             private: JSON.stringify(merged.private, null, 2),
         });
         message.success("已保存");
+    }
+
+    async function loadMCPToolsAt(index: number) {
+        if (!token) return;
+        const server = form.getFieldValue(["private", "agent", "mcpServers", index]) as AdminMCPServer | undefined;
+        const transport = server?.transport === "stdio" ? "stdio" : "streamable_http";
+        if (transport === "stdio" ? !server?.command?.trim() : !server?.endpoint?.trim()) {
+            message.warning(transport === "stdio" ? "请先填写 MCP Command" : "请先填写 MCP 服务地址");
+            return;
+        }
+        setFetchingMCPToolsIndex(index);
+        try {
+            const tools = await fetchMCPServerTools(token, { server: normalizeMCPServer(server) });
+            form.setFieldValue(["private", "agent", "mcpServers", index, "tools"], tools);
+            form.setFieldValue(["private", "agent", "mcpServers", index, "toolsJson"], JSON.stringify(tools, null, 2));
+            message.success(`已读取 ${tools.length} 个 MCP 工具`);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "读取 MCP 工具失败");
+        } finally {
+            setFetchingMCPToolsIndex(null);
+        }
     }
 
     async function measureStorageProviderAt(index: number) {
@@ -595,6 +619,103 @@ export default function AdminSettingsPage() {
                                             </Form.Item>
                                         </Col>
                                     </Row>
+                                </Card>
+                                <Card size="small" title="画布 Agent MCP">
+                                    <Flex vertical gap={12}>
+                                        <Typography.Text type="secondary">MCP 工具由后端代理调用，API Key、stdio 命令和环境变量不会下发给普通用户。</Typography.Text>
+                                        <Form.List name={["private", "agent", "mcpServers"]}>
+                                            {(fields, { add, remove }) => (
+                                                <Flex vertical gap={10}>
+                                                    <Button icon={<PlusOutlined />} onClick={() => add({ ...emptyMCPServer })}>
+                                                        新增 MCP 服务
+                                                    </Button>
+                                                    {fields.map((field) => {
+                                                        const server = agentMCPServers[field.name] || emptyMCPServer;
+                                                        const isStdio = server.transport === "stdio";
+                                                        return (
+                                                            <Card key={field.key} size="small" title={server.name || `MCP ${field.name + 1}`} extra={<Button danger size="small" icon={<DeleteOutlined />} onClick={() => remove(field.name)} />}>
+                                                                <Form.Item name={[field.name, "id"]} hidden>
+                                                                    <Input />
+                                                                </Form.Item>
+                                                                <Row gutter={12}>
+                                                                    <Col xs={24} md={7}>
+                                                                        <Form.Item name={[field.name, "name"]} label="名称">
+                                                                            <Input placeholder="视频生成 MCP" />
+                                                                        </Form.Item>
+                                                                    </Col>
+                                                                    <Col xs={24} md={7}>
+                                                                        <Form.Item name={[field.name, "transport"]} label="传输方式">
+                                                                            <Select options={[{ label: "Streamable HTTP", value: "streamable_http" }, { label: "stdio 本地进程", value: "stdio" }]} />
+                                                                        </Form.Item>
+                                                                    </Col>
+                                                                    <Col xs={12} md={5}>
+                                                                        <Form.Item name={[field.name, "enabled"]} label="启用" valuePropName="checked">
+                                                                            <Switch />
+                                                                        </Form.Item>
+                                                                    </Col>
+                                                                    <Col xs={12} md={5}>
+                                                                        <Form.Item name={[field.name, "allowUsers"]} label="允许普通用户" valuePropName="checked">
+                                                                            <Switch />
+                                                                        </Form.Item>
+                                                                    </Col>
+                                                                    {isStdio ? (
+                                                                        <>
+                                                                            <Col xs={24} md={12}>
+                                                                                <Form.Item name={[field.name, "command"]} label="Command">
+                                                                                    <Input placeholder="例如：video-mcp" />
+                                                                                </Form.Item>
+                                                                            </Col>
+                                                                            <Col xs={24} md={12}>
+                                                                                <Form.Item name={[field.name, "workingDirectory"]} label="工作目录">
+                                                                                    <Input placeholder="可选，默认后端工作目录" />
+                                                                                </Form.Item>
+                                                                            </Col>
+                                                                            <Col span={24}>
+                                                                                <Form.Item name={[field.name, "argsText"]} label="Args" extra="每行一个参数">
+                                                                                    <Input.TextArea rows={3} placeholder={"--port\n3000"} />
+                                                                                </Form.Item>
+                                                                            </Col>
+                                                                            <Col span={24}>
+                                                                                <Form.Item name={[field.name, "envJson"]} label="Env JSON">
+                                                                                    <Input.TextArea rows={3} placeholder='{"API_KEY":"..."}' />
+                                                                                </Form.Item>
+                                                                            </Col>
+                                                                        </>
+                                                                    ) : (
+                                                                        <>
+                                                                            <Col xs={24} md={12}>
+                                                                                <Form.Item name={[field.name, "endpoint"]} label="HTTP Endpoint">
+                                                                                    <Input placeholder="https://example.com/mcp" />
+                                                                                </Form.Item>
+                                                                            </Col>
+                                                                            <Col xs={24} md={12}>
+                                                                                <Form.Item name={[field.name, "apiKey"]} label="API Key">
+                                                                                    <Input.Password placeholder="留空沿用已保存的 Key" />
+                                                                                </Form.Item>
+                                                                            </Col>
+                                                                        </>
+                                                                    )}
+                                                                    <Col span={24}>
+                                                                        <Form.Item name={[field.name, "description"]} label="说明">
+                                                                            <Input />
+                                                                        </Form.Item>
+                                                                    </Col>
+                                                                    <Col span={24}>
+                                                                        <Form.Item name={[field.name, "toolsJson"]} label={`工具定义 JSON（${server.tools?.length || 0}）`} extra="标准 MCP tools/list 返回的 tools 数组；也可以自动读取">
+                                                                            <Input.TextArea rows={6} placeholder='[{"name":"generate_video","description":"生成视频","inputSchema":{"type":"object","properties":{}}}]' />
+                                                                        </Form.Item>
+                                                                        <Button loading={fetchingMCPToolsIndex === field.name} onClick={() => void loadMCPToolsAt(field.name)}>
+                                                                            读取工具列表
+                                                                        </Button>
+                                                                    </Col>
+                                                                </Row>
+                                                            </Card>
+                                                        );
+                                                    })}
+                                                </Flex>
+                                            )}
+                                        </Form.List>
+                                    </Flex>
                                 </Card>
                                 <Card size="small" title="数据存储">
                                     <Row gutter={16}>
@@ -1129,25 +1250,53 @@ function normalizePrivateSetting(setting: Partial<AdminSettings["private"]> = {}
     };
 }
 
-function normalizeMCPServer(item: Partial<AdminSettings["private"]["agent"]["mcpServers"][number]> = {}) {
+function normalizeMCPServer(item: Partial<AdminMCPServer> = {}): AdminMCPServer {
+    const tools = typeof item.toolsJson === "string" && item.toolsJson.trim() ? parseMCPTools(item.toolsJson, item.tools || []) : (item.tools || []).map(normalizeMCPTool);
+    const args = typeof item.argsText === "string" ? item.argsText.split(/\r?\n/).map((value) => value.trim()).filter(Boolean) : item.args || [];
+    const env = typeof item.envJson === "string" && item.envJson.trim() ? parseMCPEnv(item.envJson, item.env || {}) : item.env || {};
     return {
+        ...emptyMCPServer,
+        ...item,
         id: item.id || "",
         name: item.name || "",
         description: item.description || "",
-        tools: Array.isArray(item.tools) ? item.tools : [],
+        tools,
         endpoint: item.endpoint || "",
         apiKey: item.apiKey || "",
-        transport: item.transport === "stdio" ? "stdio" as const : "streamable_http" as const,
+        transport: item.transport === "stdio" ? "stdio" : "streamable_http",
         command: item.command || "",
-        args: Array.isArray(item.args) ? item.args : [],
-        env: item.env || {},
+        args,
+        env,
         workingDirectory: item.workingDirectory || "",
-        enabled: item.enabled === true,
-        allowUsers: item.allowUsers === true,
-        ...(item.toolsJson ? { toolsJson: item.toolsJson } : {}),
-        ...(item.argsText ? { argsText: item.argsText } : {}),
-        ...(item.envJson ? { envJson: item.envJson } : {}),
+        toolsJson: JSON.stringify(tools, null, 2),
+        argsText: args.join("\n"),
+        envJson: JSON.stringify(env, null, 2),
+        enabled: item.enabled !== false,
+        allowUsers: item.allowUsers !== false,
     };
+}
+
+function parseMCPTools(value: string, fallback: Partial<AdminMCPTool>[] = []): AdminMCPTool[] {
+    try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed.map(normalizeMCPTool).filter((item) => item.name) : [];
+    } catch {
+        return fallback.map(normalizeMCPTool);
+    }
+}
+
+function parseMCPEnv(value: string, fallback: Record<string, string> = {}) {
+    try {
+        const parsed = JSON.parse(value);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return fallback;
+        return Object.fromEntries(Object.entries(parsed).filter(([, item]) => typeof item === "string")) as Record<string, string>;
+    } catch {
+        return fallback;
+    }
+}
+
+function normalizeMCPTool(item: Partial<AdminMCPTool> = {}): AdminMCPTool {
+    return { name: item.name || "", description: item.description || "", inputSchema: item.inputSchema && typeof item.inputSchema === "object" ? item.inputSchema : {} };
 }
 
 function normalizeStorageProvider(item: Partial<AdminStorageProvider> = {}): AdminStorageProvider {
