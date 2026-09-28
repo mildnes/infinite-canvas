@@ -160,6 +160,17 @@ export function deleteAdminAgentSkill(token: string, id: string) {
     return apiDelete<boolean>(`/api/admin/agent-skills/${encodeURIComponent(id)}`, token);
 }
 
+export type RemoteAgentSkillInput = {
+    repository: string;
+    ref?: string;
+    path?: string;
+    name?: string;
+};
+
+export function installAdminAgentSkill(token: string, input: RemoteAgentSkillInput) {
+    return apiPost<AgentSkill>("/api/admin/agent/skills/install", input, token);
+}
+
 export type AdminAssetQuery = {
     keyword?: string;
     type?: string;

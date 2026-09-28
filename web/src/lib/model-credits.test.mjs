@@ -34,3 +34,10 @@ test("新模型未定价为零，本地直连不扣算力点", () => {
 test("无效渠道使用可用渠道范围，多图张数最多按 15 张报价", () => {
     assert.deepEqual(requestCreditQuote({ channelMode: "remote", channels, costIndex, channelId: "missing", model: "shared", count: 99 }), { min: 105, max: 270 });
 });
+
+test("系统工作流按指定渠道固定每次报价，个人工作流不扣点", () => {
+    const workflowModel = "workflow:system:a:workflow:123";
+    const workflowCosts = indexModelCredits([{ channelId: "a", model: workflowModel, credits: 25 }]);
+    assert.deepEqual(requestCreditQuote({ channelMode: "remote", channels, costIndex: workflowCosts, channelId: "a", model: workflowModel }), { min: 25, max: 25 });
+    assert.deepEqual(requestCreditQuote({ channelMode: "local", channels, costIndex: workflowCosts, channelId: "a", model: workflowModel }), { min: 0, max: 0 });
+});

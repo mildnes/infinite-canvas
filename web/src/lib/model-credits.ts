@@ -19,7 +19,8 @@ export function requestCreditQuote(options: {
 }): ModelCreditQuote {
     if (options.channelMode !== "remote") return { min: 0, max: 0 };
     const count = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(options.count)) || 1)));
-    const available = options.channels.filter((channel) => channel.enabled !== false && channel.id && channel.models?.includes(options.model));
+    const isWorkflow = options.model.startsWith("workflow:");
+    const available = options.channels.filter((channel) => channel.enabled !== false && channel.id && (isWorkflow ? channel.id === options.channelId : channel.models?.includes(options.model)));
     const selected = available.find((channel) => channel.id === options.channelId);
     const prices = (selected ? [selected] : available).map((channel) => (options.costIndex.get(costKey(channel.id || "", options.model)) ?? 0) * count);
     return prices.length ? { min: Math.min(...prices), max: Math.max(...prices) } : { min: 0, max: 0 };
