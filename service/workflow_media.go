@@ -122,7 +122,7 @@ func readWorkflowResultMedia(ctx context.Context, raw string) ([]byte, string, e
 			return nil, "", errors.New("工作流媒体类型不受支持")
 		}
 		encoded := strings.TrimSpace(raw[comma+1:])
-		if len(encoded) > (workflowResultMediaLimit*4/3)+16 {
+		if int64(len(encoded)) > (workflowResultMediaLimit*4/3)+16 {
 			return nil, "", errors.New("工作流媒体超过 128MB")
 		}
 		data, err := base64.StdEncoding.DecodeString(encoded)
