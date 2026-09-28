@@ -69,8 +69,8 @@ export function CanvasPromptChipInput({ value, references = [], pendingReference
                 editor.append(document.createTextNode(token.value));
                 return;
             }
-            const reference = referenceByLabel.get(token.label);
-            if (reference) editor.append(createReferenceChip(reference, theme, setImagePreview));
+            const reference = referenceByLabel.get(token.label.replace(/^@/, ""));
+            if (reference) { const chip = createReferenceChip(reference, theme, setImagePreview); chip.dataset.refLabel = token.label; editor.append(chip); }
             else editor.append(document.createTextNode(token.label));
         });
         lastEmittedRef.current = value;
@@ -738,7 +738,7 @@ function placeCaretAtEnd(element: HTMLElement) {
 
 function parsePromptTokens(value: string, labels: string[]): PromptToken[] {
     if (!labels.length) return value ? [{ type: "text", value }] : [];
-    const pattern = new RegExp(`(${labels.map(escapeRegExp).join("|")})`, "g");
+    const pattern = new RegExp(`@?(${labels.map(escapeRegExp).join("|")})`, "g");
     const tokens: PromptToken[] = [];
     let lastIndex = 0;
     for (const match of value.matchAll(pattern)) {
