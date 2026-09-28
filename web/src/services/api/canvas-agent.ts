@@ -1,6 +1,6 @@
 import { mimoTextModels } from "@/lib/mimo-tts";
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig } from "@/lib/gemini";
-import { aiApiUrl, aiHeaders, refreshRemoteUser } from "@/services/api/image";
+import { aiApiUrl, aiHeaders, ImageRequestError, isEventStreamResponse, readJsonServerSentEvents, refreshRemoteUser } from "@/services/api/image";
 import { applyCanvasAgentReasoning } from "@/services/api/canvas-agent-reasoning";
 import { imageToDataUrl } from "@/services/image-storage";
 import { channelProtocolForConfig, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
@@ -93,7 +93,7 @@ class CanvasAgentRequestError extends Error {
     }
 }
 
-type CanvasAgentAiConfig = AiConfig & { textReasoningEnabled?: boolean };
+type CanvasAgentAiConfig = AiConfig & { textReasoningEnabled?: boolean; textStreaming?: boolean };
 
 function applyReasoning(body: Record<string, unknown>, config: CanvasAgentAiConfig, mode: "chat" | "responses" | "gemini") {
     applyCanvasAgentReasoning(body, { enabled: config.textReasoningEnabled === true, mode, model: config.model, protocol: channelProtocolForConfig(config) });
@@ -173,8 +173,9 @@ async function requestCompletion(config: CanvasAgentAiConfig, systemPrompt: stri
     const body: Record<string, unknown> = {
         model: config.model,
         messages: [{ role: "system", content: systemPrompt }, ...messages.map(toRequestMessage)],
-        stream: false,
+        stream: config.textStreaming === true,
     };
+    if (config.textStreaming) body.stream_options = { include_usage: true };
     if (tools.length) {
         body.tools = tools;
         body.tool_choice = "auto";
@@ -188,7 +189,35 @@ async function requestCompletion(config: CanvasAgentAiConfig, systemPrompt: stri
         body: JSON.stringify(body),
         signal,
     });
-    const { payload, rawText } = await readResponsePayload<ChatCompletionPayload>(response);
+    let payload: ChatCompletionPayload;
+    let rawText = "";
+    if (config.textStreaming && response.ok && isEventStreamResponse(response)) {
+        let content = "";
+        let reasoningContent = "";
+        let finishReason = "";
+        let usage: ChatCompletionPayload["usage"];
+        const toolCalls: Array<{ id?: string; function: { name: string; arguments: string } }> = [];
+        await readCanvasAgentStream(response, (event) => {
+            if (event.usage) usage = event.usage as ChatCompletionPayload["usage"];
+            const choice = (event.choices as Array<{ delta?: { content?: string; reasoning_content?: string; tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> }; finish_reason?: string | null }> | undefined)?.[0];
+            if (!choice) return;
+            if (typeof choice.delta?.content === "string") content += choice.delta.content;
+            if (typeof choice.delta?.reasoning_content === "string") reasoningContent += choice.delta.reasoning_content;
+            if (typeof choice.finish_reason === "string") finishReason = choice.finish_reason;
+            for (const fragment of choice.delta?.tool_calls || []) {
+                const index = typeof fragment.index === "number" ? fragment.index : toolCalls.length;
+                const call = toolCalls[index] || { function: { name: "", arguments: "" } };
+                if (fragment.id) call.id = fragment.id;
+                if (fragment.function?.name) call.function.name += fragment.function.name;
+                if (fragment.function?.arguments) call.function.arguments += fragment.function.arguments;
+                toolCalls[index] = call;
+            }
+        });
+        if (!finishReason) throw new CanvasAgentRequestError("文本模型流式响应未完成", response.status);
+        payload = { usage, choices: [{ finish_reason: finishReason, message: { content, reasoning_content: reasoningContent || undefined, tool_calls: toolCalls } }] };
+    } else {
+        ({ payload, rawText } = await readResponsePayload<ChatCompletionPayload>(response));
+    }
     const choice = payload.choices?.[0] || payload.data?.choices?.[0];
     const message = choice?.message;
     if (!response.ok || (typeof payload.code === "number" && payload.code !== 0) || (typeof payload.code === "string" && payload.code !== "0" && !message)) {
@@ -228,6 +257,7 @@ async function requestResponsesCompletion(config: CanvasAgentAiConfig, systemPro
         store: false,
         include: ["reasoning.encrypted_content"],
     };
+    if (config.textStreaming) body.stream = true;
     if (tools.length) {
         body.tools = tools.map((tool) => ({ type: "function", ...tool.function }));
         body.tool_choice = "auto";
@@ -241,7 +271,18 @@ async function requestResponsesCompletion(config: CanvasAgentAiConfig, systemPro
         body: JSON.stringify(body),
         signal,
     });
-    const { payload, rawText } = await readResponsePayload<ResponsesPayload>(response);
+    let payload: ResponsesPayload;
+    let rawText = "";
+    if (config.textStreaming && response.ok && isEventStreamResponse(response)) {
+        let terminal: ResponsesPayload | undefined;
+        await readCanvasAgentStream(response, (event) => {
+            if (["response.completed", "response.incomplete", "response.failed"].includes(String(event.type)) && event.response && typeof event.response === "object") terminal = event.response as ResponsesPayload;
+        });
+        if (!terminal) throw new CanvasAgentRequestError("文本模型流式响应未完成", response.status);
+        payload = terminal;
+    } else {
+        ({ payload, rawText } = await readResponsePayload<ResponsesPayload>(response));
+    }
     const result = payload.output ? payload : payload.data;
     if (!response.ok || (typeof payload.code === "number" && payload.code !== 0) || (typeof payload.code === "string" && payload.code !== "0" && !result)) {
         throw new CanvasAgentRequestError(readError(payload, response.status, rawText), response.status, readErrorCode(payload));
@@ -310,7 +351,7 @@ async function requestGeminiCompletion(config: CanvasAgentAiConfig, systemPrompt
     const extraSystemParts = messages.flatMap((message) => (message.role !== "system" ? [] : typeof message.content === "string" ? [{ text: message.content }] : message.content.flatMap((part) => (part.type === "text" ? [{ text: part.text }] : []))));
     const body = {
         model: config.model,
-        stream: false,
+        stream: config.textStreaming === true,
         systemInstruction: { parts: [{ text: systemPrompt }, ...extraSystemParts] },
         contents,
         ...(tools.length ? { tools: [{ functionDeclarations: tools.map((tool) => tool.function) }] } : {}),
@@ -320,13 +361,34 @@ async function requestGeminiCompletion(config: CanvasAgentAiConfig, systemPrompt
     const proxy = Boolean(aiApiUrl(config, "/chat/completions").startsWith("/api/"));
     const channel = localChannelForActiveModel(config);
     const { model: _model, stream: _stream, ...nativeBody } = body;
-    const response = await fetch(proxy ? aiApiUrl(config, "/chat/completions") : geminiActionUrl(channel?.baseUrl || config.baseUrl, config.model, "generateContent"), {
+    const response = await fetch(proxy ? aiApiUrl(config, "/chat/completions") : geminiActionUrl(channel?.baseUrl || config.baseUrl, config.model, config.textStreaming ? "streamGenerateContent" : "generateContent"), {
         method: "POST",
         headers: proxy ? aiHeaders(config, "application/json") : geminiDirectHeaders(config),
         body: JSON.stringify(proxy ? body : nativeBody),
         signal,
     });
-    const { payload, rawText } = await readResponsePayload<Record<string, unknown>>(response);
+    let payload: Record<string, unknown>;
+    let rawText = "";
+    if (config.textStreaming && response.ok && isEventStreamResponse(response)) {
+        const parts: Array<Record<string, unknown>> = [];
+        let finishReason: string | undefined;
+        let usageMetadata: unknown;
+        await readCanvasAgentStream(response, (event) => {
+            const blockReason = (event.promptFeedback as { blockReason?: string } | undefined)?.blockReason;
+            if (blockReason) throw new CanvasAgentRequestError(blockReason, response.status);
+            const candidates = Array.isArray(event.candidates) ? event.candidates as Array<Record<string, unknown>> : [];
+            for (const candidate of candidates) {
+                const content = candidate.content as { parts?: unknown } | undefined;
+                if (Array.isArray(content?.parts)) parts.push(...content.parts as Array<Record<string, unknown>>);
+                if (typeof candidate.finishReason === "string") finishReason = candidate.finishReason;
+            }
+            if (event.usageMetadata) usageMetadata = event.usageMetadata;
+        });
+        if (!finishReason) throw new CanvasAgentRequestError("文本模型流式响应未完成", response.status);
+        payload = { candidates: [{ content: { parts }, finishReason }], usageMetadata };
+    } else {
+        ({ payload, rawText } = await readResponsePayload<Record<string, unknown>>(response));
+    }
     if (!response.ok) throw new CanvasAgentRequestError(geminiErrorMessage(payload, rawText || "文本模型请求失败"), response.status, geminiErrorCode(payload));
     const candidates = Array.isArray(payload.candidates) ? (payload.candidates as Array<Record<string, unknown>>) : [];
     const incompleteReason = candidates.map((candidate) => candidate.finishReason).find((reason) => typeof reason === "string" && /^(?:MAX_TOKENS|SAFETY|RECITATION|BLOCKLIST|PROHIBITED_CONTENT|SPII|MALFORMED_FUNCTION_CALL|UNEXPECTED_TOOL_CALL|TOO_MANY_TOOL_CALLS)$/i.test(reason));
@@ -489,6 +551,23 @@ function stripImageContent(messages: CanvasAgentProtocolMessage[]) {
 
 function isImageCompatibilityError(error: unknown) {
     return error instanceof CanvasAgentRequestError && /image_url|image input|vision|multimodal|content.*array|unsupported.*image|不支持.*图片|图像输入/i.test(error.message);
+}
+
+async function readCanvasAgentStream(response: Response, onEvent: (event: Record<string, unknown>) => void) {
+    try {
+        await readJsonServerSentEvents(response, onEvent);
+    } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") throw error;
+        if (error instanceof CanvasAgentRequestError) throw error;
+        let code: string | undefined;
+        if (error instanceof ImageRequestError && error.detail) {
+            try {
+                const detail = JSON.parse(error.detail) as AiErrorPayload & Record<string, unknown>;
+                code = readErrorCode(detail) || geminiErrorCode(detail);
+            } catch { /* 保留原始错误信息 */ }
+        }
+        throw new CanvasAgentRequestError(error instanceof Error ? error.message : "流式响应读取失败", response.status, code);
+    }
 }
 
 function isToolCompatibilityError(error: unknown, mode: "tools" | "structured-json") {

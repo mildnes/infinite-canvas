@@ -446,7 +446,7 @@ function parseServerSentEventBlock(block: string) {
     return JSON.parse(data) as Record<string, unknown>;
 }
 
-async function readJsonServerSentEvents(response: Response, onEvent: (event: Record<string, unknown>) => void) {
+export async function readJsonServerSentEvents(response: Response, onEvent: (event: Record<string, unknown>) => void) {
     if (!response.body) throw new ImageRequestError("接口未返回可读取的流式响应", `${response.status} ${response.statusText}`);
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -486,7 +486,7 @@ async function readJsonServerSentEvents(response: Response, onEvent: (event: Rec
     return events;
 }
 
-function isEventStreamResponse(response: Response) {
+export function isEventStreamResponse(response: Response) {
     return response.headers.get("Content-Type")?.toLowerCase().includes("text/event-stream") ?? false;
 }
 

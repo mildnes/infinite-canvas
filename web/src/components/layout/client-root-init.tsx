@@ -1,14 +1,14 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
 import { App } from "antd";
 
 import { fetchUserConfig } from "@/services/api/user-config";
 import { clearStorageConfigCache as clearImageStorageConfigCache, defaultUserStorageProvider, defaultUserWebDAVStorageProvider, saveUserStorageProvider, saveUserWebDAVStorageProvider, STORAGE_SYNC_COMPLETED_EVENT, STORAGE_SYNC_FAILED_EVENT } from "@/services/image-storage";
 import { clearStorageConfigCache as clearFileStorageConfigCache } from "@/services/file-storage";
-import { useConfigStore, type AiConfig } from "@/stores/use-config-store";
+import { defaultConfig, useConfigStore, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
 export function ClientRootInit({ children }: { children: ReactNode }) {
@@ -24,6 +24,7 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const isLoginPage = pathname === "/login" || pathname === "/admin/login";
     const adminRemoteTokenRef = useRef("");
+    const accountSessionRef = useRef({ token, userId: user?.id || "" });
 
     useEffect(() => {
         void loadPublicSettings();
@@ -68,10 +69,23 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
         adminRemoteTokenRef.current = token;
     }, [token, user?.role]);
 
+    useLayoutEffect(() => {
+        const previous = accountSessionRef.current;
+        const userId = user?.id || "";
+        if ((previous.token && !token) || (previous.userId && userId && previous.userId !== userId)) {
+            useConfigStore.setState({ config: defaultConfig });
+        }
+        accountSessionRef.current = { token, userId };
+    }, [token, user?.id]);
+
     useEffect(() => {
         if (!token || !user?.id) return;
-        void fetchUserConfig(token)
+        const accountToken = token;
+        const accountId = user.id;
+        let canceled = false;
+        void fetchUserConfig(accountToken)
             .then((payload) => {
+                if (canceled || useUserStore.getState().token !== accountToken || useUserStore.getState().user?.id !== accountId) return;
                 const syncS3 = payload.modelConfig?.syncStorageConfig === true;
                 const syncWebDAV = payload.modelConfig?.syncWebDAVStorageConfig === true;
                 if (payload.modelConfig) {
@@ -98,6 +112,9 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
                 clearFileStorageConfigCache();
             })
             .catch(() => {});
+        return () => {
+            canceled = true;
+        };
     }, [token, updateConfig, user?.id]);
 
     useEffect(() => {

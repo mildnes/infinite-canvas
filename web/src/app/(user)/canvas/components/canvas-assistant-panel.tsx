@@ -341,6 +341,7 @@ export function CanvasAssistantPanel({
             ...effectiveConfig,
             model: effectiveConfig.textModel || effectiveConfig.model,
             apiMode: compatConfig.textApiMode || "chat",
+            textStreaming: compatConfig.textStreaming === true,
             textReasoningEnabled: agentConfig.textReasoningEnabled === true,
             activeChannelId: effectiveConfig.textChannelId || effectiveConfig.activeChannelId,
             textChannelId: effectiveConfig.textChannelId,
@@ -651,6 +652,13 @@ export function CanvasAssistantPanel({
                             options={[{ label: "Chat", value: "chat" }, { label: "Responses", value: "responses" }]}
                             onChange={(textApiMode) => onAgentConfigChange({ textApiMode: textApiMode as CanvasAgentConfig["textApiMode"] })}
                         />
+                    </div>
+                    <div className="flex items-center justify-between gap-6 py-2">
+                        <div className="min-w-0">
+                            <div className="text-sm font-medium">流式响应</div>
+                            <div className="mt-1 text-xs leading-5 opacity-55">开启后以流式读取文本模型回复</div>
+                        </div>
+                        <Switch checked={compatConfig.textStreaming === true} onChange={(textStreaming) => onAgentConfigChange({ textStreaming })} />
                     </div>
                     <div className="flex items-center justify-between gap-6 py-2">
                         <div className="min-w-0">
