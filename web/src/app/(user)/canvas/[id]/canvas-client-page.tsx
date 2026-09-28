@@ -64,6 +64,7 @@ import { CANVAS_ASSET_DRAG_TYPE, CanvasSidePanel } from "../components/canvas-si
 import { DEFAULT_CANVAS_AGENT_PANEL, DEFAULT_CANVAS_SIDE_PANEL, useCanvasStore } from "../stores/use-canvas-store";
 import { assistantReferenceContentFromNode, buildNodeMentionReferences, isCanvasReferenceNode } from "../utils/canvas-resource-references";
 import { buildCanvasAgentContext } from "../agent/canvas-agent-context";
+import { resolveCanvasAgentImageSelection } from "../agent/canvas-agent-image-model";
 import type { CanvasAgentAction, CanvasAgentToolResult } from "../agent/canvas-agent-tools";
 import {
     CanvasNodeType,
