@@ -23,6 +23,23 @@ func ListUserCanvasProjects(userID string) ([]model.CanvasProject, error) {
 	return projects, err
 }
 
+func ListCanvasProjectsForMediaRepair(afterUserID, afterID string, limit int) ([]model.CanvasProject, error) {
+	db, err := DB()
+	if err != nil {
+		return nil, err
+	}
+	if limit < 1 || limit > 1000 {
+		limit = 100
+	}
+	query := db.Where("deleted_at = ''")
+	if afterUserID != "" || afterID != "" {
+		query = query.Where("user_id > ? OR (user_id = ? AND id > ?)", afterUserID, afterUserID, afterID)
+	}
+	var projects []model.CanvasProject
+	err = query.Order("user_id ASC, id ASC").Limit(limit).Find(&projects).Error
+	return projects, err
+}
+
 func SaveUserCanvasProject(
 	project model.CanvasProject,
 ) (model.CanvasProject, error) {

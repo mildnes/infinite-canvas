@@ -17,6 +17,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -28,6 +29,11 @@ import (
 )
 
 const generatedMediaProviderID = "local-generated"
+
+var (
+	generatedMediaSaveMu sync.Mutex
+	generatedMediaSyncMu sync.Mutex
+)
 
 // GeneratedMediaDir is persisted alongside the SQLite database in Docker.
 // Non-SQLite deployments must mount data/ or /app/data as persistent storage.
@@ -45,7 +51,20 @@ func GeneratedMediaDir() string {
 
 // SaveGeneratedMedia persists bytes before writing the task's short reference.
 func SaveGeneratedMedia(userID, contentType string, data []byte) (UploadedStorageObject, error) {
-	return saveGeneratedMedia(userID, contentType, data, uuid.NewString())
+	return saveGeneratedMedia(userID, contentType, data, uuid.NewString(), "")
+}
+
+// SaveGeneratedMediaDeduplicated stores one content-addressed copy per user.
+// sourceURL is audit-only and is never used as the returned long-term reference.
+func SaveGeneratedMediaDeduplicated(userID, contentType string, data []byte, sourceURL string) (UploadedStorageObject, error) {
+	sum := sha256.Sum256(data)
+	objectID := GeneratedMediaObjectID(userID, hex.EncodeToString(sum[:]))
+	return saveGeneratedMedia(userID, contentType, data, objectID, sourceURL)
+}
+
+func GeneratedMediaObjectID(userID, checksum string) string {
+	stableKey := strings.TrimSpace(userID) + ":sha256:" + strings.ToLower(strings.TrimSpace(checksum))
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("infinite-canvas/generated-media/content/"+stableKey)).String()
 }
 
 // SaveGeneratedMediaStable uses a deterministic result key for retried uploads.
@@ -56,10 +75,12 @@ func SaveGeneratedMediaStable(userID, contentType string, data []byte, stableKey
 		return UploadedStorageObject{}, errors.New("生成媒体结果标识无效")
 	}
 	objectID := uuid.NewSHA1(uuid.NameSpaceURL, []byte("infinite-canvas/generated-media/"+stableKey)).String()
-	return saveGeneratedMedia(userID, contentType, data, objectID)
+	return saveGeneratedMedia(userID, contentType, data, objectID, "")
 }
 
-func saveGeneratedMedia(userID, contentType string, data []byte, objectID string) (UploadedStorageObject, error) {
+func saveGeneratedMedia(userID, contentType string, data []byte, objectID string, sourceURL string) (UploadedStorageObject, error) {
+	generatedMediaSaveMu.Lock()
+	defer generatedMediaSaveMu.Unlock()
 	if userID == "" || len(data) == 0 {
 		return UploadedStorageObject{}, errors.New("生成媒体内容无效")
 	}
@@ -70,8 +91,12 @@ func saveGeneratedMedia(userID, contentType string, data []byte, objectID string
 	sum := sha256.Sum256(data)
 	checksum := hex.EncodeToString(sum[:])
 	if existing, err := repository.GetStorageObject(objectID); err == nil {
-		if existing.ProviderID != generatedMediaProviderID || existing.CreatedBy != userID || existing.SHA256 != checksum || existing.MimeType != contentType || existing.Bytes != int64(len(data)) {
+		if existing.CreatedBy != userID || existing.DeletedAt != "" || existing.SHA256 != checksum || existing.MimeType != contentType || existing.Bytes != int64(len(data)) {
 			return UploadedStorageObject{}, errors.New("生成媒体结果标识已被其他内容占用")
+		}
+		if existing.SourceURL == "" && strings.TrimSpace(sourceURL) != "" {
+			existing.SourceURL = strings.TrimSpace(sourceURL)
+			_, _ = repository.SaveStorageObject(existing)
 		}
 		return UploadedStorageObject{
 			ID: objectID, URL: "/api/files/" + objectID + "/content", StorageKey: "server:" + objectID,
@@ -122,7 +147,7 @@ func saveGeneratedMedia(userID, contentType string, data []byte, objectID string
 	object := model.StorageObject{
 		ID: objectID, ProviderID: generatedMediaProviderID, ObjectKey: name,
 		MimeType: contentType, Bytes: int64(len(data)), SHA256: checksum, Width: width, Height: height,
-		CreatedBy: userID, CreatedAt: now(),
+		CreatedBy: userID, CreatedAt: now(), SourceURL: strings.TrimSpace(sourceURL),
 	}
 	if _, err := repository.SaveStorageObject(object); err != nil {
 		_ = os.Remove(filepath.Join(dir, name))
@@ -174,6 +199,8 @@ func PromoteGeneratedMedia(ctx context.Context, objectID string) error {
 // syncGeneratedMedia keeps the public object ID stable and retains the local
 // copy as a read fallback. A failed upload never alters the local index.
 func syncGeneratedMedia(ctx context.Context, objectID string, explicit bool) error {
+	generatedMediaSyncMu.Lock()
+	defer generatedMediaSyncMu.Unlock()
 	object, err := repository.GetStorageObject(objectID)
 	if err != nil {
 		return err

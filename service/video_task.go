@@ -1,6 +1,8 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"log"
 	"strings"
 	"sync"
@@ -107,6 +109,16 @@ func CreateVideoTask(input VideoTaskCreateInput) (model.VideoTask, error) {
 		task.Status = "failed"
 		task.CompletedAt = current
 	}
+	persistedObjectID := ""
+	if task.Status == "completed" && task.VideoURL != "" && task.StorageKey == "" {
+		var persistErr error
+		persistedObjectID, persistErr = persistCompletedVideoTask(&task)
+		if persistErr != nil {
+			task.Status = "failed"
+			task.Error = "保存生成视频失败"
+			task.ErrorDetail = persistErr.Error()
+		}
+	}
 	var saved model.VideoTask
 	var err error
 	if input.WorkflowRef != "" {
@@ -114,6 +126,11 @@ func CreateVideoTask(input VideoTaskCreateInput) (model.VideoTask, error) {
 		err = ConsumeUserCredits(saved.UserID, saved.ChannelID, input.BillingName, saved.Credits, input.BillingPath, &saved)
 	} else {
 		saved, err = repository.SaveVideoTask(task)
+	}
+	if err == nil && persistedObjectID != "" {
+		if syncErr := SyncGeneratedMediaForUser(context.Background(), task.UserID, persistedObjectID); syncErr != nil {
+			log.Printf("sync video media failed (local preserved): task=%s object=%s err=%v", task.ID, persistedObjectID, syncErr)
+		}
 	}
 	if err == nil && input.WorkflowRef == "" && !IsCompletedVideoTaskStatus(saved.Status) && !IsFailedVideoTaskStatus(saved.Status) {
 		WakeVideoTaskPoller()
@@ -169,6 +186,12 @@ func VideoTaskResponse(task model.VideoTask) map[string]any {
 		result["url"] = task.VideoURL
 		result["video_url"] = task.VideoURL
 		result["data"] = []map[string]any{{"url": task.VideoURL}}
+		result["storageKey"] = task.StorageKey
+		result["mimeType"] = task.MimeType
+		result["bytes"] = task.Bytes
+		result["width"] = task.Width
+		result["height"] = task.Height
+		result["originalUrl"] = task.OriginalURL
 	}
 	if task.WorkflowRef != "" {
 		result["workflowRef"] = task.WorkflowRef
@@ -357,7 +380,19 @@ func UpdateVideoTaskFromPoll(task model.VideoTask, update VideoTaskPollUpdate) e
 	}
 	task.UpdatedAt = current
 	task.LastPolledAt = videoTaskTime(time.Now())
-	if task.VideoURL != "" || IsCompletedVideoTaskStatus(task.Status) {
+	persistedObjectID := ""
+	persistenceFailed := false
+	if (task.VideoURL != "" || IsCompletedVideoTaskStatus(task.Status)) && task.StorageKey == "" {
+		var persistErr error
+		persistedObjectID, persistErr = persistCompletedVideoTask(&task)
+		if persistErr != nil {
+			persistenceFailed = true
+			task.Status = "failed"
+			task.Error = "保存生成视频失败"
+			task.ErrorDetail = persistErr.Error()
+		}
+	}
+	if !persistenceFailed && (task.VideoURL != "" || IsCompletedVideoTaskStatus(task.Status)) {
 		task.Status = "completed"
 		task.Progress = 100
 		task.CompletedAt = current
@@ -371,6 +406,11 @@ func UpdateVideoTaskFromPoll(task model.VideoTask, update VideoTaskPollUpdate) e
 	if err != nil {
 		return err
 	}
+	if updated && persistedObjectID != "" {
+		if err := SyncGeneratedMediaForUser(context.Background(), task.UserID, persistedObjectID); err != nil {
+			log.Printf("sync video media failed (local preserved): task=%s object=%s err=%v", task.ID, persistedObjectID, err)
+		}
+	}
 	if credits := failedVideoTaskRefundAmount(task, updated); credits > 0 {
 		if err := RefundUserCredits(task.UserID, task.ChannelID, task.Model, credits, "/videos"); err != nil {
 			log.Printf("refund failed video task credits failed id=%s err=%v", task.ID, err)
@@ -378,6 +418,26 @@ func UpdateVideoTaskFromPoll(task model.VideoTask, update VideoTaskPollUpdate) e
 		}
 	}
 	return nil
+}
+
+func persistCompletedVideoTask(task *model.VideoTask) (string, error) {
+	sourceURL := strings.TrimSpace(task.VideoURL)
+	if sourceURL == "" {
+		return "", errors.New("视频任务完成但没有媒体地址")
+	}
+	stored, err := PersistTrustedGeneratedMedia(context.Background(), task.UserID, sourceURL)
+	if err != nil {
+		task.OriginalURL = sourceURL
+		return "", err
+	}
+	task.OriginalURL = sourceURL
+	task.VideoURL = stored.URL
+	task.StorageKey = stored.StorageKey
+	task.MimeType = stored.MimeType
+	task.Bytes = stored.Bytes
+	task.Width = stored.Width
+	task.Height = stored.Height
+	return stored.ID, nil
 }
 
 func failedVideoTaskRefundAmount(task model.VideoTask, updated bool) int {

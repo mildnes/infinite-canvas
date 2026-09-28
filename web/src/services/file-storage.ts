@@ -6,6 +6,7 @@ import { nanoid } from "nanoid";
 import { deleteAnonymousStorageFile, uploadAnonymousStorageFile } from "@/services/anonymous-storage";
 import { apiGet } from "@/services/api/request";
 import { storageKeyFromContentUrl } from "@/lib/storage-reference";
+import { assertGeneratedMediaOwner } from "@/lib/generated-media-persistence";
 import { autoSyncToCloud, canUseGlobalStorage, clearAutoSyncCache, getProxyUrl, loadUserStorageProvider, toProviderPayload, type StorageConfig, type UserWebDAVStorageProvider } from "@/services/image-storage";
 import { useUserStore } from "@/stores/use-user-store";
 
@@ -22,9 +23,7 @@ export async function uploadMediaFile(input: string | Blob, prefix = "file", syn
     const localUrl = URL.createObjectURL(blob);
     objectUrls.set(localStorageKey, localUrl);
     const meta = blob.type.startsWith("video/") ? await readVideoMeta(localUrl) : {};
-    const uploaded = await autoSyncToCloud(syncId || blob, async () => {
-        return uploadMediaBlobToServer(blob, input instanceof File ? input.name : prefix, blob.type.startsWith("video/") ? localUrl : undefined);
-    });
+    const uploaded = await autoSyncToCloud(syncId || blob, async () => uploadMediaBlobToServer(blob, input instanceof File ? input.name : prefix, blob.type.startsWith("video/") ? localUrl : undefined));
     if (!uploaded) return { url: localUrl, storageKey: localStorageKey, bytes: blob.size, mimeType: blob.type || "application/octet-stream", ...meta };
 
     const priorUrl = objectUrls.get(uploaded.storageKey);
@@ -64,8 +63,22 @@ export async function downloadRemoteMedia(url: string) {
 }
 
 export async function uploadRemoteMediaToServer(url: string, filename: string): Promise<UploadedFile> {
+    const ownerToken = useUserStore.getState().token;
     const blob = await downloadRemoteMedia(url);
+    if (ownerToken) return persistGeneratedMediaBlob(blob, filename, url, ownerToken);
     return uploadMediaBlobToServer(blob, filename);
+}
+
+export async function persistGeneratedMediaBlob(blob: Blob, filename: string, sourceUrl = "", ownerToken = useUserStore.getState().token): Promise<UploadedFile> {
+    if (!ownerToken) throw new Error("请先登录后再持久化生成媒体");
+    const formData = new FormData();
+    formData.append("file", blob, filename || "generated-media");
+    if (sourceUrl) formData.append("sourceUrl", sourceUrl);
+    const response = await fetch("/api/v1/generated-media", { method: "POST", headers: { Authorization: `Bearer ${ownerToken}` }, body: formData });
+    const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string; data?: UploadedFile } | null;
+    if (!response.ok || payload?.code !== 0 || !payload.data) throw new Error(payload?.msg || "生成媒体持久化失败");
+    assertGeneratedMediaOwner(useUserStore.getState().token, ownerToken);
+    return payload.data;
 }
 
 async function uploadMediaBlobToServer(blob: Blob, filename: string, metadataUrl?: string): Promise<UploadedFile> {

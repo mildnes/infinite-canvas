@@ -142,6 +142,10 @@ func CanvasImageTaskResponse(task model.CanvasImageTask) map[string]any {
 		result["height"] = task.Height
 		result["mimeType"] = task.MimeType
 		result["bytes"] = task.Bytes
+		result["originalUrl"] = task.OriginalURL
+		if len(task.OriginalURLs) > 0 {
+			result["originalUrls"] = task.OriginalURLs
+		}
 	}
 	if task.WorkflowRef != "" {
 		result["workflowRef"] = task.WorkflowRef

@@ -6,7 +6,7 @@ import { isGrok2APITtsConfig, normalizeGrokTtsFormat, normalizeGrokTtsLanguage, 
 import { isMimoPresetTtsModel, isMimoTtsModel, isMimoVoiceCloneModel, isMimoVoiceDesignModel, normalizeMimoTtsFormat, normalizeMimoTtsVoice } from "@/lib/mimo-tts";
 import { geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig, isGeminiTtsModel } from "@/lib/gemini";
 import { geminiPcmBase64ToWav, normalizeGeminiTtsVoice } from "@/lib/gemini-tts";
-import { resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer, type UploadedFile } from "@/services/file-storage";
+import { persistGeneratedMediaBlob, resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer, type UploadedFile } from "@/services/file-storage";
 import { autoSyncToCloud } from "@/services/image-storage";
 import { buildApiUrl, channelIdForActiveModel, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
@@ -124,6 +124,8 @@ export async function requestAudioGeneration(config: AiConfig, prompt: string, r
 
 export async function storeGeneratedAudio(blob: Blob, format = "mp3", syncId?: string): Promise<UploadedFile> {
     const audio = blob.type.startsWith("audio/") ? blob : new Blob([blob], { type: audioMimeType(format) });
+    const token = useUserStore.getState().token;
+    if (token) return persistGeneratedMediaBlob(audio, "audio", "", token);
     return uploadMediaFile(audio, "audio", syncId);
 }
 
@@ -189,7 +191,8 @@ async function syncGeneratedAudio(task: CanvasAudioTask, resultId = task.started
     const url = task.audio_url || task.url || "";
     const status = (task.status || "").toLowerCase();
     if ((status && !["completed", "complete", "done", "succeeded", "success"].includes(status)) || !url || task.storageKey) return task;
-    const media = await autoSyncToCloud(`audio:${task.id}:${resultId || "result"}`, () => uploadRemoteMediaToServer(url, "audio"));
+    const persist = () => uploadRemoteMediaToServer(url, "audio");
+    const media = useUserStore.getState().token ? await persist() : await autoSyncToCloud(`audio:${task.id}:${resultId || "result"}`, persist);
     return media ? { ...task, url: media.url, audio_url: media.url, storageKey: media.storageKey, bytes: media.bytes, mimeType: media.mimeType } : task;
 }
 

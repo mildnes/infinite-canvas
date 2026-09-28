@@ -336,6 +336,15 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 		}
 		parsed.Status = "failed"
 	}
+	if service.IsCompletedVideoTaskStatus(parsed.Status) && strings.HasPrefix(parsed.VideoURL, "http") {
+		if persisted, persistErr := persistChannelVideoResult(task.UserID, parsed.VideoURL, channel); persistErr != nil {
+			parsed.Status = "failed"
+			parsed.Error = "保存生成视频失败"
+			parsed.ErrorDetail = persistErr.Error()
+		} else {
+			parsed.VideoURL = persisted
+		}
+	}
 	if parsed.ErrorDetail == "" && len(payload) > 0 && parsed.Error != "" {
 		parsed.ErrorDetail = string(payload)
 	}
@@ -352,6 +361,41 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 		ErrorDetail:  parsed.ErrorDetail,
 		ResponseBody: string(transformed),
 	}, nil
+}
+
+func persistChannelVideoResult(userID, sourceURL string, channel model.ModelChannel) (string, error) {
+	request, err := http.NewRequest(http.MethodGet, sourceURL, nil)
+	if err != nil {
+		return "", err
+	}
+	service.SetModelChannelAuthHeader(request, channel)
+	response, err := service.HTTPClientForChannel(channel).Do(request)
+	if err != nil {
+		return "", errors.New("生成视频下载失败")
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return "", fmt.Errorf("生成视频下载失败 HTTP %d", response.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, (128<<20)+1))
+	if err != nil || len(data) == 0 || len(data) > 128<<20 {
+		return "", errors.New("生成视频读取失败或超过 128MB")
+	}
+	mimeType := strings.TrimSpace(strings.Split(response.Header.Get("Content-Type"), ";")[0])
+	if mimeType == "" || mimeType == "application/octet-stream" {
+		mimeType = http.DetectContentType(data)
+	}
+	if !service.IsSupportedGeneratedMediaMIME(mimeType) {
+		return "", errors.New("生成视频媒体类型不受支持")
+	}
+	if err := service.ValidateGeneratedMediaBytes(data, mimeType); err != nil {
+		return "", err
+	}
+	stored, err := service.SaveGeneratedMediaDeduplicated(userID, mimeType, data, sourceURL)
+	if err != nil {
+		return "", err
+	}
+	return stored.URL, nil
 }
 
 func normalizeVideoCreateBody(body []byte, contentType string, modelName string, channel model.ModelChannel, upstreamPath string) ([]byte, string, error) {

@@ -12,6 +12,10 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 ## 本轮恢复待复验
 
+- [新增待验收] 新生成图片、视频、音频和多图结果在任务成功前均获得 `server:<objectId>` 与 `/api/files/<objectId>/content`；分别验证 data/base64、Blob、HTTP(S) 直链和 `/api/proxy-image?url=`，断开上游后短链接仍返回真实媒体字节。
+- [新增待验收] 关闭自动云同步时仍保留本地持久化副本；开启 WebDAV/S3 后先落本地再上云，上云失败或校验失败不清空节点。相同源/相同字节跨节点、任务与 Agent 引用只建立一个用户隔离的对象，多图每张均有独立可回源键。
+- [新增待验收] 对历史画布先运行 `/app/canvas-media-repair -limit 100` dry-run，核对每条画布 ID、节点 ID、原 URL、对象 ID、字节、SHA-256 与原因；停写并备份后才可加 `-apply -writes-stopped`。失败条目保留原 URL 并标记 broken，过程不得删除媒体或执行 `VACUUM`。
+- [新增待验收] 生成或迁移过程中切换账号、退出、切换画布或停止任务，迟到下载及上云结果不得回写新账号/画布；刷新、另一浏览器同账号、Agent 会话引用仍能读取稳定短链接。
 - [已恢复待复验] 画布详情页重新接入 `onUploadBoardToCloud`；验证本地、远程 HTTP 图片、视频和音频可批量转存，失败项不覆盖原媒体，账号或画布切换后的迟到结果不回写新页面。
 - [已恢复待复验] 打开画布重新执行 `repairCanvasProjectMedia`，覆盖已有 `server:` 云媒体、本地 IndexedDB 媒体和 Agent 会话附件，并在账号或项目变化后丢弃旧恢复结果。
 - [已恢复待复验] `recoverPersistedCanvasImageTasks` 重新接入批量任务查询，只有 `imageTaskId`、但 `content`/`storageKey` 缺失的旧成功图片可从任务记录回填。
@@ -58,7 +62,7 @@ description: 当前版本已实现但仍需人工验证的变更项
 - Agent 推理关闭时请求体保持原样；开启后验证 Chat、Responses、Gemini、MiMo 的推理参数，并确认 Grok2API/xAI 渠道、模型和路由不变。
 - 视频节点进度条应支持点击和拖动定位且不拖动画布；媒体源替换后进度归零。含音轨视频可生成并连接 WAV 音频节点，无音轨时不得生成空节点。
 - 音频截取范围不得短于 0.5 秒，试听到选定终点自动停止；本地、`server:`、WebDAV 和远程媒体均可处理，失败后不残留加载状态或错误连线。
-- 自动同步关闭时保持现有行为；开启后图片、视频、音频和派生 WAV 只上传一次并保留云端元数据，同步失败时原始 URL、Blob、Base64 或本地键仍可用且只提示一次。
+- 自动云同步关闭时，登录账号的新生成图片、视频、音频和派生 WAV 仍先得到本地 `server:` 副本但不上传 WebDAV/S3；开启后只上云一次并保留云端元数据，同步失败时本地短链接仍可用且只提示一次。
 - 媒体恢复不应产生重复上传；仍被撤销/重做历史、其他画布、素材库、生成日志、Skill 或 Agent 会话引用的文件不得删除。redo 覆盖、历史超过 50 步、离开画布、账号切换及迟到同步时只清理真正无引用的文件。
 - 配置 `grok2api` 或 `xai` 渠道后，画布用 grok-imagine-image / grok-imagine-video 系列模型生成图片、视频，确认路由、字段和轮询结果识别正常。
 - 管理端/本地渠道协议下拉可选 `Grok2API`、`xAI`，保存后渠道协议字段正确落库。
@@ -71,11 +75,11 @@ description: 当前版本已实现但仍需人工验证的变更项
 - Safari 打开画布视频应能播放；若节点 content 仍是 /api/proxy-image?url=视频地址，前端会解成直链。
 - 本地生成/上传图片后点“上传至云存储”，图片应仍可显示（content 为 /api/files/.../content 或可用预览，不应变 X）。
 - 更换 WebDAV/S3 地址后，旧 providerId 的云端图应仍能通过当前存储回源显示；上传至云存储后当前页不应立刻变 X（可先本地预览）。
-- [恢复后复验] 打开画板：本机 IndexedDB 本地媒体应自动上传 WebDAV/S3 并回写 server:；已有 server: 直接显示；Grok 等 https 原链只显示不自动转存。
+- [恢复后复验] 打开画板：本机 IndexedDB 本地媒体可经一键上云回写 `server:`，已有 `server:` 直接显示；新产生的 Grok 等渠道 HTTPS 结果必须在成功当下强制转存，任意用户粘贴的普通远程 URL 仍不得在打开画布时自动抓取。
 - [恢复后复验] 节点/工具栏「上传至云存储」「一键上云」可将本地未上云与 Grok https 主动转存为 /api/files/...；另一浏览器同账号应可见。
 - 失效 blob 且无 server/原链时显示失效占位，不白屏；保存/同步 JSON 不含 blob:。
 - Safari 打开 content 为 /api/files/.../content 的云端视频/音频应能正常播放（需支持 Range）。
-- gpt-image-2 等仅返回 base64 的生图：所有画布生成、批量生成、重试与轮询完成路径会先写入 `server:` 或 `image:`；刷新浏览器后图片仍在。有对象存储时确认节点为 `server:`，无存储时至少有 `image:` 本地键。
+- gpt-image-2 等仅返回 base64 的生图：登录账号的画布生成、批量生成、重试与轮询完成路径必须先写入 `server:`；刷新或换浏览器后图片仍在。未登录本地直连场景保留 `image:` IndexedDB 键。
 - 打开画板恢复本地 Base64 媒体时，同一文件若同时存在于节点、Agent 历史图片或引用中，WebDAV/S3 只上传一份，所有引用回写同一个 `server:` 指针。
 - [恢复后复验] 旧版本已丢失 content 但仍保留 `imageTaskId` 的成功图片，登录后打开画板应批量从云端任务记录取回结果并写入 `server:` 或 `image:`；任务记录不存在时维持失效占位，不扫描 WebDAV 目录猜测文件。
 - Agent 对话框输入 @ 可弹出画布图片/视频/音频列表；插入芯片后发送，Agent 应识别对应节点引用。

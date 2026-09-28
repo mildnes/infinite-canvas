@@ -35,7 +35,7 @@ COPY repository ./repository
 COPY router ./router
 COPY service ./service
 COPY main.go ./
-RUN go build -o /server . && go build -o /media-cloud ./cmd/media-cloud && go build -o /media-gc ./cmd/media-gc && go build -o /image-log-summaries ./cmd/image-log-summaries
+RUN go build -o /server . && go build -o /media-cloud ./cmd/media-cloud && go build -o /media-gc ./cmd/media-gc && go build -o /image-log-summaries ./cmd/image-log-summaries && go build -o /canvas-media-repair ./cmd/canvas-media-repair
 
 # 运行镜像：Next.js 对外监听 3000，Go 只在容器内部监听 8080。
 FROM node:22-bookworm-slim
@@ -47,6 +47,7 @@ COPY --from=api-build /server /app/server
 COPY --from=api-build /media-cloud /app/media-cloud
 COPY --from=api-build /media-gc /app/media-gc
 COPY --from=api-build /image-log-summaries /app/image-log-summaries
+COPY --from=api-build /canvas-media-repair /app/canvas-media-repair
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 COPY --from=web-build /app/web/public /app/web/public

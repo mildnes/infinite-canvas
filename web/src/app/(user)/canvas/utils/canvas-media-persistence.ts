@@ -25,6 +25,7 @@ export type CanvasMediaStatus = "ok" | "local-only" | "broken";
 
 export type CanvasMediaRef = {
     content?: string;
+	originalUrl?: string;
     storageKey?: string;
     mediaStatus?: CanvasMediaStatus;
     mediaError?: string;
@@ -151,6 +152,7 @@ export function sanitizeCanvasNodeForPersistence(node: CanvasNodeData): CanvasNo
     const metadata = node.metadata || {};
     const next = normalizeCanvasMediaRefForPersistence({
         content: metadata.content,
+		originalUrl: metadata.originalUrl,
         storageKey: metadata.storageKey,
         mediaStatus: metadata.mediaStatus,
         mediaError: metadata.mediaError,
@@ -209,6 +211,7 @@ function applyRefToMetadata(metadata: CanvasNodeMetadata, ref: CanvasMediaRef): 
         storageKey: ref.storageKey || "",
         mediaStatus: ref.mediaStatus,
         mediaError: ref.mediaError,
+		originalUrl: ref.originalUrl || metadata.originalUrl,
         mimeType: ref.mimeType || metadata.mimeType,
         bytes: ref.bytes ?? metadata.bytes,
         naturalWidth: ref.width || metadata.naturalWidth,
@@ -223,6 +226,7 @@ function sameRef(a: CanvasMediaRef, b: CanvasMediaRef) {
         (a.storageKey || "") === (b.storageKey || "") &&
         a.mediaStatus === b.mediaStatus &&
         (a.mediaError || "") === (b.mediaError || "")
+		&& (a.originalUrl || "") === (b.originalUrl || "")
     );
 }
 

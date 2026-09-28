@@ -34,6 +34,7 @@ export type CameraControlOptions = {
 
 export type CanvasNodeMetadata = {
     content?: string;
+	originalUrl?: string;
     groupId?: string;
     composerContent?: string;
     prompt?: string;

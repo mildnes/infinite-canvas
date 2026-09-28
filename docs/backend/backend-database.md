@@ -95,9 +95,10 @@ S3/R2、WebDAV 与服务端本地生成媒体共用的文件索引表，不保�
 | `public_url` | string | S3/R2 可选公开地址；WebDAV 为空并通过 `/api/files/:id/content` 读取 |
 | `mime_type` | string | 媒体 MIME 类型 |
 | `bytes` | number | 文件字节数 |
-| `width` | number | 预留字段，当前上传链路未写入，默认 `0` |
-| `height` | number | 预留字段，当前上传链路未写入，默认 `0` |
+| `width` | number | 图片生成媒体的原始宽度；其他媒体无法识别时为 `0` |
+| `height` | number | 图片生成媒体的原始高度；其他媒体无法识别时为 `0` |
 | `sha256` | string | 文件内容摘要 |
+| `source_url` | text | 生成渠道返回的原始 URL，仅用于审计；节点和任务不依赖该地址回源 |
 | `direct` | boolean | 是否由登录用户的浏览器直接上传至 WebDAV |
 | `created_by` | string | 创建用户 ID |
 | `created_at` | string | 创建时间 |
@@ -192,7 +193,10 @@ Bridge 工作流请求及租约表。队列由 `bridge_id` 和 `status` 索引�
 | `progress` | number | 生成进度，0-100 |
 | `seconds` | string | 视频秒数 |
 | `size` | string | 视频尺寸 |
-| `video_url` | text | 完成后的视频临时 URL |
+| `video_url` | text | 完成后稳定的 `/api/files/:id/content` 地址 |
+| `original_url` | text | 渠道返回的原始临时地址，仅用于审计和故障定位 |
+| `storage_key` | string | 稳定对象引用 `server:<id>` |
+| `mime_type` / `bytes` | string / number | 已持久化视频的类型与字节数 |
 | `error` | text | 失败摘要 |
 | `error_detail` | text | 失败详情或最近一次轮询错误详情 |
 | `request_body` | text | 创建任务时的请求摘要 |
@@ -279,7 +283,9 @@ Bridge 工作流请求及租约表。队列由 `bridge_id` 和 `status` 索引�
 | `generation_type` | string | `generation` 或 `edit` |
 | `image_url` | text | 完成后图片 URL或第一张图片 URL |
 | `image_urls` | JSON | 完成后全部图片 URL，第一项与 `image_url` 一致 |
-| `image_storage` | JSON | 多图逐张短 URL、`storageKey`、MIME、尺寸和字节；外链项为 `null` |
+| `image_storage` | JSON | 多图逐张稳定短 URL、`storageKey`、MIME、尺寸和字节；成功结果不再以外链作为唯一副本 |
+| `original_url` | text | 第一张图片的上游原始地址，仅用于审计 |
+| `original_urls` | JSON | 多图逐张上游原始地址，仅用于审计 |
 | `workflow_ref` | text | 工作流任务的归属、渠道和工作流标识 JSON；普通模型任务为空 |
 | `credits` | number | 工作流创建时实际预扣的整数算力点，失败时按此退款 |
 | `storage_key` | string | 存储对象 key |

@@ -6,6 +6,7 @@ import { nanoid } from "nanoid";
 import { readImageMeta } from "@/lib/image-utils";
 import { storageKeyFromContentUrl } from "@/lib/storage-reference";
 import { StorageSyncDeduper } from "@/lib/storage-sync-deduper";
+import { assertGeneratedMediaOwner } from "@/lib/generated-media-persistence";
 import { deleteAnonymousStorageFile, uploadAnonymousStorageFile } from "@/services/anonymous-storage";
 import { apiGet } from "@/services/api/request";
 import { useUserStore } from "@/stores/use-user-store";
@@ -66,6 +67,7 @@ export const STORAGE_SYNC_FAILED_EVENT = "infinite-canvas:storage-sync-failed";
 export const STORAGE_SYNC_COMPLETED_EVENT = "infinite-canvas:storage-sync-completed";
 type AutoSyncResult = { storageKey: string; url?: string };
 const autoSyncRequests = new StorageSyncDeduper<AutoSyncResult>();
+const generatedImageRequests = new StorageSyncDeduper<UploadedImage>();
 const autoSyncBlobIds = new WeakMap<Blob, string>();
 let autoSyncBlobSequence = 0;
 let autoSyncOwner = "";
@@ -125,6 +127,7 @@ export async function autoSyncToCloud<T extends AutoSyncResult>(source: string |
 export function clearAutoSyncCache(storageKey?: string) {
     if (!storageKey) {
         autoSyncRequests.clear();
+        generatedImageRequests.clear();
         autoSyncOwner = "";
         return;
     }
@@ -144,6 +147,14 @@ export function canUseGlobalStorage(config: StorageConfig) {
 
 export async function autoSyncImage(url: string, resultId: string, storageKey?: string): Promise<UploadedImage | null> {
     if (!url || storageKey) return null;
+    const ownerToken = useUserStore.getState().token;
+    if (ownerToken) {
+        return generatedImageRequests.run(`generated:${ownerToken}:image:${resultId}`, async () => {
+            const response = await fetch(getProxyUrl(url));
+            if (!response.ok) throw new Error(`生成图片下载失败：${response.status}`);
+            return persistGeneratedImageBlob(await response.blob(), "image", url, ownerToken);
+        }, true);
+    }
     return autoSyncToCloud(`image:${resultId}`, async () => {
         try {
             return await uploadRemoteImageToServer(url, "image");
@@ -246,16 +257,17 @@ export async function uploadImage(input: string | Blob, options: UploadImageOpti
 }
 
 export async function uploadRemoteImageToServer(url: string, filename: string): Promise<UploadedImage> {
+    const ownerToken = useUserStore.getState().token;
     const response = await fetch(getProxyUrl(url));
     if (!response.ok) {
         const payload = await response.json().catch(() => null) as { msg?: string } | null;
         throw new Error(payload?.msg || "代理图片拉取失败：" + response.status);
     }
     const blob = await response.blob();
+    if (ownerToken) return persistGeneratedImageBlob(blob, filename, url, ownerToken);
     const config = await loadStorageConfig();
     const userProvider = config.allowUserProvider ? loadUserStorageProvider() : null;
     if (!canUseGlobalStorage(config) && !userProvider) throw new Error("服务端对象存储未启用");
-    const token = useUserStore.getState().token;
     if (userProvider?.type === "webdav") {
         const directUpload = await uploadWebDAVImageDirect(blob, filename || `image-${nanoid()}.${imageExtension(blob.type)}`, userProvider);
         if (directUpload) return directUpload;
@@ -274,6 +286,18 @@ export async function uploadRemoteImageToServer(url: string, filename: string): 
     const meta = await readImageMeta(payload.data.url);
     if (payload.data.storageKey?.startsWith("server:")) serverUrls.set(payload.data.storageKey.slice("server:".length), payload.data.url);
     return { ...payload.data, width: payload.data.width || meta.width, height: payload.data.height || meta.height, mimeType: payload.data.mimeType || blob.type || "image/png", bytes: payload.data.bytes || blob.size };
+}
+
+async function persistGeneratedImageBlob(blob: Blob, filename: string, sourceUrl: string, ownerToken: string): Promise<UploadedImage> {
+    const formData = new FormData();
+    formData.append("file", blob, filename || "generated-image");
+    if (sourceUrl) formData.append("sourceUrl", sourceUrl);
+    const response = await fetch("/api/v1/generated-media", { method: "POST", headers: { Authorization: `Bearer ${ownerToken}` }, body: formData });
+    const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string; data?: UploadedImage } | null;
+    if (!response.ok || payload?.code !== 0 || !payload.data) throw new Error(payload?.msg || "生成图片持久化失败");
+    assertGeneratedMediaOwner(useUserStore.getState().token, ownerToken);
+    serverUrls.set(payload.data.storageKey.slice("server:".length), payload.data.url);
+    return payload.data;
 }
 
 export function clearStorageConfigCache() {

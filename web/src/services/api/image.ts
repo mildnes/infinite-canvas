@@ -58,6 +58,8 @@ export type CanvasImageTask = {
     image_url?: string;
     image_urls?: string[];
     imageStorage?: Array<UploadedImage | null>;
+	originalUrl?: string;
+	originalUrls?: string[];
     storageKey?: string;
     width?: number;
     height?: number;

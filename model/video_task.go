@@ -18,6 +18,7 @@ type VideoTask struct {
 	Seconds         string `json:"seconds"`
 	Size            string `json:"size"`
 	VideoURL        string `json:"videoUrl" gorm:"type:text"`
+	OriginalURL     string `json:"originalUrl" gorm:"type:text"`
 	StorageKey      string `json:"storageKey"`
 	MimeType        string `json:"mimeType"`
 	Bytes           int64  `json:"bytes"`

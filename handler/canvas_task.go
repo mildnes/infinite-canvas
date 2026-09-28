@@ -301,37 +301,34 @@ func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []
 	}
 	imageStorage := make([]*model.CanvasImageStorage, len(imageURLs))
 	created := make([]string, 0, len(imageURLs))
-	for index, url := range imageURLs {
-		if !strings.HasPrefix(url, "data:image/") {
-			continue
-		}
-		data, imageMimeType, decodeErr := imageCandidateBytes(url)
-		if decodeErr != nil {
-			err = decodeErr
-			break
-		}
-		stored, saveErr := service.SaveGeneratedMedia(user.ID, imageMimeType, data)
+	originalURLs := append([]string(nil), imageURLs...)
+	task.OriginalURL = originalURLs[0]
+	task.OriginalURLs = originalURLs
+	for index, sourceURL := range originalURLs {
+		stored, saveErr := service.PersistTrustedGeneratedMedia(context.Background(), user.ID, sourceURL)
 		if saveErr != nil {
 			err = saveErr
 			break
 		}
 		created = append(created, stored.ID)
-		width, height := imageSize(data)
 		imageURLs[index] = stored.URL
-		imageStorage[index] = &model.CanvasImageStorage{URL: stored.URL, StorageKey: stored.StorageKey, MimeType: stored.MimeType, Bytes: stored.Bytes, Width: width, Height: height}
+		imageStorage[index] = &model.CanvasImageStorage{URL: stored.URL, StorageKey: stored.StorageKey, MimeType: stored.MimeType, Bytes: stored.Bytes, Width: stored.Width, Height: stored.Height}
 		if index == 0 {
 			mimeType, bytes = stored.MimeType, stored.Bytes
-			task.Width, task.Height = width, height
+			task.Width, task.Height = stored.Width, stored.Height
 			task.StorageKey = stored.StorageKey
 		}
 	}
 	if err != nil {
-		for _, id := range created {
-			service.DiscardGeneratedMedia(id)
+		task.ImageURL = imageURLs[0]
+		task.ImageURLs = imageURLs
+		task.ImageStorage = imageStorage
+		if len(imageStorage) > 0 && imageStorage[0] != nil {
+			task.StorageKey = imageStorage[0].StorageKey
+			task.Width, task.Height = imageStorage[0].Width, imageStorage[0].Height
+			task.MimeType, task.Bytes = imageStorage[0].MimeType, imageStorage[0].Bytes
 		}
-		task.StorageKey = ""
-		task.Width, task.Height = 0, 0
-		saveFailedCanvasImageTask(task, "保存生成图片失败", err.Error())
+		saveFailedCanvasImageTask(task, "保存生成图片失败，未将临时地址标记为成功", err.Error())
 		return
 	}
 	task.Status = "completed"
@@ -348,11 +345,6 @@ func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []
 	task.Error = ""
 	task.ErrorDetail = ""
 	if _, err = service.SaveCanvasImageTask(task); err != nil {
-		if persisted, found, readErr := service.GetUserCanvasImageTask(user.ID, task.ID); readErr == nil && found && persisted.Status != "completed" {
-			for _, id := range created {
-				service.DiscardGeneratedMedia(id)
-			}
-		}
 		log.Printf("save completed canvas image task failed: id=%s err=%v", task.ID, err)
 		return
 	}
@@ -399,7 +391,7 @@ func runCanvasAudioTask(task model.CanvasAudioTask, user model.AuthUser, body []
 	task.Progress = 100
 	task.CompletedAt = taskTime()
 	task.ResponseBody = "[binary audio]"
-	stored, err := service.SaveGeneratedMedia(user.ID, mimeType, payload)
+	stored, err := service.SaveGeneratedMediaDeduplicated(user.ID, mimeType, payload, "")
 	if err != nil {
 		saveFailedCanvasAudioTask(task, "保存生成音频失败", err.Error())
 		return
@@ -411,9 +403,6 @@ func runCanvasAudioTask(task model.CanvasAudioTask, user model.AuthUser, body []
 	task.Error = ""
 	task.ErrorDetail = ""
 	if _, err = service.SaveCanvasAudioTask(task); err != nil {
-		if persisted, found, readErr := service.GetUserCanvasAudioTask(user.ID, task.ID); readErr == nil && found && persisted.Status != "completed" {
-			service.DiscardGeneratedMedia(stored.ID)
-		}
 		log.Printf("save completed canvas audio task failed: id=%s err=%v", task.ID, err)
 		return
 	}
@@ -655,7 +644,7 @@ func imageURLsFromAIResponse(payload []byte, contentType string, collectAll bool
 		url := candidate
 		mimeType := ""
 		var bytes int64
-		if !strings.HasPrefix(candidate, "http://") && !strings.HasPrefix(candidate, "https://") {
+		if !isGeneratedImageURL(candidate) {
 			data, detectedMimeType, err := imageCandidateBytes(candidate)
 			if err != nil || len(data) == 0 {
 				continue
@@ -683,6 +672,10 @@ func imageURLsFromAIResponse(payload []byte, contentType string, collectAll bool
 		return nil, "", 0, errors.New("图片接口没有返回图片")
 	}
 	return urls, firstMimeType, firstBytes, nil
+}
+
+func isGeneratedImageURL(value string) bool {
+	return strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") || strings.HasPrefix(value, "/api/proxy-image?")
 }
 
 type serverSentJSONEvent struct {

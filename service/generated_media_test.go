@@ -1,6 +1,8 @@
 package service
 
 import (
+	"context"
+	"encoding/base64"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,6 +12,42 @@ import (
 	"github.com/tigerowo/infinite-canvas/config"
 	"github.com/tigerowo/infinite-canvas/model"
 )
+
+func TestGeneratedMediaContentAddressIsUserScoped(t *testing.T) {
+	checksum := "0123456789abcdef"
+	first := GeneratedMediaObjectID("user-a", checksum)
+	if first == "" || first != GeneratedMediaObjectID("user-a", checksum) {
+		t.Fatal("same user and checksum must produce one stable object ID")
+	}
+	if first == GeneratedMediaObjectID("user-b", checksum) {
+		t.Fatal("different users must not share a storage object")
+	}
+}
+
+func TestReadTrustedGeneratedMediaDataURL(t *testing.T) {
+	data, decodeErr := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+	if decodeErr != nil {
+		t.Fatal(decodeErr)
+	}
+	payload, err := ReadTrustedGeneratedMedia(context.Background(), "data:image/png;base64,"+base64.StdEncoding.EncodeToString(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(payload.Data) != string(data) || payload.MimeType != "image/png" || payload.SHA256 == "" || payload.SourceURL != "" {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+}
+
+func TestReadTrustedGeneratedMediaProxyKeepsSSRFProtection(t *testing.T) {
+	source, unwrapErr := UnwrapGeneratedMediaSourceURL("/api/proxy-image?url=https%3A%2F%2Fimages.example%2Fresult.png")
+	if unwrapErr != nil || source != "https://images.example/result.png" {
+		t.Fatalf("proxy source = %q, %v", source, unwrapErr)
+	}
+	_, err := ReadTrustedGeneratedMedia(context.Background(), "/api/proxy-image?url=http%3A%2F%2F127.0.0.1%2Fsecret.png")
+	if err == nil {
+		t.Fatal("proxy-wrapped private address must remain blocked")
+	}
+}
 
 func TestGeneratedMediaRangeAndPath(t *testing.T) {
 	previous := config.Cfg

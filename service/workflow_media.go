@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +19,13 @@ import (
 
 const workflowResultMediaLimit int64 = 128 << 20
 
+type GeneratedMediaPayload struct {
+	Data      []byte
+	MimeType  string
+	SourceURL string
+	SHA256    string
+}
+
 // PersistWorkflowResultMedia downloads one trusted workflow result into the
 // durable local-generated store. Callers can then expose the returned short
 // URL, instead of retaining a provider URL that may expire.
@@ -24,9 +33,8 @@ func PersistWorkflowResultMedia(ctx context.Context, userID, raw string) (Upload
 	return persistWorkflowResultMedia(ctx, userID, raw, "")
 }
 
-// PersistWorkflowResultMediaStable applies a task-scoped key so a retry after
-// a response timeout reuses the same local object instead of creating a
-// duplicate orphan.
+// PersistWorkflowResultMediaStable keeps the existing task-oriented API while
+// using the result bytes as the durable deduplication key.
 func PersistWorkflowResultMediaStable(ctx context.Context, userID, raw, stableKey string) (UploadedStorageObject, error) {
 	return persistWorkflowResultMedia(ctx, userID, raw, stableKey)
 }
@@ -36,14 +44,20 @@ func persistWorkflowResultMedia(ctx context.Context, userID, raw, stableKey stri
 	if userID == "" {
 		return UploadedStorageObject{}, errors.New("工作流媒体缺少用户")
 	}
-	data, mimeType, err := readWorkflowResultMedia(ctx, raw)
+	if stored, referenced, err := storedWorkflowResultMedia(raw, userID); referenced {
+		return stored, err
+	}
+	payload, err := ReadTrustedGeneratedMedia(ctx, raw)
 	if err != nil {
 		return UploadedStorageObject{}, err
 	}
-	if strings.TrimSpace(stableKey) != "" {
-		return SaveGeneratedMediaStable(userID, mimeType, data, stableKey)
-	}
-	return SaveGeneratedMedia(userID, mimeType, data)
+	return SaveGeneratedMediaDeduplicated(userID, payload.MimeType, payload.Data, payload.SourceURL)
+}
+
+// PersistTrustedGeneratedMedia materializes a verified channel/workflow result
+// before callers expose it as successful. The returned URL is always local and stable.
+func PersistTrustedGeneratedMedia(ctx context.Context, userID, raw string) (UploadedStorageObject, error) {
+	return persistWorkflowResultMedia(ctx, userID, raw, "")
 }
 
 func storedWorkflowResultMedia(raw, ownerID string) (UploadedStorageObject, bool, error) {
@@ -105,54 +119,64 @@ func SyncGeneratedMediaForUser(ctx context.Context, userID, objectID string) err
 	return SyncGeneratedMedia(WithUser(ctx, model.PublicUser(user)), objectID)
 }
 
-func readWorkflowResultMedia(ctx context.Context, raw string) ([]byte, string, error) {
+func ReadTrustedGeneratedMedia(ctx context.Context, raw string) (GeneratedMediaPayload, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return nil, "", errors.New("工作流没有返回媒体地址")
+		return GeneratedMediaPayload{}, errors.New("生成结果没有返回媒体地址")
 	}
 	if strings.HasPrefix(raw, "data:") {
 		comma := strings.IndexByte(raw, ',')
 		if comma <= len("data:") {
-			return nil, "", errors.New("工作流媒体 data URL 无效")
+			return GeneratedMediaPayload{}, errors.New("生成媒体 data URL 无效")
 		}
 		header := strings.TrimPrefix(raw[:comma], "data:")
 		parts := strings.Split(header, ";")
 		mimeType := strings.TrimSpace(parts[0])
 		if mimeType == "" || !isWorkflowResultMIME(mimeType) {
-			return nil, "", errors.New("工作流媒体类型不受支持")
+			return GeneratedMediaPayload{}, errors.New("生成媒体类型不受支持")
 		}
 		encoded := strings.TrimSpace(raw[comma+1:])
 		if int64(len(encoded)) > (workflowResultMediaLimit*4/3)+16 {
-			return nil, "", errors.New("工作流媒体超过 128MB")
+			return GeneratedMediaPayload{}, errors.New("生成媒体超过 128MB")
 		}
 		data, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil || len(data) == 0 || int64(len(data)) > workflowResultMediaLimit {
-			return nil, "", errors.New("工作流媒体编码无效或超过 128MB")
+			return GeneratedMediaPayload{}, errors.New("生成媒体编码无效或超过 128MB")
 		}
-		return data, mimeType, nil
+		if err := ValidateGeneratedMediaBytes(data, mimeType); err != nil {
+			return GeneratedMediaPayload{}, err
+		}
+		return generatedMediaPayload(data, mimeType, ""), nil
+	}
+	if strings.HasPrefix(raw, "/api/proxy-image?") {
+		var unwrapErr error
+		raw, unwrapErr = UnwrapGeneratedMediaSourceURL(raw)
+		if unwrapErr != nil {
+			return GeneratedMediaPayload{}, unwrapErr
+		}
 	}
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || len(raw) > 4096 {
-		return nil, "", errors.New("工作流结果只接受 HTTPS 地址")
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Hostname() == "" || parsed.User != nil || len(raw) > 4096 {
+		return GeneratedMediaPayload{}, errors.New("生成结果只接受 HTTP(S) 地址")
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
 	if err != nil {
-		return nil, "", err
+		return GeneratedMediaPayload{}, err
 	}
 	response, err := SafeProxyHTTPClient().Do(request)
 	if err != nil {
-		return nil, "", errors.New("工作流结果下载失败")
+		return GeneratedMediaPayload{}, errors.New("生成结果下载失败")
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, "", fmt.Errorf("工作流结果下载失败 HTTP %d", response.StatusCode)
+		return GeneratedMediaPayload{}, fmt.Errorf("生成结果下载失败 HTTP %d", response.StatusCode)
 	}
 	if response.ContentLength > workflowResultMediaLimit {
-		return nil, "", errors.New("工作流结果超过 128MB")
+		return GeneratedMediaPayload{}, errors.New("生成结果超过 128MB")
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, workflowResultMediaLimit+1))
 	if err != nil || len(data) == 0 || int64(len(data)) > workflowResultMediaLimit {
-		return nil, "", errors.New("工作流结果读取失败或超过 128MB")
+		return GeneratedMediaPayload{}, errors.New("生成结果读取失败或超过 128MB")
 	}
 	mimeType := strings.TrimSpace(strings.Split(response.Header.Get("Content-Type"), ";")[0])
 	if mimeType == "" || mimeType == "application/octet-stream" {
@@ -162,9 +186,45 @@ func readWorkflowResultMedia(ctx context.Context, raw string) ([]byte, string, e
 		mimeType = strings.TrimSpace(http.DetectContentType(data))
 	}
 	if !isWorkflowResultMIME(mimeType) {
-		return nil, "", errors.New("工作流结果媒体类型不受支持")
+		return GeneratedMediaPayload{}, errors.New("生成结果媒体类型不受支持")
 	}
-	return data, mimeType, nil
+	if err := ValidateGeneratedMediaBytes(data, mimeType); err != nil {
+		return GeneratedMediaPayload{}, err
+	}
+	return generatedMediaPayload(data, mimeType, parsed.String()), nil
+}
+
+func UnwrapGeneratedMediaSourceURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if !strings.HasPrefix(raw, "/api/proxy-image?") {
+		return raw, nil
+	}
+	proxyURL, err := url.Parse(raw)
+	if err != nil || proxyURL.Path != "/api/proxy-image" {
+		return "", errors.New("生成媒体代理地址无效")
+	}
+	source := strings.TrimSpace(proxyURL.Query().Get("url"))
+	if source == "" {
+		return "", errors.New("生成媒体代理地址缺少原始 URL")
+	}
+	return source, nil
+}
+
+func ValidateGeneratedMediaBytes(data []byte, declared string) error {
+	detected := strings.ToLower(strings.TrimSpace(strings.Split(http.DetectContentType(data), ";")[0]))
+	if strings.HasPrefix(detected, "text/") || detected == "application/json" || detected == "application/xml" {
+		return errors.New("生成结果不是可读取的媒体文件")
+	}
+	declaredMajor := strings.SplitN(strings.ToLower(declared), "/", 2)[0]
+	if isWorkflowResultMIME(detected) && !strings.HasPrefix(detected, declaredMajor+"/") {
+		return errors.New("生成结果媒体类型校验失败")
+	}
+	return nil
+}
+
+func generatedMediaPayload(data []byte, mimeType, sourceURL string) GeneratedMediaPayload {
+	sum := sha256.Sum256(data)
+	return GeneratedMediaPayload{Data: data, MimeType: mimeType, SourceURL: sourceURL, SHA256: hex.EncodeToString(sum[:])}
 }
 
 func isWorkflowResultMIME(value string) bool {
@@ -177,6 +237,10 @@ func isWorkflowResultMIME(value string) bool {
 	default:
 		return false
 	}
+}
+
+func IsSupportedGeneratedMediaMIME(value string) bool {
+	return isWorkflowResultMIME(value)
 }
 
 func workflowResultMIMEFromPath(value string) string {

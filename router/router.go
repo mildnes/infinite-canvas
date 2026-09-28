@@ -96,6 +96,7 @@ func New() *gin.Engine {
 	})
 	v1.POST("/storage/measure", gin.WrapF(handler.MeasureUserStorageProvider))
 	v1.POST("/files", gin.WrapF(handler.UploadFile))
+	v1.POST("/generated-media", gin.WrapF(handler.PersistGeneratedMedia))
 	v1.POST("/files/direct", gin.WrapF(handler.RegisterDirectFile))
 	v1.DELETE("/files/:id", func(c *gin.Context) {
 		handler.DeleteFile(c.Writer, c.Request, c.Param("id"))

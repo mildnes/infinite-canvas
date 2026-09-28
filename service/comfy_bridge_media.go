@@ -45,7 +45,10 @@ func SaveComfyBridgeMedia(bridge model.ComfyBridge, requestID, leaseToken, resul
 	if !isWorkflowResultMIME(contentType) {
 		return UploadedStorageObject{}, errors.New("Bridge 媒体类型不受支持")
 	}
-	return SaveGeneratedMediaStable(userID, contentType, data, "comfy-bridge:"+requestID+":"+resultID)
+	if err := ValidateGeneratedMediaBytes(data, contentType); err != nil {
+		return UploadedStorageObject{}, err
+	}
+	return SaveGeneratedMediaDeduplicated(userID, contentType, data, "")
 }
 
 func validWorkflowResultID(value string) bool {

@@ -117,11 +117,11 @@ description: settings 表中 public 和 private 配置结构说明
 | `channels` | object[] | 模型渠道列表 |
 | `promptSync` | object | GitHub 远程提示词定时同步配置 |
 | `agent.mcpServers` | object[] | MCP 服务私有配置，包含传输和密钥；仅管理员接口可读 |
-| `storage.autoSyncAllAssets` | boolean | 是否自动把新上传和生成的媒体同步到可用云存储，默认关闭；同步失败保留原始素材 |
+| `storage.autoSyncAllAssets` | boolean | 是否在本地生成媒体副本之后继续把新上传和生成媒体同步到可用云存储，默认关闭；同步失败保留本地稳定副本 |
 
 ### 已生成媒体的云端补传与本地副本
 
-后台开启 `storage.autoSyncAllAssets` 只作用于后续新增媒体；已在 `generated-media/` 的历史对象不会因开关变化而自动补传。部署镜像包含维护命令 `/app/media-cloud`，可对历史对象分页补传，并在云端回读通过 SHA-256 校验后保持原 `server:<id>` 不变地切换对象索引。上传失败保持本地索引与文件；云端读取失败时已同步对象仍能回退本地副本。
+登录账号的渠道生成结果无论 `storage.autoSyncAllAssets` 是否开启，都会先写入 `generated-media/` 并获得稳定 `server:<id>`；该开关只控制之后是否继续同步到 WebDAV/S3。上云失败保持本地索引与文件，节点仍通过同一 `/api/files/:id/content` 地址读取。已在 `generated-media/` 的历史对象不会因开关变化而自动补传。部署镜像包含维护命令 `/app/media-cloud`，可对历史对象分页补传，并在云端回读通过 SHA-256 校验后保持原对象 ID 不变地切换对象索引。
 
 先部署新镜像并确认应用启动、数据库自动迁移完成；核对数据库与媒体目录备份、云存储可达和目录挂载，再在部署容器内操作。维护命令默认不补传或删除媒体，但初次连接数据库沿用应用的 `AutoMigrate`，不能将其作为旧版本数据库上的绝对只读命令。若使用全局提供方，还要核对后台存储容量上限与实际 4 TB 配额相符（未配置时默认 9 GiB），避免容量巡检提前停用提供方：
 
@@ -140,6 +140,23 @@ docker compose exec app /app/media-cloud -mode cleanup -apply -backup-confirmed 
 ```
 
 `-min-age-days` 可调整保留期，但不得低于 7 天。此命令只清理验证后的冗余本地文件，不清理 `local-generated` 唯一副本、云端对象、任务或备份。不要直接对整个目录使用定时删除；如未来设置外部计划任务，也要保留备份验证和失败告警。提供方关闭、配置失效或远端内容不匹配时停止该对象清理。
+
+### 历史临时媒体地址修复
+
+`/app/canvas-media-repair` 用于修复画布节点及 Agent 会话中仅保存 `/api/proxy-image?url=...` 或 HTTP(S) 原链的媒体。默认 dry-run 会逐条下载、执行 SSRF/MIME/大小校验并输出画布 ID、节点/会话位置、原 URL、计划对象 ID、字节数和 SHA-256，不写数据库或媒体目录：
+
+```bash
+docker compose exec app /app/canvas-media-repair -limit 100
+```
+
+确认报告、数据库备份和应用写入已停止后才能应用：
+
+```bash
+docker compose stop app
+docker compose run --rm --no-deps app /app/canvas-media-repair -apply -writes-stopped -limit 100
+```
+
+单条下载失败不会阻断其他条目；apply 模式只将该引用标记为 `broken` 并保留原 URL 与原因。命令不删除媒体、不执行 `VACUUM`，也不绕过私网和 metadata 地址防护。若超过一批，使用输出最后一项的用户和画布 ID传入 `-after-user`、`-after-canvas` 继续。
 
 ### 生图历史摘要与云端原图
 

@@ -15,6 +15,7 @@ description: 当前项目后续值得处理的事项
 
 ## 已完成（待人工验证，见 pending-test.md）
 
+- [x] 渠道生成成功媒体强制本地持久化、内容哈希去重、临时代理 URL 解析及历史画布 dry-run/apply 修复工具。
 - [x] grok2api/xAI 路由协议：`/videos` -> `/videos/generations`，图片、轮询、audio 保持同路径。
 - [x] grok2api/xAI 请求归一化：多参考图 `reference_images:[{url}]`、单图/首帧 `image:{url}`、参数透传、`/tts` 默认 `language=en`。
 - [x] 管理端 grok2api/xai 渠道内置 Grok 模型目录。

@@ -5319,7 +5319,7 @@ function applyCanvasVideoTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
             videoTaskId: task.task_id || task.id || node.metadata?.videoTaskId,
             videoTaskVideoId: task.video_id || node.metadata?.videoTaskVideoId,
         };
-        if (!completed || !url) return { ...node, metadata };
+        if (!completed || !url || failed) return { ...node, metadata };
         const taskSize = task.width && task.height ? { width: task.width, height: task.height } : parseCanvasVideoTaskSize(task.size, fallbackSize);
         const videoSize = fitNodeSize(taskSize.width, taskSize.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
         return {
@@ -5331,6 +5331,7 @@ function applyCanvasVideoTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
                 ...metadata,
                 content: url,
                 storageKey: task.storageKey || "",
+				originalUrl: task.originalUrl,
                 status: NODE_STATUS_SUCCESS,
                 naturalWidth: taskSize.width,
                 naturalHeight: taskSize.height,
@@ -5397,7 +5398,7 @@ function applyCanvasImageTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
             progress,
             imageTaskId: task.id || node.metadata?.imageTaskId,
         };
-        if (!completed || !url) return { ...node, metadata };
+        if (!completed || !url || failed) return { ...node, metadata };
         const stored = task.imageStorage?.find((image) => image?.url === url);
         const isPanorama = isPanoramaNodeType(node.type);
         const requestedSize = nodeSizeFromRatio(node.metadata?.size || "", fallbackSize.width, fallbackSize.height);
@@ -5413,6 +5414,7 @@ function applyCanvasImageTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
                 ...metadata,
                 content: url,
                 storageKey: task.storageKey || "",
+				originalUrl: task.originalUrl,
                 status: NODE_STATUS_SUCCESS,
                 naturalWidth: stored?.width || naturalWidth,
                 naturalHeight: stored?.height || naturalHeight,
@@ -5616,7 +5618,7 @@ function applyCanvasAudioTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
             progress,
             audioTaskId: task.id || node.metadata?.audioTaskId,
         };
-        if (!completed || !url) return { ...node, metadata };
+        if (!completed || !url || failed) return { ...node, metadata };
         return {
             ...node,
             metadata: {
