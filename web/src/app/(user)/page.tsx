@@ -72,7 +72,7 @@ export default function IndexPage() {
     const [agentConfig, setAgentConfig] = useState<CanvasAgentConfig>(() => ({
         textApiMode: "chat",
         textReasoningEnabled: false,
-        autoGenerateMedia: false,
+        autoGenerateMedia: true,
         imageModel: effectiveConfig.imageModel,
         imageChannelId: effectiveConfig.imageChannelId,
         imageQuality: effectiveConfig.quality,

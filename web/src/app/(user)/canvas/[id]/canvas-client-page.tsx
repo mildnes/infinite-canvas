@@ -422,11 +422,11 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const [canvasNow, setCanvasNow] = useState(Date.now());
     const resolvedAgentConfig = useMemo<CanvasAgentConfig>(() => {
         const imageSelection = resolveCanvasAgentImageSelection(effectiveConfig, agentConfig);
-        return agentConfig ? { ...agentConfig, ...imageSelection, textApiMode: agentConfig.textApiMode || "chat", textReasoningEnabled: agentConfig.textReasoningEnabled ?? false, textStreaming: agentConfig.textStreaming ?? false, autoGenerateMedia: agentConfig.autoGenerateMedia ?? false } : {
+        return agentConfig ? { ...agentConfig, ...imageSelection, textApiMode: agentConfig.textApiMode || "chat", textReasoningEnabled: agentConfig.textReasoningEnabled ?? false, textStreaming: agentConfig.textStreaming ?? false, autoGenerateMedia: agentConfig.autoGenerateMedia ?? true } : {
                 textApiMode: "chat",
                 textReasoningEnabled: false,
                 textStreaming: false,
-                autoGenerateMedia: false,
+                autoGenerateMedia: true,
                 imageQuality: effectiveConfig.quality,
                 imageSize: effectiveConfig.size,
                 videoQuality: effectiveConfig.vquality,
