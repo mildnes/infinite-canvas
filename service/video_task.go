@@ -101,6 +101,9 @@ func CreateVideoTask(input VideoTaskCreateInput) (model.VideoTask, error) {
 		CreatedAt:       current,
 		UpdatedAt:       current,
 	}
+	if !IsCompletedVideoTaskStatus(task.Status) && !IsFailedVideoTaskStatus(task.Status) {
+		task.StartedAt = current
+	}
 	if IsCompletedVideoTaskStatus(task.Status) || task.VideoURL != "" {
 		task.Status = "completed"
 		task.Progress = 100

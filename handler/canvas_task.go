@@ -37,6 +37,12 @@ func CreateCanvasImageTask(w http.ResponseWriter, r *http.Request) {
 		Fail(w, err.Error())
 		return
 	}
+	if clientTaskID != "" {
+		if existing, found, readErr := service.GetUserCanvasImageTask(user.ID, clientTaskID); readErr == nil && found {
+			OK(w, service.CanvasImageTaskResponse(existing))
+			return
+		}
+	}
 	modelName := readAIModelFromBody(body, contentType)
 	if strings.TrimSpace(modelName) == "" {
 		Fail(w, "缺少模型名称")
@@ -200,6 +206,12 @@ func CreateCanvasAudioTask(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		Fail(w, err.Error())
 		return
+	}
+	if clientTaskID != "" {
+		if existing, found, readErr := service.GetUserCanvasAudioTask(user.ID, clientTaskID); readErr == nil && found {
+			OK(w, service.CanvasAudioTaskResponse(existing))
+			return
+		}
 	}
 	modelName := readAIModelFromBody(body, contentType)
 	if strings.TrimSpace(modelName) == "" {
@@ -431,25 +443,11 @@ func executeCanvasAIRequest(user model.AuthUser, endpoint string, body []byte, c
 }
 
 func saveFailedCanvasImageTask(task model.CanvasImageTask, message string, detail string) {
-	if task.Credits > 0 && task.ChannelID != "" {
-		_ = service.RefundUserCredits(task.UserID, task.ChannelID, task.Model, task.Credits, task.Endpoint)
-	}
-	task.Status = "failed"
-	task.CompletedAt = taskTime()
-	task.Error = boundedTaskError(firstNonEmpty(message, "图片生成失败"), 1000)
-	task.ErrorDetail = boundedTaskError(detail, 8192)
-	_, _ = service.SaveCanvasImageTask(task)
+	_, _ = service.FailCanvasImageTask(task, boundedTaskError(firstNonEmpty(message, "图片生成失败"), 1000), boundedTaskError(detail, 8192))
 }
 
 func saveFailedCanvasAudioTask(task model.CanvasAudioTask, message string, detail string) {
-	if task.Credits > 0 && task.ChannelID != "" {
-		_ = service.RefundUserCredits(task.UserID, task.ChannelID, task.Model, task.Credits, task.Endpoint)
-	}
-	task.Status = "failed"
-	task.CompletedAt = taskTime()
-	task.Error = boundedTaskError(firstNonEmpty(message, "音频生成失败"), 1000)
-	task.ErrorDetail = boundedTaskError(detail, 8192)
-	_, _ = service.SaveCanvasAudioTask(task)
+	_, _ = service.FailCanvasAudioTask(task, boundedTaskError(firstNonEmpty(message, "音频生成失败"), 1000), boundedTaskError(detail, 8192))
 }
 
 func boundedTaskError(value string, limit int) string {

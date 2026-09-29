@@ -104,6 +104,7 @@ type AssetPickerTarget = "general" | "image" | "video" | "audio" | "firstFrame" 
 type WorkflowPollContext = { token: string; signal: AbortSignal };
 
 const WORKBENCH_LAYOUT_KEY = "infinite-canvas:video-workbench-layout";
+const GENERATION_TASK_INTERRUPTED_AFTER_MS = 30 * 60 * 1000;
 const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" });
 export default function VideoPage() {
     const { message } = App.useApp();
@@ -195,6 +196,18 @@ export default function VideoPage() {
         const timer = window.setInterval(() => setNow(Date.now()), 1000);
         return () => window.clearInterval(timer);
     }, [pendingCount, pendingLogCount]);
+
+    useEffect(() => {
+        setResults((current) => {
+            let changed = false;
+            const next = current.map((item) => {
+                if (item.status !== "pending" || now - item.createdAt < GENERATION_TASK_INTERRUPTED_AFTER_MS) return item;
+                changed = true;
+                return { ...item, status: "failed" as const, durationMs: GENERATION_TASK_INTERRUPTED_AFTER_MS, error: "任务已中断（超过 30 分钟未完成）" };
+            });
+            return changed ? next : current;
+        });
+    }, [now, pendingCount]);
 
     useEffect(() => {
         logsRef.current = logs;
@@ -744,6 +757,17 @@ export default function VideoPage() {
         void submitGenerationSnapshot(snapshot);
     };
 
+    const deleteResult = (result: GenerationResult) => {
+        const keys = new Set(videoResultIdentityKeys(result));
+        const log = logsRef.current.find((item) => videoLogIdentityKeys(item).some((key) => keys.has(key)));
+        if (log) {
+            setSelectedLogIds([log.id]);
+            setDeleteConfirmOpen(true);
+            return;
+        }
+        setResults((value) => value.filter((item) => item.id !== result.id));
+    };
+
     const previewGenerationResult = (result: GenerationResult) => {
         setPreviewLog(null);
         setResults((value) => value.filter((item) => item.id !== result.id));
@@ -1226,6 +1250,7 @@ export default function VideoPage() {
                             onRetryLog={retryGenerationLog}
                             onPreviewResult={previewGenerationResult}
                             onRetryResult={retryResult}
+                            onDeleteResult={deleteResult}
                             onCopyPrompt={(value) => void copyPrompt(value, (content) => message.success(content))}
                             onDownload={downloadVideo}
                             onSyncResult={syncResultVideo}
@@ -1255,6 +1280,7 @@ export default function VideoPage() {
                             onRetryLog={retryGenerationLog}
                             onPreviewResult={previewGenerationResult}
                             onRetryResult={retryResult}
+                            onDeleteResult={deleteResult}
                             onCopyPrompt={(value) => void copyPrompt(value, (content) => message.success(content))}
                             onDownload={downloadVideo}
                             onSyncResult={syncResultVideo}
@@ -1866,6 +1892,7 @@ function ResultsPanel({
     onRetryLog,
     onPreviewResult,
     onRetryResult,
+    onDeleteResult,
     onCopyPrompt,
     onDownload,
     onSyncResult,
@@ -1888,6 +1915,7 @@ function ResultsPanel({
     onRetryLog: (log: GenerationLog) => void;
     onPreviewResult: (result: GenerationResult) => void;
     onRetryResult: (result: GenerationResult) => void;
+    onDeleteResult: (result: GenerationResult) => void;
     onCopyPrompt: (text: string) => void | Promise<void>;
     onDownload: (video: GeneratedVideo) => void;
     onSyncResult: (resultId: string, video: GeneratedVideo, index: number) => void;
@@ -1895,7 +1923,7 @@ function ResultsPanel({
     onSaveAsset: (video: GeneratedVideo) => void;
     syncingVideoIds: string[];
 }) {
-    const visibleResults = results.filter((result) => result.status !== "failed" || pendingCount > 0);
+    const visibleResults = results;
     const liveResultKeys = new Set(visibleResults.flatMap(videoResultIdentityKeys));
     const liveLogIds = new Set(visibleResults.flatMap((result) => [result.taskLogId, result.id]).filter((id): id is string => Boolean(id)));
     const visibleLogs = logs.filter((log) => !liveLogIds.has(log.id) && !videoLogIdentityKeys(log).some((key) => liveResultKeys.has(key)));
@@ -1920,7 +1948,7 @@ function ResultsPanel({
             </div>
             {totalCount ? (
                 <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
-                    {visibleResults.map((result, index) => (result.status === "success" && result.video ? <ResultVideoCard key={result.id} result={result} video={result.video} index={index} syncing={syncingVideoIds.includes(result.video.id)} onCopyPrompt={onCopyPrompt} onDownload={onDownload} onSync={(video) => onSyncResult(result.id, video, index)} onSaveAsset={onSaveAsset} /> : result.status === "failed" ? <FailedVideoCard key={result.id} result={result} error={result.error || "生成失败"} onCopyPrompt={onCopyPrompt} onPreview={() => onPreviewResult(result)} onRetry={() => onRetryResult(result)} /> : <PendingVideoCard key={result.id} result={result} now={now} onCopyPrompt={onCopyPrompt} />))}
+                    {visibleResults.map((result, index) => (result.status === "success" && result.video ? <ResultVideoCard key={result.id} result={result} video={result.video} index={index} syncing={syncingVideoIds.includes(result.video.id)} onCopyPrompt={onCopyPrompt} onDownload={onDownload} onSync={(video) => onSyncResult(result.id, video, index)} onSaveAsset={onSaveAsset} /> : result.status === "failed" ? <FailedVideoCard key={result.id} result={result} error={result.error || "生成失败"} onCopyPrompt={onCopyPrompt} onPreview={() => onPreviewResult(result)} onRetry={() => onRetryResult(result)} onDelete={() => onDeleteResult(result)} /> : <PendingVideoCard key={result.id} result={result} now={now} onCopyPrompt={onCopyPrompt} />))}
                     {visibleLogs.map((log, index) => (
                         <HistoryLogCard key={log.id} log={log} index={index} selected={selectedLogIds.includes(log.id)} active={activeLogId === log.id} syncing={Boolean(log.video && syncingVideoIds.includes(log.video.id))} onSelectedChange={(checked) => onSelectedLogIdsChange(checked ? [...selectedLogIds, log.id] : selectedLogIds.filter((id) => id !== log.id))} onDelete={() => onDeleteLog(log)} onPreview={() => onPreviewLog(log)} onRetry={() => onRetryLog(log)} onCopyPrompt={onCopyPrompt} onDownload={onDownload} onSync={(video) => onSyncLog(log, video, index)} onSaveAsset={onSaveAsset} />
                     ))}
@@ -1985,7 +2013,7 @@ function PendingVideoCard({ result, now, onCopyPrompt }: { result: GenerationRes
     );
 }
 
-function FailedVideoCard({ result, error, onCopyPrompt, onPreview, onRetry }: { result: GenerationResult; error: string; onCopyPrompt: (text: string) => void | Promise<void>; onPreview: () => void; onRetry: () => void }) {
+function FailedVideoCard({ result, error, onCopyPrompt, onPreview, onRetry, onDelete }: { result: GenerationResult; error: string; onCopyPrompt: (text: string) => void | Promise<void>; onPreview: () => void; onRetry: () => void; onDelete: () => void }) {
     const [detailOpen, setDetailOpen] = useState(false);
     const detail = result.errorDetail || error;
     return (
@@ -1993,14 +2021,14 @@ function FailedVideoCard({ result, error, onCopyPrompt, onPreview, onRetry }: { 
             <div className="relative flex aspect-video flex-col items-center justify-center gap-3 p-5 text-center">
                 <ReferenceThumbnailOverlay references={result.references} className="left-1.5 top-1.5" />
                 <AlertCircle className="size-7 text-red-500" />
-                <div className="text-sm font-medium text-red-600 dark:text-red-300">生成失败</div>
+                <div className="text-sm font-medium text-red-600 dark:text-red-300">{error.includes("已中断") ? "已中断" : "生成失败"}</div>
                 <Typography.Paragraph ellipsis={{ rows: 4 }} className="!mb-0 !text-xs !text-red-500 dark:!text-red-300">
                     {error}
                 </Typography.Paragraph>
             </div>
             <TaskInfo item={result} error={error} onCopyPrompt={onCopyPrompt} />
             <div className="flex justify-between gap-2 border-t border-red-200 p-3 dark:border-red-950">
-                <Button size="small" onClick={onPreview}>载入</Button>
+                <div className="flex gap-1"><Button size="small" danger type="text" icon={<Trash2 className="size-3.5" />} onClick={onDelete}>删除</Button><Button size="small" onClick={onPreview}>载入</Button></div>
                 <div className="flex gap-2">
                     <Button size="small" onClick={() => setDetailOpen(true)}>详情</Button>
                     <Button size="small" danger onClick={onRetry}>重试</Button>
@@ -2016,6 +2044,7 @@ function FailedVideoCard({ result, error, onCopyPrompt, onPreview, onRetry }: { 
 function HistoryLogCard({ log, index, selected, active, syncing, onSelectedChange, onDelete, onPreview, onRetry, onCopyPrompt, onDownload, onSync, onSaveAsset }: { log: GenerationLog; index: number; selected: boolean; active: boolean; syncing: boolean; onSelectedChange: (checked: boolean) => void; onDelete: () => void; onPreview: () => void; onRetry: () => void; onCopyPrompt: (text: string) => void | Promise<void>; onDownload: (video: GeneratedVideo) => void; onSync: (video: GeneratedVideo) => void; onSaveAsset: (video: GeneratedVideo) => void }) {
     const [expanded, setExpanded] = useState(false);
     const [detailOpen, setDetailOpen] = useState(false);
+    const interrupted = Boolean(log.error?.includes("已中断"));
     return (
         <div className={`overflow-hidden rounded-lg border bg-background dark:bg-stone-950 ${active ? "border-stone-900 dark:border-stone-100" : "border-stone-200 dark:border-stone-800"}`}>
             <div className="relative aspect-video bg-stone-100 dark:bg-stone-900">
@@ -2025,7 +2054,7 @@ function HistoryLogCard({ log, index, selected, active, syncing, onSelectedChang
                 </div>
                 <div className="absolute right-1.5 top-1.5 z-10 flex gap-1">
                     {log.video ? <VideoSourceTag video={log.video} /> : null}
-                    <Tag className="m-0 text-[10px]" color={log.status === "成功" ? "blue" : log.status === "生成中" ? "processing" : "red"}>{log.status}</Tag>
+                    <Tag className="m-0 text-[10px]" color={log.status === "成功" ? "blue" : log.status === "生成中" ? "processing" : "red"}>{interrupted ? "已中断" : log.status}</Tag>
                 </div>
                 {log.video ? <video src={log.video.url} controls className="size-full bg-black object-contain" /> : <div className="flex size-full flex-col items-center justify-center gap-2 p-5 text-center text-sm text-red-500"><AlertCircle className="size-7" /><span>{log.error || "没有可显示的视频"}</span></div>}
                 <ReferenceThumbnailOverlay references={log.references} className="bottom-1.5 right-1.5" />
@@ -2322,7 +2351,8 @@ function backendTaskToLog(task: VideoResponse, fallbackConfig: AiConfig): Genera
     const config = buildVideoConfig({ ...fallbackConfig, model, videoModel: model, activeChannelId: taskChannelId || fallbackConfig.activeChannelId, videoChannelId: taskChannelId || fallbackConfig.videoChannelId, size: request.size || fallbackConfig.size, vquality: request.resolution || fallbackConfig.vquality, videoSeconds: request.seconds || fallbackConfig.videoSeconds, videoMode: request.mode || fallbackConfig.videoMode, videoNegativePrompt: request.negativePrompt || fallbackConfig.videoNegativePrompt, videoCharacterOrientation: request.characterOrientation || fallbackConfig.videoCharacterOrientation, videoMultiShot: request.multiShot || fallbackConfig.videoMultiShot, videoShotType: request.shotType || fallbackConfig.videoShotType, videoMultiPrompt: request.multiPrompt.length ? request.multiPrompt : fallbackConfig.videoMultiPrompt, videoElementList: request.elementList.length ? request.elementList : fallbackConfig.videoElementList }, model);
     const createdAt = parseTaskTimestamp(task.createdAt ?? task.created_at) || Date.now();
     const status = isFailedVideoTask(task) ? "失败" : isCompletedVideoTask(task) ? "成功" : "生成中";
-    const durationMs = Math.max(0, Date.now() - createdAt);
+    const interrupted = Boolean(task.error?.message?.includes("已中断"));
+    const durationMs = interrupted ? Math.min(Math.max(0, Date.now() - createdAt), GENERATION_TASK_INTERRUPTED_AFTER_MS) : Math.max(0, Date.now() - createdAt);
     const video = status === "成功" && (task.video_url || task.url) ? videoFromTaskResponse(task, durationMs) : undefined;
     return {
         id: `backend-${videoTaskIdentityKeys(task)[0] || nanoid()}`,
@@ -2353,7 +2383,7 @@ function backendTaskToLog(task: VideoResponse, fallbackConfig: AiConfig): Genera
 
 function mergeBackendTaskIntoLog(existing: GenerationLog | undefined, incoming: GenerationLog, task: VideoResponse): GenerationLog {
     if (!existing) return incoming;
-    const durationMs = Math.max(existing.durationMs || 0, incoming.durationMs || 0);
+    const durationMs = incoming.error?.includes("已中断") ? incoming.durationMs : Math.max(existing.durationMs || 0, incoming.durationMs || 0);
     const baseConfig = { ...existing.config, videoChannelId: incoming.config.videoChannelId || existing.config.videoChannelId, activeChannelId: incoming.config.activeChannelId || existing.config.activeChannelId };
     const providerWorkflowRef = existing.providerWorkflowRef || incoming.providerWorkflowRef;
     const base = { ...existing, providerWorkflowRef, task, config: baseConfig, durationMs, lastPolledAt: Date.now() };

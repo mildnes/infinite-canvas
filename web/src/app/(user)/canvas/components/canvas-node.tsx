@@ -479,7 +479,7 @@ function NodeContent(props: NodeContentRendererProps) {
     if (props.node.type === CanvasNodeType.Group) return null;
     if ((props.node.type === CanvasNodeType.Config || props.node.type === CanvasNodeType.Director) && props.renderNodeContent) return props.renderNodeContent(props.node);
     if (props.isBatchRoot) return props.node.type === CanvasNodeType.Panorama ? <PanoramaNodeContent {...props} /> : <ImageNodeContent {...props} />;
-    if (props.node.metadata?.status === "loading") return <LoadingContent node={props.node} theme={props.theme} now={props.now} />;
+    if (props.node.metadata?.status === "loading") return <LoadingContent node={props.node} theme={props.theme} now={props.now} onRetry={props.onRetry} />;
     if (props.node.metadata?.status === "error") return <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} />;
 
     const Renderer = nodeContentRenderers[props.node.type];
@@ -496,7 +496,7 @@ const nodeContentRenderers = {
     [CanvasNodeType.Director]: EmptyImageContent,
 } satisfies Partial<Record<CanvasNodeType, (props: NodeContentRendererProps) => ReactNode>>;
 
-function LoadingContent({ node, theme, now }: Pick<NodeContentRendererProps, "node" | "theme" | "now">) {
+function LoadingContent({ node, theme, now, onRetry }: Pick<NodeContentRendererProps, "node" | "theme" | "now" | "onRetry">) {
     const startTimeRef = useRef(Date.now());
     const [localNow, setLocalNow] = useState(Date.now());
     useEffect(() => {
@@ -508,6 +508,9 @@ function LoadingContent({ node, theme, now }: Pick<NodeContentRendererProps, "no
     const startedAt = typeof node.metadata?.startedAt === "number" ? node.metadata.startedAt : startTimeRef.current;
     const elapsedMs = Math.max(0, currentNow - startedAt);
     const progress = Math.max(0, Math.min(100, Math.round(node.metadata?.progress || 0)));
+	if (elapsedMs >= 30 * 60 * 1000) {
+		return <ErrorContent node={{ ...node, metadata: { ...node.metadata, errorDetails: "任务已中断（超过 30 分钟未完成）" } }} theme={theme} onRetry={onRetry} />;
+	}
 
     if (node.type === CanvasNodeType.Video) {
         return (

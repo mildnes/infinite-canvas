@@ -1,10 +1,12 @@
 package repository
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/tigerowo/infinite-canvas/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func SaveCanvasImageTask(task model.CanvasImageTask) (model.CanvasImageTask, error) {
@@ -12,7 +14,18 @@ func SaveCanvasImageTask(task model.CanvasImageTask) (model.CanvasImageTask, err
 	if err != nil {
 		return task, err
 	}
-	return task, db.Save(&task).Error
+	result := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&task)
+	if result.Error != nil || result.RowsAffected > 0 {
+		return task, result.Error
+	}
+	var existing model.CanvasImageTask
+	if err := db.First(&existing, "id = ?", task.ID).Error; err != nil {
+		return task, err
+	}
+	if existing.UserID != task.UserID {
+		return task, errors.New("图片任务 ID 已被占用")
+	}
+	return existing, nil
 }
 
 func UpdateCanvasImageTask(task model.CanvasImageTask) (model.CanvasImageTask, error) {
@@ -21,10 +34,18 @@ func UpdateCanvasImageTask(task model.CanvasImageTask) (model.CanvasImageTask, e
 		return task, err
 	}
 
-	return task, db.Model(&model.CanvasImageTask{}).
-		Where("user_id = ? AND id = ?", task.UserID, task.ID).
+	result := db.Model(&model.CanvasImageTask{}).
+		Where("user_id = ? AND id = ? AND status IN ?", task.UserID, task.ID, activeGenerationTaskStatuses).
 		Select("*").
-		Updates(&task).Error
+		Updates(&task)
+	if result.Error != nil || result.RowsAffected > 0 {
+		return task, result.Error
+	}
+	current, found, err := GetUserCanvasImageTask(task.UserID, task.ID)
+	if err != nil || !found {
+		return task, err
+	}
+	return current, nil
 }
 
 func GetUserCanvasImageTask(userID string, id string) (model.CanvasImageTask, bool, error) {

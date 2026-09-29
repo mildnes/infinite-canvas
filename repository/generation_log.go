@@ -55,6 +55,9 @@ func UpsertVideoGenerationLogs(userID string, logs []model.VideoGenerationLog) e
 			}
 		}
 		if found {
+			if generationLogStatusIsTerminal(existing.Status) && !generationLogStatusIsTerminal(log.Status) {
+				continue
+			}
 			log.ID = existing.ID
 			log.UserID = userID
 			log.DeletedAt = ""
@@ -267,6 +270,9 @@ func UpsertImageGenerationLogs(userID string, logs []model.ImageGenerationLog) e
 			}
 		}
 		if found {
+			if generationLogStatusIsTerminal(existing.Status) && !generationLogStatusIsTerminal(log.Status) {
+				continue
+			}
 			log.ID = existing.ID
 			log.UserID = userID
 			log.DeletedAt = ""
@@ -276,6 +282,15 @@ func UpsertImageGenerationLogs(userID string, logs []model.ImageGenerationLog) e
 		}
 	}
 	return nil
+}
+
+func generationLogStatusIsTerminal(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "成功", "失败", "success", "succeeded", "completed", "failed", "error", "cancelled", "canceled":
+		return true
+	default:
+		return false
+	}
 }
 
 func SoftDeleteImageGenerationLog(userID string, id string, deletedAt string) error {

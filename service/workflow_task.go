@@ -16,17 +16,17 @@ import (
 )
 
 type WorkflowTaskResult struct {
-	ID           string                       `json:"id"`
-	Status       string                       `json:"status"`
-	Progress     int                          `json:"progress"`
-	URLs         []string                     `json:"urls,omitempty"`
-	ImageStorage []*model.CanvasImageStorage  `json:"imageStorage,omitempty"`
-	StorageKey   string                       `json:"storageKey,omitempty"`
-	MimeType     string                       `json:"mimeType,omitempty"`
-	Bytes        int64                        `json:"bytes,omitempty"`
-	Width        int                          `json:"width,omitempty"`
-	Height       int                          `json:"height,omitempty"`
-	Error        string                       `json:"error,omitempty"`
+	ID           string                      `json:"id"`
+	Status       string                      `json:"status"`
+	Progress     int                         `json:"progress"`
+	URLs         []string                    `json:"urls,omitempty"`
+	ImageStorage []*model.CanvasImageStorage `json:"imageStorage,omitempty"`
+	StorageKey   string                      `json:"storageKey,omitempty"`
+	MimeType     string                      `json:"mimeType,omitempty"`
+	Bytes        int64                       `json:"bytes,omitempty"`
+	Width        int                         `json:"width,omitempty"`
+	Height       int                         `json:"height,omitempty"`
+	Error        string                      `json:"error,omitempty"`
 }
 
 const workflowTaskTimeout = time.Hour
@@ -321,6 +321,9 @@ func markRunningHubTask(userID, taskID, upstreamID string) error {
 			return errors.New("图片任务不存在")
 		}
 		task.Status, task.Progress, task.ResponseBody = "running", 10, string(encoded)
+		if task.StartedAt == "" {
+			task.StartedAt = now()
+		}
 		_, err = SaveCanvasImageTask(task)
 		return err
 	case strings.HasPrefix(taskID, "wf-video-"):
@@ -329,7 +332,10 @@ func markRunningHubTask(userID, taskID, upstreamID string) error {
 			return errors.New("视频任务不存在")
 		}
 		task.Status, task.Progress, task.UpstreamTaskID, task.UpdatedAt = "running", 10, upstreamID, now()
-		_, err = repository.SaveVideoTask(task)
+		if task.StartedAt == "" {
+			task.StartedAt = task.UpdatedAt
+		}
+		_, err = repository.SavePendingVideoTaskPoll(task)
 		return err
 	case strings.HasPrefix(taskID, "wf-audio-"):
 		task, found, err := repository.GetUserCanvasAudioTask(userID, taskID)
@@ -337,6 +343,9 @@ func markRunningHubTask(userID, taskID, upstreamID string) error {
 			return errors.New("音频任务不存在")
 		}
 		task.Status, task.Progress, task.ResponseBody = "running", 10, string(encoded)
+		if task.StartedAt == "" {
+			task.StartedAt = now()
+		}
 		_, err = SaveCanvasAudioTask(task)
 		return err
 	}

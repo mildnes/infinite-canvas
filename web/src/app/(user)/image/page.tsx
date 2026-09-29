@@ -131,6 +131,7 @@ const CATEGORY_STORE_KEY = "infinite-canvas:image_generation_categories";
 const WORKBENCH_LAYOUT_KEY = "infinite-canvas:image-workbench-layout";
 const RESULT_VIEW_MODE_KEY = "infinite-canvas:image-result-view-mode";
 const IMAGE_TASK_POLL_INTERVAL_MS = 10000;
+const GENERATION_TASK_INTERRUPTED_AFTER_MS = 30 * 60 * 1000;
 const WORKFLOW_BUTTON_POSITION_KEY = "infinite-canvas:workflow-button-position";
 const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
 const categoryStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_categories" });
@@ -245,6 +246,18 @@ export default function ImagePage() {
         const timer = window.setInterval(() => setNow(Date.now()), 1000);
         return () => window.clearInterval(timer);
     }, [pendingCount, pendingLogCount]);
+
+    useEffect(() => {
+        setResults((current) => {
+            let changed = false;
+            const next = current.map((item) => {
+                if (item.status !== "pending" || now - item.createdAt < GENERATION_TASK_INTERRUPTED_AFTER_MS) return item;
+                changed = true;
+                return { ...item, status: "failed" as const, durationMs: GENERATION_TASK_INTERRUPTED_AFTER_MS, error: "任务已中断（超过 30 分钟未完成）" };
+            });
+            return changed ? next : current;
+        });
+    }, [now, pendingCount]);
 
     useEffect(() => {
         if (!pendingLogCount) return;
@@ -772,6 +785,7 @@ export default function ImagePage() {
                 const imageKeys = disposableLogStorageKeys([log], nextLogs);
                 await Promise.all([deleteBackendImageTasks([log]), deleteAccountImageLogs([log]), deleteStoredImages(imageKeys), logStore.removeItem(log.id)]);
                 setLogs(nextLogs);
+                setResults((value) => value.filter((item) => !imageResultMatchesLog(item, log)));
                 setReferences((value) => value.filter((item) => !item.storageKey || !imageKeys.includes(item.storageKey)));
                 await persistImageHistory(nextLogs, categories);
                 setSelectedLogIds((value) => value.filter((id) => id !== log.id));
@@ -1090,6 +1104,15 @@ export default function ImagePage() {
         void submitGenerationBatch(snapshot);
     };
 
+    const deleteResult = (result: GenerationResult) => {
+        const log = logsRef.current.find((item) => imageResultMatchesLog(result, item));
+        if (log) {
+            deleteLog(log);
+            return;
+        }
+        setResults((value) => value.filter((item) => item.id !== result.id));
+    };
+
     const handleWorkflowTaskStarted = (task: WorkflowExternalTaskStart) => {
         if (usesBackendImageTasks(effectiveConfig)) {
             setResultViewMode("all");
@@ -1241,6 +1264,7 @@ export default function ImagePage() {
                             onSyncResult={syncResultImage}
                             onSyncLog={syncLogImage}
                             onRetry={retryResult}
+                            onDeleteResult={deleteResult}
                         />
                     </>
                 ) : (
@@ -1277,6 +1301,7 @@ export default function ImagePage() {
                             onSyncResult={syncResultImage}
                             onSyncLog={syncLogImage}
                             onRetry={retryResult}
+                            onDeleteResult={deleteResult}
                         />
                         <WorkbenchPanel
                             layout="bottom"
@@ -1689,6 +1714,7 @@ function ResultsPanel({
     onSyncResult,
     onSyncLog,
     onRetry,
+    onDeleteResult,
 }: {
     className?: string;
     results: GenerationResult[];
@@ -1721,6 +1747,7 @@ function ResultsPanel({
     onSyncResult: (resultId: string, image: GeneratedImage, index: number) => void;
     onSyncLog: (log: GenerationLog, image: GeneratedImage, index: number) => void;
     onRetry: (result: GenerationResult) => void;
+    onDeleteResult: (result: GenerationResult) => void;
 }) {
     const { message } = App.useApp();
     const [creatingCategory, setCreatingCategory] = useState(false);
@@ -1798,7 +1825,7 @@ function ResultsPanel({
                         result.status === "success" && result.image ? (
                             <ResultImageCard key={result.id} result={result} image={result.image} index={index} onCopyPrompt={onCopyPrompt} onEdit={onEdit} onDownload={onDownload} onSaveAsset={onSaveAsset} syncing={syncingImageIds.includes(result.image.id)} onSync={(image) => onSyncResult(result.id, image, index)} />
                         ) : result.status === "failed" ? (
-                            <FailedImageCard key={result.id} result={result} error={result.error || "生成失败"} onCopyPrompt={onCopyPrompt} onRetry={() => onRetry(result)} />
+                            <FailedImageCard key={result.id} result={result} error={result.error || "生成失败"} onCopyPrompt={onCopyPrompt} onRetry={() => onRetry(result)} onDelete={() => onDeleteResult(result)} />
                         ) : (
                             <PendingImageCard key={result.id} result={result} now={now} onCopyPrompt={onCopyPrompt} />
                         ),
@@ -2022,7 +2049,7 @@ function PendingImageCard({ result, now, onCopyPrompt }: { result: GenerationRes
     );
 }
 
-function FailedImageCard({ result, error, onCopyPrompt, onRetry }: { result: GenerationResult; error: string; onCopyPrompt: (text: string) => void | Promise<void>; onRetry: () => void }) {
+function FailedImageCard({ result, error, onCopyPrompt, onRetry, onDelete }: { result: GenerationResult; error: string; onCopyPrompt: (text: string) => void | Promise<void>; onRetry: () => void; onDelete: () => void }) {
     const [detailOpen, setDetailOpen] = useState(false);
     const detail = result.errorDetail || error;
     return (
@@ -2030,19 +2057,22 @@ function FailedImageCard({ result, error, onCopyPrompt, onRetry }: { result: Gen
             <div className="relative flex aspect-[4/3] flex-col items-center justify-center gap-3 p-5 text-center">
                 <ReferenceThumbnailOverlay references={result.references} className="left-1.5 top-1.5" />
                 <AlertCircle className="size-7 text-red-500" />
-                <div className="text-sm font-medium text-red-600 dark:text-red-300">生成失败</div>
+                <div className="text-sm font-medium text-red-600 dark:text-red-300">{error.includes("已中断") ? "已中断" : "生成失败"}</div>
                 <Typography.Paragraph ellipsis={{ rows: 4 }} className="!mb-0 !text-xs !text-red-500 dark:!text-red-300">
                     {error}
                 </Typography.Paragraph>
             </div>
             <TaskInfo result={result} error={error} onCopyPrompt={onCopyPrompt} />
-            <div className="flex justify-end gap-2 border-t border-red-200 p-3 dark:border-red-950">
+            <div className="flex justify-between gap-2 border-t border-red-200 p-3 dark:border-red-950">
+                <Button size="small" danger type="text" icon={<Trash2 className="size-3.5" />} onClick={onDelete}>删除</Button>
+                <div className="flex gap-2">
                 <Button size="small" onClick={() => setDetailOpen(true)}>
                     详情
                 </Button>
                 <Button size="small" danger onClick={onRetry}>
                     重试
                 </Button>
+                </div>
             </div>
             <Modal title="失败详情" open={detailOpen} width={760} onCancel={() => setDetailOpen(false)} footer={null}>
                 <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-md bg-stone-950 p-3 text-xs text-stone-100">{detail}</pre>
@@ -2133,6 +2163,7 @@ function HistoryLogCard({
     const [detailOpen, setDetailOpen] = useState(false);
     const categoryMenuRef = useRef<HTMLDivElement>(null);
     const logCategories = categories.filter((category) => log.categoryIds.includes(category.id));
+    const interrupted = log.errors.some((error) => error.includes("已中断"));
     const createCategory = async () => {
         const category = await onCreateCategory(categoryName);
         if (!category) return;
@@ -2164,7 +2195,7 @@ function HistoryLogCard({
                 <div className="absolute right-1.5 top-1.5 z-10 flex gap-1">
                     {firstImage && !firstImage.storageKey?.startsWith("server:") ? <Tag className="m-0 text-[10px]" color="gold">临时URL</Tag> : null}
                     <Tag className="m-0 text-[10px]" color={log.status === "生成中" ? "processing" : log.failCount ? "red" : "blue"}>
-                        {log.status === "生成中" ? "生成中" : log.failCount ? `失败 ${log.failCount}` : "成功"}
+                        {interrupted ? "已中断" : log.status === "生成中" ? "生成中" : log.failCount ? `失败 ${log.failCount}` : "成功"}
                     </Tag>
                     <Tag className="m-0 text-[10px]">{log.imageCount} 张</Tag>
                 </div>
@@ -2583,11 +2614,13 @@ function imageLogsFromTask(log: GenerationLog, task: CanvasImageTask): Generatio
 
 function imageLogFromTask(log: GenerationLog, task: CanvasImageTask): GenerationLog {
     const startedAt = parseImageTaskTime(task.started_at ?? task.startedAt ?? task.created_at ?? task.createdAt) || log.createdAt;
-    const durationMs = Date.now() - startedAt;
+    const elapsedMs = Math.max(0, Date.now() - startedAt);
     if (isFailedImageTask(task)) {
         const message = task.error?.message || task.error_detail || "图片生成失败";
+        const durationMs = message.includes("已中断") ? Math.min(elapsedMs, GENERATION_TASK_INTERRUPTED_AFTER_MS) : elapsedMs;
         return { ...log, task, status: "失败", durationMs, failCount: 1, errors: [message], errorDetails: [task.error_detail || message], lastPolledAt: Date.now() };
     }
+    const durationMs = elapsedMs;
     if (isCompletedImageTask(task)) {
         const url = task.image_url || task.url || "";
         if (!url) {

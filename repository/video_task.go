@@ -1,13 +1,29 @@
 package repository
 
-import "github.com/tigerowo/infinite-canvas/model"
+import (
+	"errors"
+
+	"github.com/tigerowo/infinite-canvas/model"
+	"gorm.io/gorm/clause"
+)
 
 func SaveVideoTask(task model.VideoTask) (model.VideoTask, error) {
 	db, err := DB()
 	if err != nil {
 		return task, err
 	}
-	return task, db.Save(&task).Error
+	result := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&task)
+	if result.Error != nil || result.RowsAffected > 0 {
+		return task, result.Error
+	}
+	var existing model.VideoTask
+	if err := db.First(&existing, "id = ?", task.ID).Error; err != nil {
+		return task, err
+	}
+	if existing.UserID != task.UserID {
+		return task, errors.New("视频任务 ID 已被占用")
+	}
+	return existing, nil
 }
 
 func SavePendingVideoTaskPoll(task model.VideoTask) (bool, error) {

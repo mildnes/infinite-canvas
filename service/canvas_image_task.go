@@ -109,6 +109,18 @@ func SaveCanvasImageTask(task model.CanvasImageTask) (model.CanvasImageTask, err
 	return repository.UpdateCanvasImageTask(task)
 }
 
+func FailCanvasImageTask(task model.CanvasImageTask, message, detail string) (bool, error) {
+	completedAt := now()
+	changed, err := repository.FailActiveCanvasImageTask(task.ID, completedAt, message, detail)
+	if err != nil || !changed {
+		return changed, err
+	}
+	if task.Credits > 0 && task.ChannelID != "" {
+		err = RefundUserCredits(task.UserID, task.ChannelID, task.Model, task.Credits, task.Endpoint)
+	}
+	return true, err
+}
+
 func CanvasImageTaskResponse(task model.CanvasImageTask) map[string]any {
 	result := map[string]any{
 		"id":             task.ID,

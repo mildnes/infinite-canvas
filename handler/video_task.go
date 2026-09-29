@@ -66,6 +66,13 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 		Fail(w, "未登录或权限不足")
 		return
 	}
+	clientTaskID := readClientVideoTaskID(r)
+	if clientTaskID != "" {
+		if existing, found, readErr := service.GetUserVideoTask(user.ID, clientTaskID); readErr == nil && found {
+			OK(w, service.VideoTaskResponse(existing))
+			return
+		}
+	}
 	channel, userChannelID, err := selectAIRequestChannel(user, modelName, r.Header.Get("X-Model-Channel-ID"), r.Header.Get(userModelChannelHeader))
 	if err != nil {
 		log.Printf("AI video select channel failed: model=%s err=%v", modelName, err)
@@ -161,7 +168,7 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 		ChannelName:     channel.Name,
 		Source:          readVideoTaskSource(r),
 		SourceID:        readVideoTaskSourceID(r),
-		ClientTaskID:    readClientVideoTaskID(r),
+		ClientTaskID:    clientTaskID,
 		UpstreamTaskID:  parsed.UpstreamTaskID,
 		UpstreamVideoID: parsed.UpstreamVideoID,
 		Status:          parsed.Status,
