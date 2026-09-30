@@ -65,7 +65,7 @@ import { CANVAS_ASSET_DRAG_TYPE, CanvasSidePanel } from "../components/canvas-si
 import { DEFAULT_CANVAS_AGENT_PANEL, DEFAULT_CANVAS_SIDE_PANEL, useCanvasStore } from "../stores/use-canvas-store";
 import { assistantReferenceContentFromNode, buildNodeMentionReferences, isCanvasReferenceNode } from "../utils/canvas-resource-references";
 import { buildCanvasAgentContext } from "../agent/canvas-agent-context";
-import { resolveCanvasAgentImageSelection } from "../agent/canvas-agent-image-model";
+import { applyCanvasAgentImageSelection, resolveCanvasAgentImageSelection } from "../agent/canvas-agent-image-model";
 import type { CanvasAgentAction, CanvasAgentToolResult } from "../agent/canvas-agent-tools";
 import {
     CanvasNodeType,
@@ -429,16 +429,17 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 textReasoningEnabled: false,
                 textStreaming: false,
                 autoGenerateMedia: true,
+                ...imageSelection,
                 imageQuality: effectiveConfig.quality,
                 imageSize: effectiveConfig.size,
                 videoQuality: effectiveConfig.vquality,
                 videoSize: effectiveConfig.videoSize,
             };
         },
-        [agentConfig, effectiveConfig.quality, effectiveConfig.size, effectiveConfig.videoSize, effectiveConfig.vquality],
+        [agentConfig, effectiveConfig],
     );
     const agentEffectiveConfig = useMemo(
-        () => ({ ...effectiveConfig, quality: resolvedAgentConfig.imageQuality, size: resolvedAgentConfig.imageSize, vquality: resolvedAgentConfig.videoQuality, videoSize: resolvedAgentConfig.videoSize, count: "1", canvasImageCount: "1" }),
+        () => ({ ...applyCanvasAgentImageSelection(effectiveConfig, resolvedAgentConfig), quality: resolvedAgentConfig.imageQuality, size: resolvedAgentConfig.imageSize, vquality: resolvedAgentConfig.videoQuality, videoSize: resolvedAgentConfig.videoSize, count: "1", canvasImageCount: "1" }),
         [effectiveConfig, resolvedAgentConfig],
     );
 

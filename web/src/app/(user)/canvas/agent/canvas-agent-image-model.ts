@@ -15,3 +15,11 @@ export function resolveCanvasAgentImageSelection(config: AiConfig, agentConfig?:
         imageChannelId: requestedChannel?.id || defaultChannel?.id || modelChannels[0]?.id || config.imageChannelId,
     };
 }
+
+export function applyCanvasAgentImageSelection(config: AiConfig, selection: Pick<CanvasAgentConfig, "imageModel" | "imageChannelId">): AiConfig {
+    return {
+        ...config,
+        imageModel: selection.imageModel || config.imageModel,
+        imageChannelId: selection.imageChannelId || config.imageChannelId,
+    };
+}

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { resolveCanvasAgentImageSelection } from "./canvas-agent-image-model.ts";
+import { applyCanvasAgentImageSelection, resolveCanvasAgentImageSelection } from "./canvas-agent-image-model.ts";
 
 const config = {
     channelMode: "remote",
@@ -27,4 +27,12 @@ test("已下线模型回退到当前默认图片模型", () => {
         imageModel: "gpt-image-2",
         imageChannelId: "default",
     });
+});
+
+test("将 Agent 选择的图片模型和渠道应用到本次生成配置", () => {
+    const selection = resolveCanvasAgentImageSelection(config, { imageModel: "grok-imagine-image", imageChannelId: "grok-b" });
+    const generationConfig = applyCanvasAgentImageSelection(config, selection);
+
+    assert.equal(generationConfig.imageModel, "grok-imagine-image");
+    assert.equal(generationConfig.imageChannelId, "grok-b");
 });
