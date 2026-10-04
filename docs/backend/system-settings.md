@@ -124,30 +124,51 @@ description: settings 表中 public 和 private 配置结构说明
 
 ### 图片输出格式能力
 
-公开配置 `modelChannel.channels[].imageOutputCapabilities` 按模型声明可选输出格式，由服务端根据实际协议和模型推导，不需要新的数据库表或管理员填写第二份能力配置。例如：
+公开配置 `modelChannel.channels[].imageOutputCapabilities` 按渠道和模型返回可选输出格式。服务端优先使用渠道私有配置 `private.channels[].imageOutputCapabilities` 的显式声明；未声明时才匹配仓库共享规则 `shared/image-output-capability-rules.json`。本地直连也先读该渠道的显式声明，再匹配同一份共享规则，不再各自维护模型启发式列表。例如：
 
 ```json
 {
   "gpt-image-2": {
-    "formats": ["png-transparent", "jpeg"],
-    "defaultFormat": "png-transparent"
+    "formats": ["png-transparent", "jpeg"]
+  },
+  "custom-image-model": {
+    "formats": []
   }
 }
 ```
 
-`AiConfig.imageOutputFormat`、画布 Agent 配置、节点元数据和生成记录保存 `png-transparent` 或 `jpeg`；缺少字段或内部值为 `auto` 时不发送新增参数。新配置优先透明 PNG，若当前渠道不支持则按声明的默认格式回退。未指定渠道时，前端只使用全部候选渠道共同支持的格式；未知能力继续沿用渠道原有输出方式。
+`formats` 可包含 `png-transparent`、`jpeg`，空数组 `[]` 是显式声明，表示该模型不开放这些输出格式，不等同于未声明，也不回退到共享规则。`defaultFormat` 是可选字段；仅当其值也在 `formats` 中时有效。缺少或无效时保存为空，不自动制造支持格式。请求所选格式不受支持时，仅在存在有效默认值时切换到该值；否则保留 `auto`。`AiConfig.imageOutputFormat`、画布 Agent 配置、节点元数据和生成记录保存 `png-transparent` 或 `jpeg`；旧配置缺少格式或值为 `auto` 时不主动注入格式、背景参数。未指定渠道时，前端只提供全部候选渠道共同支持的格式。
+
+后台“模型渠道”设置为非工作流渠道的每个模型提供可展开的“图片输出格式声明”编辑器，可启用或关闭声明、选择透明 PNG/JPEG，并从已选格式中选择可选默认值。关闭会删除该模型的声明键；JSON 手写的声明仍会被可视化保存保留，包括 `formats: []`。保存时按模型保留、过滤未知格式并去重；无效或未包含在格式列表内的默认值会被清除。声明按渠道和模型隔离，同名模型在不同渠道互不影响。
 
 | 能力 | 请求行为 |
 | --- | --- |
 | OpenAI 协议的 GPT Image 模型 | 透明 PNG 对应 `output_format: "png"` 与 `background: "transparent"`；JPG 对应 `output_format: "jpeg"` |
 | APIMart 的 `gpt-image-1-official`、`gpt-image-1.5-official`、`gpt-image-2-official`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst` | 支持透明 PNG 和 JPG；透明 PNG 对应 `output_format: "png"` 与 `background: "transparent"`，JPG 对应 `output_format: "jpeg"` |
-| APIMart 的其他已声明格式模型及 KIE 模型 | 保持已有 JPG 能力；KIE 使用其合法 `jpg` 枚举。APIMart 普通 `gpt-image-2`、`gpt-image-2-ext`、`gpt-image-2.5-ext` 不自动开放格式参数 |
+| APIMart 自定义别名或其他模型的显式声明 | 按声明发送格式；例如普通 `gpt-image-2` 可手动声明透明 PNG，未声明时保持原有删除格式参数的规则。声明不改变质量、尺寸或分辨率转换 |
+| APIMart 既有 JPG 模型及 KIE 模型 | 保持已有 JPG 能力；KIE 使用其合法 `jpg` 枚举，透明 PNG 的线格式仍只发送 `png`。APIMart 的 `*-ext` 模型未声明时不自动开放格式参数 |
 | Grok2API/xAI 及其他未声明格式能力的模型 | 不新增格式或背景参数，保留原有协议转换 |
 | RunningHub/ComfyUI | 仅使用工作流已明确绑定、启用且安全的输出格式字段；透明输出还需透明背景映射 |
 
-Images 请求在根参数或编辑表单中传递格式，Responses 在 `image_generation` 工具中传递，图片 Chat 使用现有 `image_config`。普通文本请求不受影响。服务端根据实际渠道再次校验，回退信息写入调用日志；`X-Image-Output-Format` 表示生效的请求档位，不代表已验证图片包含透明 alpha。实际结果以媒体 MIME 和文件字节为准。
+Images 请求在根参数或编辑表单中传递格式，Responses 在 `image_generation` 工具中传递，图片 Chat 使用现有 `image_config`。普通文本请求不受影响。服务端根据实际渠道再次校验。显式声明优先于共享规则；远程模型未声明时不匹配前端猜测规则，而是保留原请求并提示 `undeclared`。图片响应可能带 `X-Image-Output-Notice`：`undeclared`（模型未声明能力）、`fallback-default`（所选格式无法使用，按合法默认格式回退；没有合法默认值时保留 `auto`）、`upstream-no-alpha`（透明 PNG 上游结果没有透明通道）或 `upstream-alpha-unverified`（无法验证透明通道）。画布异步任务的 JSON 会返回 `imageOutputNotice`、`imageOutputNoticeCode`，前端据此提示。`X-Image-Output-Format` 表示请求生效档位，不代表已验证图片包含透明 alpha；Notice 只报告能力或结果校验情况。
 
-`response_format=b64_json` 只控制返回的传输编码，不能指定 PNG/JPG。媒体保存按实际内容识别 MIME 和扩展名；不会把 JPG 改名为 PNG，也不会做事后转换。透明 PNG 依赖上游真实能力，部署验收需检查 alpha 通道。[OpenAI 图片生成参数说明](https://developers.openai.com/api/docs/guides/image-generation)
+本地直连配置保存并恢复 `localChannels[].imageOutputCapabilities`。需要后端参数转译的渠道会传递模型列表和能力声明，不传递渠道 API Key；转译结果返回 `imageOutputFormat`、`imageOutputNotice`、`imageOutputNoticeCode`。浏览器直连上游的产物不经过这条后端结果校验，应使用下面的探针检查真实透明像素。账号或页面切换后，旧转译请求的提示不会写入当前页面。
+
+`response_format=b64_json` 只控制返回的传输编码，不能指定 PNG/JPG。媒体保存按实际内容识别 MIME 和扩展名；不会把 JPG 改名为 PNG，也不会做事后转换，透明校验也不修补或转换原媒体。透明 PNG 依赖上游真实能力，部署验收需检查 alpha 通道。[OpenAI 图片生成参数说明](https://developers.openai.com/api/docs/guides/image-generation)
+
+透明 PNG 的专用结果校验必须先收到完整响应并检查图片字节，再发送响应头。因此这条透明结果校验路径会缓冲上游响应；图片 SSE 也会以完整汇总结果交付，而不是渐进流式交付。普通文本 SSE 行为不变。该限制仅适用于选择透明 PNG 并经过结果验证的响应。
+
+仓库提供 [透明 PNG 探针](../../scripts/image-transparency-probe.py)，需要 Python 3 与 Pillow。对已有产物执行下面的命令不会生成图片；通过条件是 PNG 中至少一个像素的 `alpha=0`，RGB 棋盘格会失败，并返回字节数、SHA-256 和透明像素比例：
+
+```bash
+python3 scripts/image-transparency-probe.py --file /path/to/result.png
+```
+
+要发起真实生成，先通过运行环境安全设置 `IMAGE_PROBE_API_KEY`，再传入准确的 Images 生成端点和模型。以下命令会提交一次生成请求；使用应用代理时环境变量应是账号令牌，并增加 `--channel-id` 指定实际渠道。脚本不打印凭据、不覆盖已有 `--out` 文件；它要求接口返回完成图片，原始异步渠道需先通过应用代理完成轮询或用 `--file` 检查已下载结果。
+
+```bash
+python3 scripts/image-transparency-probe.py --endpoint https://api.example/v1/images/generations --model MODEL --out /path/to/new-result.png
+```
 
 APIMart 透明背景能力以其实际模型接口为准：[GPT Image 1/1.5 Official](https://docs.apimart.ai/en/api-reference/images/gpt-image-1/generation)、[GPT Image 2 Official](https://docs.apimart.ai/en/api-reference/images/gpt-image-2/official)、[GPT Image 2.5 Flare/Sunburst](https://docs.apimart.ai/en/api-reference/images/gpt-image-2.5/generation)。远程渠道使用服务端返回的能力信息；部署新代码后刷新公开配置，再打开工作台、画布节点或 Agent 的图像设置，在“质量”与“尺寸”之间选择输出格式。旧配置仍沿用渠道默认格式，选择透明 PNG 后才发送透明参数。
 
@@ -250,6 +271,7 @@ docker compose exec app /app/image-log-summaries -apply -limit 10
 | `models` | string[] | 该渠道可用模型 |
 | `modelCapabilities` | object | 可选的模型能力声明，键为模型名，值为 `image`、`video`、`text`、`audio` 数组；未声明时沿用旧名称推导 |
 | `imageQualityCapabilities` | object | 可选的图片质量能力声明，键为模型名，值包含上游允许的 `values`、UI 档位到上游值的 `map` 及回退 `defaultValue` |
+| `imageOutputCapabilities` | object | 可选的图片输出格式声明，键为模型名，值包含 `formats` 与可选 `defaultFormat`；`formats: []` 显式禁用格式能力 |
 | `workflows` | object[] | RunningHub 或 ComfyUI 工作流条目，包含用途、启停状态、字段映射及工作流 JSON/拓扑 |
 | `bridgeId` | string | ComfyUI 渠道绑定的 Bridge 设备 ID |
 | `weight` | number | 渠道权重；同一模型有多个可用渠道时按权重随机 |

@@ -4,7 +4,74 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/tigerowo/infinite-canvas/model"
 )
+
+func TestPrepareDirectAIRequestImageOutputDeclarations(t *testing.T) {
+	for _, endpoint := range []string{"/images/generations", "/images/edits"} {
+		for _, test := range []struct {
+			name, modelName, wantFormat, wantNotice string
+			capability                              *model.ImageOutputCapability
+		}{
+			{"custom declaration", "custom-renderer", "png", "", &model.ImageOutputCapability{Formats: []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent}}},
+			{"bare GPT declaration", "gpt-image-2", "png", "", &model.ImageOutputCapability{Formats: []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent}}},
+			{"disabled declaration", "gpt-image-2-official", "", "fallback-default", &model.ImageOutputCapability{Formats: []model.ImageOutputFormat{}}},
+			{"undeclared alias", "custom-renderer", "", "undeclared", nil},
+			{"shared version family", "gpt-image-9.1-sunburst", "png", "", nil},
+		} {
+			t.Run(endpoint+"/"+test.name, func(t *testing.T) {
+				channel := directAIChannelInput{Protocol: "apimart", BaseURL: "https://api.apimart.ai", Models: []string{test.modelName}}
+				if test.capability != nil {
+					channel.ImageOutputCapabilities = map[string]model.ImageOutputCapability{test.modelName: *test.capability}
+				}
+				plan, err := prepareDirectAIRequest(directAIRequestInput{Channel: channel, Model: test.modelName, Endpoint: endpoint, Body: map[string]any{
+					"prompt": "test", "output_format": "png", "background": "transparent", "quality": "HIGH",
+				}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				payload := testDirectRecord(t, plan.Body)
+				if test.wantFormat == "" {
+					if _, ok := payload["output_format"]; ok {
+						t.Fatalf("unexpected output_format: %#v", payload)
+					}
+					if _, ok := payload["background"]; ok {
+						t.Fatalf("unexpected background: %#v", payload)
+					}
+				} else if payload["output_format"] != test.wantFormat || payload["background"] != "transparent" || plan.ImageOutputFormat != "png-transparent" {
+					t.Fatalf("declaration lost during translation: %#v", plan)
+				}
+				if plan.ImageOutputNoticeCode != test.wantNotice {
+					t.Fatalf("notice: %#v", plan)
+				}
+				if test.modelName == "gpt-image-2" && payload["quality"] != "high" {
+					t.Fatalf("quality normalization changed: %#v", payload)
+				}
+			})
+		}
+	}
+}
+
+func TestPrepareDirectAIRequestUndeclaredAutoKeepsBody(t *testing.T) {
+	plan, err := prepareDirectAIRequest(directAIRequestInput{
+		Channel: directAIChannelInput{Protocol: "apimart", BaseURL: "https://api.apimart.ai"}, Model: "custom-renderer", Endpoint: "/images/generations",
+		Body: map[string]any{"prompt": "test", "size": "1:1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := testDirectRecord(t, plan.Body)
+	if _, ok := payload["output_format"]; ok {
+		t.Fatalf("auto injected output: %#v", payload)
+	}
+	if _, ok := payload["background"]; ok {
+		t.Fatalf("auto injected background: %#v", payload)
+	}
+	if plan.ImageOutputNoticeCode != "undeclared" {
+		t.Fatalf("notice: %#v", plan)
+	}
+}
 
 func TestPrepareDirectAIRequestKIEReferences(t *testing.T) {
 	markers := map[string]string{

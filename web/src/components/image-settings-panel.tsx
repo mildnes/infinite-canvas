@@ -59,13 +59,14 @@ export function ImageSettingsPanel({ config, model, onConfigChange, theme, showT
     const dimensions = readSizeDimensions(activeSize, selectedAspect || aspectOptions[0]);
     const imageModel = model || config.imageModel || config.model;
     const outputCapability = imageOutputCapabilityForConfig(config, imageModel);
-    const hasOutputCapability = Boolean(outputCapability);
+    const hasOutputCapability = Boolean(outputCapability?.formats.length);
+    const hasOutputDeclaration = outputCapability !== null;
     const hasOutputFormatContext = hasImageOutputFormatContext(config, imageModel);
     const savedOutputFormat = normalizeImageOutputFormat(config.imageOutputFormat);
     const outputFormatResolution = resolveImageOutputFormat(savedOutputFormat, outputCapability);
     const selectedOutputFormat = savedOutputFormat === "auto"
         ? undefined
-        : outputFormatResolution.fellBack ? outputCapability?.defaultFormat : outputFormatResolution.format;
+        : outputFormatResolution.format;
 
     useEffect(() => {
         const targetFormat = outputFormatResolution.fellBack ? outputFormatResolution.format : hasOutputFormatContext && !hasOutputCapability && savedOutputFormat !== "auto" ? "auto" : "";
@@ -83,9 +84,9 @@ export function ImageSettingsPanel({ config, model, onConfigChange, theme, showT
         message.open({
             key: `image-output-format-fallback-${noticeKey}`,
             type: "info",
-            content: targetFormat === "auto" ? "当前模型未声明输出格式能力，已恢复渠道默认格式" : `当前模型不支持所选格式，已切换为${targetFormat === "jpeg" ? "JPG" : "透明 PNG"}`,
+            content: targetFormat === "auto" ? hasOutputDeclaration ? "当前渠道无可用的所选输出格式，已恢复自动输出" : "该模型未声明输出格式能力，已恢复自动输出" : `当前模型不支持所选格式，已切换为${targetFormat === "jpeg" ? "JPG" : "透明 PNG"}`,
         });
-    }, [config.activeChannelId, config.imageChannelId, config.imageWorkflowRef, hasOutputCapability, hasOutputFormatContext, imageModel, message, onConfigChange, outputFormatResolution.fellBack, outputFormatResolution.format, savedOutputFormat]);
+    }, [config.activeChannelId, config.imageChannelId, config.imageWorkflowRef, hasOutputCapability, hasOutputDeclaration, hasOutputFormatContext, imageModel, message, onConfigChange, outputFormatResolution.fellBack, outputFormatResolution.format, savedOutputFormat]);
     const selectAspect = (value: string) => {
         const option = aspectOptions.find((item) => item.value === value);
         onConfigChange("size", option?.size || option?.value || "auto");
@@ -119,7 +120,7 @@ export function ImageSettingsPanel({ config, model, onConfigChange, theme, showT
                         ))}
                     </div>
                 </div>
-                {outputCapability ? (
+                {outputCapability?.formats.length ? (
                     <div className="space-y-2.5">
                         <SettingTitle color={theme.node.muted}>输出格式</SettingTitle>
                         {savedOutputFormat === "auto" ? <div className="text-xs" style={{ color: theme.node.muted }}>沿用渠道默认格式</div> : null}
@@ -130,6 +131,11 @@ export function ImageSettingsPanel({ config, model, onConfigChange, theme, showT
                                 </OptionPill>
                             ))}
                         </div>
+                    </div>
+                ) : hasOutputFormatContext ? (
+                    <div className="space-y-2.5">
+                        <SettingTitle color={theme.node.muted}>输出格式</SettingTitle>
+                        <div className="text-xs" style={{ color: theme.node.muted }}>{outputCapability ? "该模型声明不支持输出格式参数，沿用自动输出" : "该模型未声明输出格式能力，沿用自动输出"}</div>
                     </div>
                 ) : null}
                 {showSize ? (

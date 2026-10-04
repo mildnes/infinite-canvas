@@ -361,6 +361,7 @@ func normalizePrivateSetting(setting model.PrivateSetting) model.PrivateSetting 
 			setting.Channels[i].Models = []string{}
 		}
 		setting.Channels[i].ModelCapabilities = normalizeModelCapabilities(setting.Channels[i].ModelCapabilities)
+		setting.Channels[i].ImageOutputCapabilities = normalizeImageOutputCapabilities(setting.Channels[i].ImageOutputCapabilities, setting.Channels[i].Models)
 		setting.Channels[i].ImageQualityCapabilities = normalizeImageQualityCapabilities(setting.Channels[i].ImageQualityCapabilities)
 		if setting.Channels[i].Weight <= 0 {
 			setting.Channels[i].Weight = 1
@@ -679,6 +680,7 @@ func normalizeModelChannel(channel model.ModelChannel) model.ModelChannel {
 		channel.Models = []string{}
 	}
 	channel.ImageQualityCapabilities = normalizeImageQualityCapabilities(channel.ImageQualityCapabilities)
+	channel.ImageOutputCapabilities = normalizeImageOutputCapabilities(channel.ImageOutputCapabilities, channel.Models)
 	if channel.Weight <= 0 {
 		channel.Weight = 1
 	}
@@ -761,6 +763,53 @@ func normalizeImageQualityCapabilities(capabilities map[string]model.ImageQualit
 			defaultValue = ""
 		}
 		result[modelName] = model.ImageQualityCapability{Values: values, Map: qualityMap, DefaultValue: defaultValue}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func normalizeImageOutputCapabilities(capabilities map[string]model.ImageOutputCapability, modelSets ...[]string) map[string]model.ImageOutputCapability {
+	if len(capabilities) == 0 {
+		return nil
+	}
+
+	allowedModels := map[string]bool(nil)
+	if len(modelSets) > 0 {
+		allowedModels = make(map[string]bool, len(modelSets[0]))
+		for _, modelName := range modelSets[0] {
+			if modelName = strings.TrimSpace(modelName); modelName != "" {
+				allowedModels[modelName] = true
+			}
+		}
+	}
+
+	result := make(map[string]model.ImageOutputCapability, len(capabilities))
+	for modelName, capability := range capabilities {
+		modelName = strings.TrimSpace(modelName)
+		if modelName == "" || (allowedModels != nil && !allowedModels[modelName]) {
+			continue
+		}
+
+		formats := make([]model.ImageOutputFormat, 0, len(capability.Formats))
+		seen := make(map[model.ImageOutputFormat]bool, len(capability.Formats))
+		for _, format := range capability.Formats {
+			format = model.ImageOutputFormat(strings.ToLower(strings.TrimSpace(string(format))))
+			switch format {
+			case model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG:
+				if !seen[format] {
+					seen[format] = true
+					formats = append(formats, format)
+				}
+			}
+		}
+
+		defaultFormat := model.ImageOutputFormat(strings.ToLower(strings.TrimSpace(string(capability.DefaultFormat))))
+		if !seen[defaultFormat] {
+			defaultFormat = ""
+		}
+		result[modelName] = model.ImageOutputCapability{Formats: formats, DefaultFormat: defaultFormat}
 	}
 	if len(result) == 0 {
 		return nil
@@ -1435,9 +1484,12 @@ func publicChannelInfos(channels []model.ModelChannel, options ...[]string) []mo
 		imageOutputCapabilities := make(map[string]model.ImageOutputCapability)
 		imageQualityCapabilities := make(map[string]model.ImageQualityCapability)
 		modelCapabilities := make(map[string][]model.ModelCapability)
+		declaredImageOutputCapabilities := normalizeImageOutputCapabilities(channel.ImageOutputCapabilities, models)
 		declaredImageQualityCapabilities := normalizeImageQualityCapabilities(channel.ImageQualityCapabilities)
 		for _, modelName := range models {
-			if capability, ok := ResolveImageOutputCapability(channel, modelName); ok {
+			if capability, ok := declaredImageOutputCapabilities[modelName]; ok {
+				imageOutputCapabilities[modelName] = capability
+			} else if capability, ok := ResolveImageOutputCapability(channel, modelName); ok {
 				imageOutputCapabilities[modelName] = capability
 			}
 			if capability, ok := declaredImageQualityCapabilities[modelName]; ok {

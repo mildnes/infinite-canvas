@@ -1,12 +1,13 @@
 import type { ModelChannelProtocol } from "@/lib/model-channel";
 import type { WorkflowFieldMapping, WorkflowRef } from "@/lib/workflow-channel";
+import sharedOutputCapabilityRules from "../../../shared/image-output-capability-rules.json" with { type: "json" };
 
 export type ImageOutputFormat = "png-transparent" | "jpeg";
 export type ImageOutputFormatSelection = ImageOutputFormat | "auto";
 
 export type ImageOutputCapability = {
     formats: ImageOutputFormat[];
-    defaultFormat: ImageOutputFormat;
+    defaultFormat?: ImageOutputFormat;
 };
 
 export type ImageOutputCapabilities = Record<string, ImageOutputCapability>;
@@ -30,6 +31,20 @@ type ImageOutputWorkflowSummary = {
     imageOutputCapability?: ImageOutputCapability;
 };
 
+type ImageOutputCapabilityRule = {
+    id: string;
+    channel: {
+        protocols?: string[];
+        baseUrlContains?: string[];
+        combine?: "all" | "any";
+    };
+    excludeChannelContains?: string[];
+    excludeModelRegex?: string;
+    model: { kind: "prefix" | "regex" | "exact"; value: string; snapshotSuffix?: boolean };
+    formats: string[];
+    defaultFormat?: string;
+};
+
 export type ImageOutputConfig = {
     channelMode?: "remote" | "local";
     model?: string;
@@ -40,6 +55,13 @@ export type ImageOutputConfig = {
     publicChannels?: ImageOutputChannel[];
     localChannels?: ImageOutputChannel[];
 };
+
+export const imageOutputCapabilityRules = (sharedOutputCapabilityRules as { rules: ImageOutputCapabilityRule[] }).rules;
+const compiledImageOutputCapabilityRules = imageOutputCapabilityRules.map((rule) => ({
+    rule,
+    modelRegex: rule.model.kind === "regex" ? new RegExp(rule.model.value) : undefined,
+    excludeModelRegex: rule.excludeModelRegex ? new RegExp(rule.excludeModelRegex) : undefined,
+}));
 
 export const imageOutputFormatOptions: Array<{ value: ImageOutputFormat; label: string }> = [
     { value: "png-transparent", label: "透明 PNG" },
@@ -53,8 +75,12 @@ export function normalizeImageOutputFormat(value: unknown): ImageOutputFormatSel
 export function resolveImageOutputFormat(selection: unknown, capability: ImageOutputCapability | null | undefined) {
     const format = normalizeImageOutputFormat(selection);
     if (!capability || format === "auto") return { format: "auto" as const, fellBack: false };
-    if (capability.formats.includes(format)) return { format, fellBack: false };
-    return { format: capability.defaultFormat, fellBack: true };
+    const normalized = normalizeCapability(capability);
+    if (!normalized?.formats.includes(format)) {
+        if (!normalized?.defaultFormat) return { format: "auto" as const, fellBack: true, notice: "fallback-default" as const };
+        return { format: normalized.defaultFormat, fellBack: true, notice: "fallback-default" as const };
+    }
+    return { format, fellBack: false };
 }
 
 export function imageOutputCapabilityForConfig(config: ImageOutputConfig, model = config.imageModel || config.model || ""): ImageOutputCapability | null {
@@ -67,9 +93,13 @@ export function imageOutputCapabilityForConfig(config: ImageOutputConfig, model 
     const selectedChannel = selectedChannelId ? matchingChannels.find((channel) => channel.id === selectedChannelId) : activeChannel;
     const candidates = selectedChannelId ? (selectedChannel ? [selectedChannel] : []) : selectedChannel ? [selectedChannel] : matchingChannels;
     const capabilities = candidates
-        .map((channel) => config.channelMode === "remote"
-            ? normalizeCapability(channel.imageOutputCapabilities?.[model])
-            : localImageOutputCapability(channel, model))
+        .map((channel) => {
+            const declared = channel.imageOutputCapabilities?.[model];
+            if (config.channelMode === "remote" || Object.hasOwn(channel.imageOutputCapabilities || {}, model)) {
+                return normalizeCapability(declared);
+            }
+            return localImageOutputCapability(channel, model);
+        })
         .filter((capability): capability is ImageOutputCapability => capability !== null);
 
     if (capabilities.length !== candidates.length) return null;
@@ -77,11 +107,8 @@ export function imageOutputCapabilityForConfig(config: ImageOutputConfig, model 
     if (capabilities.length === 1) return capabilities[0];
 
     const formats = capabilities[0].formats.filter((format) => capabilities.every((capability) => capability.formats.includes(format)));
-    if (!formats.length) return null;
-    const defaultFormat = capabilities[0].defaultFormat && formats.includes(capabilities[0].defaultFormat)
-        ? capabilities[0].defaultFormat
-        : formats[0];
-    return { formats, defaultFormat };
+    const defaultFormat = capabilities.find((capability) => capability.defaultFormat && formats.includes(capability.defaultFormat))?.defaultFormat;
+    return { formats, ...(defaultFormat ? { defaultFormat } : {}) };
 }
 
 export function hasImageOutputFormatContext(config: ImageOutputConfig, model = config.imageModel || config.model || "") {
@@ -115,40 +142,8 @@ export function imageOutputCapabilityForWorkflowFields(fields: WorkflowFieldMapp
     return formats.length ? { formats, defaultFormat: formats[0] } : undefined;
 }
 
-function isImageModelFamilyOrSnapshot(value: string, family: string) {
-    if (value === family) return true;
-    const suffix = value.startsWith(`${family}-`) ? value.slice(family.length + 1) : "";
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(suffix)) return false;
-    const snapshotDate = new Date(`${suffix}T00:00:00.000Z`);
-    return !Number.isNaN(snapshotDate.getTime()) && snapshotDate.toISOString().slice(0, 10) === suffix;
-}
-
-function isOpenAIGPTImageModel(model: string) {
-    return ["gpt-image-1", "gpt-image-1-mini", "gpt-image-1.5", "gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"]
-        .some((family) => isImageModelFamilyOrSnapshot(model, family));
-}
-
 function normalizeImageOutputModelName(model: string) {
     return model.toLowerCase().trim().replace(/[._/]/g, "-");
-}
-
-function isAPIMartOutputFormatModel(model: string) {
-    return normalizeImageOutputModelName(model) === "gpt-image-1";
-}
-
-function isAPIMartTransparentPNGModel(model: string) {
-    return [
-        "gpt-image-1-official",
-        "gpt-image-1-5-official",
-        "gpt-image-2-official",
-        "gpt-image-2-5-flare",
-        "gpt-image-2-5-sunburst",
-    ].includes(normalizeImageOutputModelName(model));
-}
-
-function isAPIMartSeedreamOutputFormatModel(model: string) {
-    const normalized = normalizeImageOutputModelName(model);
-    return normalized.includes("seedream-5") && !normalized.includes("seedream-5-0-pro");
 }
 
 function workflowCapabilityForConfig(config: ImageOutputConfig) {
@@ -163,10 +158,9 @@ function workflowCapabilityForConfig(config: ImageOutputConfig) {
 
 function normalizeCapability(value: ImageOutputCapability | undefined): ImageOutputCapability | null {
     if (!value || !Array.isArray(value.formats)) return null;
-    const formats = value.formats.filter((format): format is ImageOutputFormat => format === "png-transparent" || format === "jpeg");
-    if (!formats.length) return null;
-    const defaultFormat = formats.includes(value.defaultFormat) ? value.defaultFormat : formats[0];
-    return { formats, defaultFormat };
+    const formats = Array.from(new Set(value.formats.filter((format): format is ImageOutputFormat => format === "png-transparent" || format === "jpeg")));
+    const defaultFormat = formats.includes(value.defaultFormat as ImageOutputFormat) ? value.defaultFormat : undefined;
+    return { formats, ...(defaultFormat ? { defaultFormat } : {}) };
 }
 
 function workflowScalarOption(option: unknown): string | null {
@@ -183,34 +177,38 @@ function workflowScalarOption(option: unknown): string | null {
 }
 
 function localImageOutputCapability(channel: ImageOutputChannel, model: string): ImageOutputCapability | null {
-    const protocol = channel.protocol || "openai";
-    const normalizedModel = model.toLowerCase().trim();
-    const endpoint = `${channel.baseUrl || ""} ${channel.name || ""}`.toLowerCase();
-    if (protocol === "openai" && !endpoint.includes("x.ai") && !endpoint.includes("grok2api") && isOpenAIGPTImageModel(normalizedModel)) {
-        return { formats: ["png-transparent", "jpeg"], defaultFormat: "png-transparent" };
-    }
+    const protocol = String(channel.protocol || "openai").trim().toLowerCase();
+    const normalizedModel = normalizeImageOutputModelName(model);
+    const baseUrl = String(channel.baseUrl || "").trim().toLowerCase();
+    const channelHint = `${baseUrl} ${channel.name || ""}`.toLowerCase().trim();
+    const match = compiledImageOutputCapabilityRules.find(({ rule, modelRegex, excludeModelRegex }) => {
+        if (rule.excludeChannelContains?.some((value) => channelHint.includes(value.toLowerCase().trim()))) return false;
+        const channelConditions: boolean[] = [];
+        if (rule.channel.protocols?.length) channelConditions.push(rule.channel.protocols.includes(protocol));
+        if (rule.channel.baseUrlContains?.length) channelConditions.push(rule.channel.baseUrlContains.some((value) => baseUrl.includes(value.toLowerCase().trim())));
+        const channelMatches = channelConditions.length === 0 || (rule.channel.combine === "any" ? channelConditions.some(Boolean) : channelConditions.every(Boolean));
+        if (!channelMatches) return false;
+        const modelMatches = rule.model.kind === "prefix"
+            ? normalizedModel.startsWith(normalizeImageOutputModelName(rule.model.value))
+            : rule.model.kind === "exact"
+                ? normalizedModel === normalizeImageOutputModelName(rule.model.value)
+                : matchesRuleRegex(normalizedModel, modelRegex, rule.model.snapshotSuffix === true);
+        return modelMatches
+            && excludeModelRegex?.test(normalizedModel) !== true;
+    });
+    if (!match) return null;
+    const formats = Array.from(new Set(match.rule.formats.filter((format): format is ImageOutputFormat => format === "png-transparent" || format === "jpeg")));
+    const defaultFormat = formats.includes(match.rule.defaultFormat as ImageOutputFormat) ? match.rule.defaultFormat as ImageOutputFormat : undefined;
+    return { formats, ...(defaultFormat ? { defaultFormat } : {}) };
+}
 
-    if (protocol === "apimart" && isAPIMartTransparentPNGModel(normalizedModel)) {
-        return { formats: ["png-transparent", "jpeg"], defaultFormat: "png-transparent" };
-    }
-
-    if (protocol === "apimart" && (isAPIMartOutputFormatModel(normalizedModel) || isAPIMartSeedreamOutputFormatModel(normalizedModel))) {
-        return { formats: ["jpeg"], defaultFormat: "jpeg" };
-    }
-
-    if ((protocol === "kie" || endpoint.includes("kie.ai")) && [
-        "nano-banana-2",
-        "nano-banana-pro",
-        "google/nano-banana",
-        "google/nano-banana-edit",
-        "qwen/text-to-image",
-        "qwen/image-edit",
-        "qwen/image-to-image",
-        "qwen2/image-edit",
-        "qwen2/text-to-image",
-    ].includes(normalizedModel.replace(/^kie\//, ""))) {
-        return { formats: ["jpeg"], defaultFormat: "jpeg" };
-    }
-
-    return null;
+function matchesRuleRegex(model: string, regex: RegExp | undefined, allowSnapshotSuffix: boolean) {
+    if (!regex) return false;
+    if (regex.test(model)) return true;
+    if (!allowSnapshotSuffix) return false;
+    const match = model.match(/-(\d{4}-\d{2}-\d{2})$/);
+    if (!match) return false;
+    const date = new Date(`${match[1]}T00:00:00.000Z`);
+    if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== match[1]) return false;
+    return regex.test(model.slice(0, -11));
 }

@@ -96,7 +96,7 @@ func CreateCanvasImageTask(w http.ResponseWriter, r *http.Request) {
 		GenerationType:  strings.TrimPrefix(endpoint, "/images/"),
 		Endpoint:        endpoint,
 		ContentType:     contentType,
-		RequestBody:     appendImageQualityLogMetadata(appendImageOutputLogMetadata(summarizeAIRequest(body, contentType), outputFormat.Format, outputFormat.Notice), imageQuality.Quality, imageQuality.Notice),
+		RequestBody:     appendImageQualityLogMetadata(appendImageOutputLogMetadata(summarizeAIRequest(body, contentType), outputFormat.Format, outputFormat.Notice, outputFormat.NoticeCode), imageQuality.Quality, imageQuality.Notice),
 	})
 	if err != nil {
 		log.Printf("create canvas image task failed: user=%s err=%v", user.ID, err)
@@ -107,7 +107,7 @@ func CreateCanvasImageTask(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Image-Output-Format", outputFormat.Format)
 	}
 	if outputFormat.Notice != "" {
-		w.Header().Set("X-Image-Output-Notice", "fallback-default")
+		w.Header().Set("X-Image-Output-Notice", firstNonEmpty(outputFormat.NoticeCode, "fallback-default"))
 	}
 	if imageQuality.Quality != "" {
 		w.Header().Set("X-Image-Quality", imageQuality.Quality)
@@ -345,6 +345,17 @@ func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []
 			break
 		}
 		created = append(created, stored.ID)
+		if canvasTaskRequestsTransparentPNG(task) {
+			alpha, alphaErr := service.GeneratedMediaHasPNGAlpha(user.ID, stored.ID)
+			if alphaErr != nil || !alpha {
+				code, notice := "upstream-no-alpha", "上游未返回透明通道。"
+				if alphaErr != nil {
+					code, notice = "upstream-alpha-unverified", "上游图片透明通道无法验证。"
+				}
+				task.RequestBody = appendImageOutputLogMetadata(task.RequestBody, string(model.ImageOutputFormatPNGTransparent), notice, code)
+				log.Printf("canvas image output warning: task=%s channel=%s model=%s image=%d notice=%s", task.ID, task.ChannelID, task.Model, index, code)
+			}
+		}
 		imageURLs[index] = stored.URL
 		imageStorage[index] = &model.CanvasImageStorage{URL: stored.URL, StorageKey: stored.StorageKey, MimeType: stored.MimeType, Bytes: stored.Bytes, Width: stored.Width, Height: stored.Height}
 		if index == 0 {
@@ -447,7 +458,7 @@ func runCanvasAudioTask(task model.CanvasAudioTask, user model.AuthUser, body []
 
 func executeCanvasAIRequest(user model.AuthUser, endpoint string, body []byte, contentType string, channelID string, userChannelID string) ([]byte, int, string, error) {
 	request := httptest.NewRequest(http.MethodPost, "http://canvas.local/api/v1"+endpoint, bytes.NewReader(body))
-	request = request.WithContext(service.WithUser(context.Background(), user))
+	request = request.WithContext(context.WithValue(service.WithUser(context.Background(), user), imageOutputValidationSkipped{}, true))
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}

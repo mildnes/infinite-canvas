@@ -1,11 +1,62 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { defaultConfig } from "@/stores/use-config-store";
+import { useUserStore } from "@/stores/use-user-store";
 
 import {
     applyImageOutputFormatFields,
     applyImageOutputFormatRequestBody,
     normalizeBase64Image,
+    createCanvasImageTask,
+    requestEdit,
+    requestGeneration,
 } from "./image";
+
+test("real image entry points use remote declarations without guessing custom model names", async (t) => {
+    const originalToken = useUserStore.getState().token;
+    const originalWindow = globalThis.window;
+    useUserStore.setState({ token: "test-token" });
+    globalThis.window = { location: { pathname: "/canvas/test" }, setTimeout, clearTimeout } as unknown as Window & typeof globalThis;
+    t.after(() => {
+        useUserStore.setState({ token: originalToken });
+        if (originalWindow) globalThis.window = originalWindow;
+        else Reflect.deleteProperty(globalThis, "window");
+    });
+    const sentRequests: RequestInit[] = [];
+    t.mock.method(globalThis, "fetch", async (_url: unknown, init: RequestInit) => {
+        sentRequests.push(init);
+        return new Response(JSON.stringify({ error: { message: "test-stop" } }), { status: 400 });
+    });
+    const reference = { id: "ref", name: "source.png", type: "image/png", dataUrl: "data:image/png;base64,iVBORw0KGgo=" };
+    for (const declared of [false, true]) {
+        for (const apiMode of ["images", "responses"]) {
+            for (const run of [requestGeneration, requestEdit, createCanvasImageTask]) {
+                const config = {
+                    ...defaultConfig, channelMode: "remote" as const, model: "my-custom-alias", imageModel: "my-custom-alias",
+                    apiMode, count: "2", imageChannelId: "selected", imageOutputFormat: "png-transparent" as const,
+                    publicChannels: [{ id: "selected", protocol: "openai" as const, name: "selected", models: ["my-custom-alias"],
+                        ...(declared ? { imageOutputCapabilities: { "my-custom-alias": { formats: ["png-transparent" as const], defaultFormat: "png-transparent" as const } } } : {}),
+                    }],
+                };
+                sentRequests.length = 0;
+                await assert.rejects(() => run(config, "scene", run === requestEdit ? [reference] : []));
+                const sent = sentRequests[0];
+                assert.ok(sent);
+                if (sent.body instanceof FormData) {
+                    assert.equal(sent.body.get("output_format"), declared ? "png" : null);
+                    assert.equal(sent.body.get("background"), declared ? "transparent" : null);
+                    assert.equal((sent.body.get("image") as File).size, 8);
+                } else {
+                    const body = JSON.parse(String(sent.body));
+                    const request = body.request || body;
+                    const target = apiMode === "responses" ? request.tools[0] : request;
+                    assert.equal(target.output_format, declared ? "png" : undefined);
+                    assert.equal(target.background, declared ? "transparent" : undefined);
+                }
+            }
+        }
+    }
+});
 
 test("Images, Responses, and Chat place selected format in protocol-specific targets", () => {
     const imagesBody = applyImageOutputFormatRequestBody({ model: "gpt-image-2" }, "png-transparent", "openai");

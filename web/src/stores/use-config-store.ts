@@ -21,6 +21,7 @@ export type LocalModelChannel = {
     apiKey: string;
     models: string[];
     modelCapabilities?: ModelCapabilities;
+    imageOutputCapabilities?: ImageOutputCapabilities;
     imageQualityCapabilities?: ImageQualityCapabilities;
     uploadApiKey?: string;
     bridgeId?: string;
@@ -568,6 +569,7 @@ export function normalizeLocalChannels(config: Partial<AiConfig>): LocalModelCha
         apiKey: channel.apiKey || "",
         models: Array.isArray(channel.models) ? channel.models.filter(Boolean) : [],
         modelCapabilities: channel.modelCapabilities,
+        imageOutputCapabilities: channel.imageOutputCapabilities,
         imageQualityCapabilities: channel.imageQualityCapabilities,
         ...(isWorkflowProtocol(channel.protocol || "") ? {
             uploadApiKey: channel.uploadApiKey || "",

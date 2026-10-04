@@ -39,6 +39,9 @@ func normalizeAPIMartImageBody(body []byte, contentType string, modelName string
 
 func normalizeAPIMartImageParams(payload map[string]any, modelName string, channel model.ModelChannel) {
 	config := apimartImageConfig(modelName)
+	if capability, ok := service.ResolveImageOutputCapability(channel, modelName); ok {
+		config.hasOutput = len(capability.Formats) > 0
+	}
 	if config.aspectField == "" {
 		config.aspectField = "size"
 	}

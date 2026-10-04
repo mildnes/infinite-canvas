@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "rules": [
+    {
+      "id": "kie-image-jpeg",
+      "channel": {
+        "protocols": ["kie"],
+        "baseUrlContains": ["kie.ai"],
+        "combine": "any"
+      },
+      "model": {
+        "kind": "regex",
+        "value": "^(kie-)?(nano-banana-2|nano-banana-pro|google-nano-banana|google-nano-banana-edit|qwen-text-to-image|qwen-image-edit|qwen-image-to-image|qwen2-image-edit|qwen2-text-to-image)$"
+      },
+      "formats": ["jpeg"],
+      "defaultFormat": "jpeg"
+    },
+    {
+      "id": "apimart-gpt-image-official-transparent",
+      "channel": { "protocols": ["apimart"] },
+      "model": {
+        "kind": "regex",
+        "value": "^gpt-image-\\d+(-\\d+)?-official$"
+      },
+      "formats": ["png-transparent", "jpeg"],
+      "defaultFormat": "png-transparent"
+    },
+    {
+      "id": "apimart-gpt-image-flare-sunburst-transparent",
+      "channel": { "protocols": ["apimart"] },
+      "model": {
+        "kind": "regex",
+        "value": "^gpt-image-\\d+(-\\d+)?-(flare|sunburst)$"
+      },
+      "formats": ["png-transparent", "jpeg"],
+      "defaultFormat": "png-transparent"
+    },
+    {
+      "id": "apimart-gpt-image-1-jpeg",
+      "channel": { "protocols": ["apimart"] },
+      "model": { "kind": "exact", "value": "gpt-image-1" },
+      "formats": ["jpeg"],
+      "defaultFormat": "jpeg"
+    },
+    {
+      "id": "apimart-seedream-5-jpeg",
+      "channel": { "protocols": ["apimart"] },
+      "model": { "kind": "regex", "value": "^.*seedream-5.*$" },
+      "excludeModelRegex": "^.*seedream-5-0-pro.*$",
+      "formats": ["jpeg"],
+      "defaultFormat": "jpeg"
+    },
+    {
+      "id": "openai-gpt-image-transparent",
+      "channel": { "protocols": ["openai"] },
+      "excludeChannelContains": ["x.ai", "grok2api"],
+      "model": {
+        "kind": "regex",
+        "value": "^gpt-image-\\d+(-\\d+)?(-(mini|flare|sunburst))?$",
+        "snapshotSuffix": true
+      },
+      "formats": ["png-transparent", "jpeg"],
+      "defaultFormat": "png-transparent"
+    },
+    {
+      "id": "openai-gpt-flare-sunburst-transparent",
+      "channel": { "protocols": ["openai"] },
+      "excludeChannelContains": ["x.ai", "grok2api"],
+      "model": {
+        "kind": "regex",
+        "value": "^gpt-\\d+(-\\d+)?-(flare|sunburst)(-\\d+k)?$"
+      },
+      "formats": ["png-transparent", "jpeg"],
+      "defaultFormat": "png-transparent"
+    }
+  ]
+}

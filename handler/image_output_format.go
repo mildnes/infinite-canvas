@@ -14,8 +14,9 @@ import (
 )
 
 type imageOutputFormatResult struct {
-	Format string
-	Notice string
+	Format     string
+	Notice     string
+	NoticeCode string
 }
 
 func normalizeImageOutputFormatRequest(body []byte, contentType string, channel model.ModelChannel, modelName string, endpoint string) ([]byte, string, imageOutputFormatResult, error) {
@@ -25,6 +26,9 @@ func normalizeImageOutputFormatRequest(body []byte, contentType string, channel 
 	}
 
 	capability, supported := service.ResolveImageOutputCapability(channel, modelName)
+	if isGrok2APIMediaAdapterChannel(channel, modelName) {
+		supported = false
+	}
 	if imageEndpoint && strings.HasPrefix(strings.ToLower(contentType), "multipart/form-data") {
 		return normalizeMultipartImageOutputFormat(body, contentType, capability, supported, channel)
 	}
@@ -38,6 +42,9 @@ func normalizeImageOutputFormatRequest(body []byte, contentType string, channel 
 		return body, contentType, imageOutputFormatResult{}, nil
 	}
 	var result imageOutputFormatResult
+	if !supported {
+		result = undeclaredImageOutputFormat()
+	}
 	changed := false
 	for _, target := range targets {
 		requested, hasSelection := readRequestedImageOutputFormat(toStringSafe(target["output_format"]), toStringSafe(target["background"]))
@@ -49,7 +56,7 @@ func normalizeImageOutputFormatRequest(body []byte, contentType string, channel 
 		changed = true
 	}
 	if !changed {
-		return body, contentType, imageOutputFormatResult{}, nil
+		return body, contentType, result, nil
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
@@ -74,9 +81,9 @@ func imageOutputFormatTargets(payload map[string]any, endpoint string) []map[str
 		if _, hasSelection := readRequestedImageOutputFormat(toStringSafe(payload["output_format"]), toStringSafe(payload["background"])); hasSelection {
 			targets = append(targets, payload)
 		} else if imageConfig, ok := payload["image_config"].(map[string]any); ok {
-			if _, hasSelection := readRequestedImageOutputFormat(toStringSafe(imageConfig["output_format"]), toStringSafe(imageConfig["background"])); hasSelection {
-				targets = append(targets, imageConfig)
-			}
+			targets = append(targets, imageConfig)
+		} else {
+			targets = append(targets, payload)
 		}
 	}
 	return targets
@@ -136,6 +143,9 @@ func normalizeMultipartImageOutputFormat(body []byte, contentType string, capabi
 	}
 	requested, hasSelection := readRequestedImageOutputFormat(formatValue, backgroundValue)
 	if !hasSelection {
+		if !supported {
+			return body, contentType, undeclaredImageOutputFormat(), nil
+		}
 		return body, contentType, imageOutputFormatResult{}, nil
 	}
 	result := resolveImageOutputFormat(requested, capability, supported)
@@ -201,7 +211,7 @@ func readRequestedImageOutputFormat(format string, background string) (model.Ima
 
 func resolveImageOutputFormat(requested model.ImageOutputFormat, capability model.ImageOutputCapability, supported bool) imageOutputFormatResult {
 	if !supported {
-		return imageOutputFormatResult{Format: "auto", Notice: "当前渠道未声明该输出格式能力，已使用渠道默认格式。"}
+		return undeclaredImageOutputFormat()
 	}
 	for _, format := range capability.Formats {
 		if format == requested {
@@ -209,13 +219,22 @@ func resolveImageOutputFormat(requested model.ImageOutputFormat, capability mode
 		}
 	}
 	defaultFormat := capability.DefaultFormat
-	if defaultFormat != model.ImageOutputFormatPNGTransparent && defaultFormat != model.ImageOutputFormatJPEG {
-		return imageOutputFormatResult{Format: "auto", Notice: "当前模型不支持所选输出格式，已使用渠道默认格式。"}
+	validDefault := false
+	for _, format := range capability.Formats {
+		validDefault = validDefault || format == defaultFormat
+	}
+	if !validDefault {
+		return imageOutputFormatResult{Format: "auto", Notice: "当前模型不支持所选输出格式，已使用渠道默认格式。", NoticeCode: "fallback-default"}
 	}
 	return imageOutputFormatResult{
-		Format: string(defaultFormat),
-		Notice: "当前模型不支持所选输出格式，已切换到该渠道默认格式。",
+		Format:     string(defaultFormat),
+		Notice:     "当前模型不支持所选输出格式，已切换到该渠道默认格式。",
+		NoticeCode: "fallback-default",
 	}
+}
+
+func undeclaredImageOutputFormat() imageOutputFormatResult {
+	return imageOutputFormatResult{Format: "auto", Notice: "该模型未声明输出格式能力，保持自动输出。", NoticeCode: "undeclared"}
 }
 
 func applyImageOutputFormat(payload map[string]any, format string, channel model.ModelChannel) {

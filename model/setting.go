@@ -23,6 +23,7 @@ type ModelChannel struct {
 	APIKey                   string                            `json:"apiKey"`
 	Models                   []string                          `json:"models"`
 	ModelCapabilities        map[string][]ModelCapability      `json:"modelCapabilities,omitempty"`
+	ImageOutputCapabilities  map[string]ImageOutputCapability  `json:"imageOutputCapabilities,omitempty"`
 	ImageQualityCapabilities map[string]ImageQualityCapability `json:"imageQualityCapabilities,omitempty"`
 	Weight                   int                               `json:"weight"`
 	Timeout                  int                               `json:"timeout"`
@@ -111,7 +112,7 @@ const (
 
 type ImageOutputCapability struct {
 	Formats       []ImageOutputFormat `json:"formats"`
-	DefaultFormat ImageOutputFormat   `json:"defaultFormat"`
+	DefaultFormat ImageOutputFormat   `json:"defaultFormat,omitempty"`
 }
 
 type ImageQualityCapability struct {

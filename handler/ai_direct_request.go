@@ -25,17 +25,23 @@ type directAIRequestInput struct {
 type directAIChannelInput struct {
 	Protocol                 string                                  `json:"protocol"`
 	BaseURL                  string                                  `json:"baseUrl"`
+	Name                     string                                  `json:"name,omitempty"`
+	Models                   []string                                `json:"models,omitempty"`
+	ImageOutputCapabilities  map[string]model.ImageOutputCapability  `json:"imageOutputCapabilities,omitempty"`
 	ImageQualityCapabilities map[string]model.ImageQualityCapability `json:"imageQualityCapabilities,omitempty"`
 }
 
 type directAIRequestPlan struct {
-	Provider           string                    `json:"provider"`
-	URL                string                    `json:"url"`
-	ContentType        string                    `json:"contentType"`
-	Body               any                       `json:"body"`
-	Uploads            map[string]directAIUpload `json:"uploads,omitempty"`
-	ImageQuality       string                    `json:"imageQuality,omitempty"`
-	ImageQualityNotice string                    `json:"imageQualityNotice,omitempty"`
+	Provider              string                    `json:"provider"`
+	URL                   string                    `json:"url"`
+	ContentType           string                    `json:"contentType"`
+	Body                  any                       `json:"body"`
+	Uploads               map[string]directAIUpload `json:"uploads,omitempty"`
+	ImageQuality          string                    `json:"imageQuality,omitempty"`
+	ImageQualityNotice    string                    `json:"imageQualityNotice,omitempty"`
+	ImageOutputFormat     string                    `json:"imageOutputFormat,omitempty"`
+	ImageOutputNotice     string                    `json:"imageOutputNotice,omitempty"`
+	ImageOutputNoticeCode string                    `json:"imageOutputNoticeCode,omitempty"`
 }
 
 type directAIUpload struct {
@@ -87,6 +93,9 @@ func prepareDirectAIRequest(input directAIRequestInput) (directAIRequestPlan, er
 	channel := model.ModelChannel{
 		Protocol:                 input.Channel.Protocol,
 		BaseURL:                  input.Channel.BaseURL,
+		Name:                     input.Channel.Name,
+		Models:                   input.Channel.Models,
+		ImageOutputCapabilities:  input.Channel.ImageOutputCapabilities,
 		ImageQualityCapabilities: input.Channel.ImageQualityCapabilities,
 	}
 	body, err := json.Marshal(input.Body)
@@ -95,7 +104,7 @@ func prepareDirectAIRequest(input directAIRequestInput) (directAIRequestPlan, er
 	}
 
 	contentType := "application/json"
-	body, contentType, _, err = normalizeImageOutputFormatRequest(body, contentType, channel, input.Model, input.Endpoint)
+	body, contentType, imageOutput, err := normalizeImageOutputFormatRequest(body, contentType, channel, input.Model, input.Endpoint)
 	if err != nil {
 		return directAIRequestPlan{}, errors.New("图片输出格式参数无效")
 	}
@@ -128,13 +137,16 @@ func prepareDirectAIRequest(input directAIRequestInput) (directAIRequestPlan, er
 	}
 
 	return directAIRequestPlan{
-		Provider:           provider,
-		URL:                service.BuildModelChannelURL(channel, upstreamPath),
-		ContentType:        contentType,
-		Body:               translated,
-		Uploads:            uploads,
-		ImageQuality:       imageQuality.Quality,
-		ImageQualityNotice: imageQuality.Notice,
+		Provider:              provider,
+		URL:                   service.BuildModelChannelURL(channel, upstreamPath),
+		ContentType:           contentType,
+		Body:                  translated,
+		Uploads:               uploads,
+		ImageQuality:          imageQuality.Quality,
+		ImageQualityNotice:    imageQuality.Notice,
+		ImageOutputFormat:     imageOutput.Format,
+		ImageOutputNotice:     imageOutput.Notice,
+		ImageOutputNoticeCode: imageOutput.NoticeCode,
 	}, nil
 }
 

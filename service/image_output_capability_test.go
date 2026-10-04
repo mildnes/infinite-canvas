@@ -46,6 +46,56 @@ func TestResolveImageOutputCapability(t *testing.T) {
 			ok: true,
 		},
 		{
+			name:      "OpenAI GPT Image future numbered family",
+			channel:   model.ModelChannel{Protocol: ModelChannelProtocolOpenAI},
+			modelName: "gpt-image-9",
+			want: model.ImageOutputCapability{
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				DefaultFormat: model.ImageOutputFormatPNGTransparent,
+			},
+			ok: true,
+		},
+		{
+			name:      "OpenAI numeric sunburst size alias",
+			channel:   model.ModelChannel{Protocol: ModelChannelProtocolOpenAI},
+			modelName: "gpt-2.5-sunburst-2k",
+			want: model.ImageOutputCapability{
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				DefaultFormat: model.ImageOutputFormatPNGTransparent,
+			},
+			ok: true,
+		},
+		{
+			name:      "OpenAI numeric sunburst 4k alias",
+			channel:   model.ModelChannel{Protocol: ModelChannelProtocolOpenAI},
+			modelName: "gpt-2.5-sunburst-4k",
+			want: model.ImageOutputCapability{
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				DefaultFormat: model.ImageOutputFormatPNGTransparent,
+			},
+			ok: true,
+		},
+		{
+			name:      "OpenAI numeric flare size alias",
+			channel:   model.ModelChannel{Protocol: ModelChannelProtocolOpenAI},
+			modelName: "gpt-2.5-flare-2k",
+			want: model.ImageOutputCapability{
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				DefaultFormat: model.ImageOutputFormatPNGTransparent,
+			},
+			ok: true,
+		},
+		{
+			name:      "OpenAI GPT Image 2.5 sunburst family",
+			channel:   model.ModelChannel{Protocol: ModelChannelProtocolOpenAI},
+			modelName: "gpt-image-2.5-sunburst",
+			want: model.ImageOutputCapability{
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				DefaultFormat: model.ImageOutputFormatPNGTransparent,
+			},
+			ok: true,
+		},
+		{
 			name:      "OpenAI unknown lookalike is excluded",
 			channel:   model.ModelChannel{Protocol: ModelChannelProtocolOpenAI},
 			modelName: "other-gpt-image-2",
@@ -54,6 +104,21 @@ func TestResolveImageOutputCapability(t *testing.T) {
 			name:      "OpenAI unknown suffix is excluded",
 			channel:   model.ModelChannel{Protocol: ModelChannelProtocolOpenAI},
 			modelName: "gpt-image-2.5-unknown",
+		},
+		{
+			name:      "OpenAI unofficial suffix is excluded",
+			channel:   model.ModelChannel{Protocol: ModelChannelProtocolOpenAI},
+			modelName: "gpt-image-2-unofficial",
+		},
+		{
+			name:      "OpenAI preview suffix is excluded",
+			channel:   model.ModelChannel{Protocol: ModelChannelProtocolOpenAI},
+			modelName: "gpt-image-2-preview",
+		},
+		{
+			name:      "OpenAI invalid date snapshot is excluded",
+			channel:   model.ModelChannel{Protocol: ModelChannelProtocolOpenAI},
+			modelName: "gpt-image-2-2026-02-30",
 		},
 		{
 			name:      "APIMart GPT Image 1 legacy JPEG",
@@ -66,6 +131,16 @@ func TestResolveImageOutputCapability(t *testing.T) {
 			name:      "APIMart GPT Image official transparent PNG",
 			channel:   model.ModelChannel{Protocol: ModelChannelProtocolAPIMart},
 			modelName: "gpt-image-2-official",
+			want: model.ImageOutputCapability{
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				DefaultFormat: model.ImageOutputFormatPNGTransparent,
+			},
+			ok: true,
+		},
+		{
+			name:      "APIMart official numeric family",
+			channel:   model.ModelChannel{Protocol: ModelChannelProtocolAPIMart},
+			modelName: "gpt-image-9-official",
 			want: model.ImageOutputCapability{
 				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
 				DefaultFormat: model.ImageOutputFormatPNGTransparent,
@@ -177,6 +252,11 @@ func TestResolveImageOutputCapability(t *testing.T) {
 			modelName: "gpt-image-1",
 		},
 		{
+			name:      "OpenAI compatible Grok channel name is excluded",
+			channel:   model.ModelChannel{Protocol: ModelChannelProtocolOpenAI, Name: "grok2api channel"},
+			modelName: "gpt-image-1",
+		},
+		{
 			name:      "unsupported protocol stays automatic",
 			channel:   model.ModelChannel{Protocol: ModelChannelProtocolGemini},
 			modelName: "gemini-3-pro-image-preview",
@@ -193,6 +273,79 @@ func TestResolveImageOutputCapability(t *testing.T) {
 				t.Fatalf("capability = %#v, want %#v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestResolveDeclaredImageOutputCapabilityPrecedesRules(t *testing.T) {
+	channel := model.ModelChannel{
+		Protocol: ModelChannelProtocolOpenAI,
+		Models:   []string{"gpt-image-2", "gpt-4.1"},
+		ImageOutputCapabilities: map[string]model.ImageOutputCapability{
+			"gpt-image-2": {
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatJPEG, model.ImageOutputFormatJPEG, "webp"},
+				DefaultFormat: model.ImageOutputFormatPNGTransparent,
+			},
+			"gpt-4.1": {Formats: []model.ImageOutputFormat{}},
+		},
+	}
+
+	got, ok := ResolveImageOutputCapability(channel, "gpt-image-2")
+	want := model.ImageOutputCapability{Formats: []model.ImageOutputFormat{model.ImageOutputFormatJPEG}}
+	if !ok || !reflect.DeepEqual(got, want) {
+		t.Fatalf("declared capability = %#v, %v; want %#v, true", got, ok, want)
+	}
+	got, ok = ResolveImageOutputCapability(channel, "gpt-4.1")
+	if !ok || !reflect.DeepEqual(got, model.ImageOutputCapability{Formats: []model.ImageOutputFormat{}}) {
+		t.Fatalf("explicit empty capability = %#v, %v; want supported empty formats", got, ok)
+	}
+	if _, ok := ResolveDeclaredImageOutputCapability(channel, "unknown-model"); ok {
+		t.Fatal("undeclared model unexpectedly has a declared capability")
+	}
+	if _, ok := ResolveImageOutputCapability(model.ModelChannel{Protocol: ModelChannelProtocolOpenAI}, "unknown-model"); ok {
+		t.Fatal("unknown model unexpectedly matched a fallback rule")
+	}
+	withoutCatalog := model.ModelChannel{
+		Protocol: ModelChannelProtocolOpenAI,
+		ImageOutputCapabilities: map[string]model.ImageOutputCapability{
+			"gpt-image-2": {Formats: []model.ImageOutputFormat{}},
+		},
+	}
+	if capability, ok := ResolveImageOutputCapability(withoutCatalog, "gpt-image-2"); !ok || capability.Formats == nil || len(capability.Formats) != 0 {
+		t.Fatalf("declaration without a model catalog = %#v, %v; want explicit empty support", capability, ok)
+	}
+}
+
+func TestNormalizeImageOutputCapabilitiesKeepsEmptyAndFiltersModels(t *testing.T) {
+	got := normalizeImageOutputCapabilities(map[string]model.ImageOutputCapability{
+		" gpt-image-2 ": {
+			Formats:       []model.ImageOutputFormat{" PNG-TRANSPARENT ", model.ImageOutputFormatPNGTransparent, "webp", model.ImageOutputFormatJPEG},
+			DefaultFormat: "webp",
+		},
+		"gpt-4.1":     {Formats: []model.ImageOutputFormat{}},
+		"other-model": {Formats: []model.ImageOutputFormat{model.ImageOutputFormatJPEG}},
+	}, []string{"gpt-image-2", "gpt-4.1"})
+	want := map[string]model.ImageOutputCapability{
+		"gpt-image-2": {
+			Formats: []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+		},
+		"gpt-4.1": {Formats: []model.ImageOutputFormat{}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("normalized output declarations = %#v, want %#v", got, want)
+	}
+
+	saved := normalizePrivateSetting(model.PrivateSetting{Channels: []model.ModelChannel{{
+		Models: []string{"gpt-image-2"},
+		ImageOutputCapabilities: map[string]model.ImageOutputCapability{
+			"gpt-image-2": {Formats: []model.ImageOutputFormat{}},
+			"other-model": {Formats: []model.ImageOutputFormat{model.ImageOutputFormatJPEG}},
+		},
+	}}})
+	if len(saved.Channels[0].ImageOutputCapabilities) != 1 {
+		t.Fatalf("saved declarations = %#v, want only current channel models", saved.Channels[0].ImageOutputCapabilities)
+	}
+	if capability := saved.Channels[0].ImageOutputCapabilities["gpt-image-2"]; capability.Formats == nil || len(capability.Formats) != 0 {
+		t.Fatalf("saved empty declaration = %#v, want non-nil empty formats", capability)
 	}
 }
 
@@ -229,5 +382,43 @@ func TestPublicChannelInfosIncludesModelOutputCapabilities(t *testing.T) {
 	}
 	if capability, ok := got[1].ImageOutputCapabilities["gpt-image-2.5-flare"]; !ok || capability.DefaultFormat != model.ImageOutputFormatPNGTransparent {
 		t.Fatalf("APIMart output capability = %#v, want transparent PNG default", got[1].ImageOutputCapabilities)
+	}
+}
+
+func TestPublicChannelInfosPrefersAndIsolatesDeclaredOutputCapabilities(t *testing.T) {
+	got := publicChannelInfos([]model.ModelChannel{
+		{
+			ID:       "declared-channel",
+			Protocol: ModelChannelProtocolOpenAI,
+			BaseURL:  "https://api.example.com/v1",
+			APIKey:   "secret",
+			Models:   []string{"gpt-image-2"},
+			ImageOutputCapabilities: map[string]model.ImageOutputCapability{
+				"gpt-image-2":    {Formats: []model.ImageOutputFormat{}},
+				"not-in-channel": {Formats: []model.ImageOutputFormat{model.ImageOutputFormatJPEG}},
+			},
+			Enabled: true,
+		},
+		{
+			ID:       "heuristic-channel",
+			Protocol: ModelChannelProtocolOpenAI,
+			BaseURL:  "https://api.example.com/v1",
+			APIKey:   "secret",
+			Models:   []string{"gpt-image-2"},
+			Enabled:  true,
+		},
+	})
+	if len(got) != 2 {
+		t.Fatalf("channels = %d, want 2", len(got))
+	}
+	declared := got[0].ImageOutputCapabilities["gpt-image-2"]
+	if declared.Formats == nil || len(declared.Formats) != 0 || declared.DefaultFormat != "" {
+		t.Fatalf("published empty declaration = %#v, want explicit empty formats", declared)
+	}
+	if _, ok := got[0].ImageOutputCapabilities["not-in-channel"]; ok {
+		t.Fatal("public channel contains a declaration for a model it does not own")
+	}
+	if heuristic := got[1].ImageOutputCapabilities["gpt-image-2"]; !reflect.DeepEqual(heuristic.Formats, []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG}) {
+		t.Fatalf("other channel's inferred capability = %#v, want its own shared rule", heuristic)
 	}
 }

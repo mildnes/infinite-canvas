@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/google/uuid"
@@ -139,6 +140,18 @@ func CanvasImageTaskResponse(task model.CanvasImageTask) map[string]any {
 		"completed_at":   task.CompletedAt,
 		"createdAt":      task.CreatedAt,
 		"updatedAt":      task.UpdatedAt,
+	}
+	var requestMetadata map[string]any
+	if json.Unmarshal([]byte(task.RequestBody), &requestMetadata) == nil {
+		if format, ok := requestMetadata["_image_output_format"].(string); ok {
+			result["imageOutputFormat"] = format
+		}
+		if notice, ok := requestMetadata["_image_output_notice"].(string); ok {
+			result["imageOutputNotice"] = notice
+		}
+		if code, ok := requestMetadata["_image_output_notice_code"].(string); ok {
+			result["imageOutputNoticeCode"] = code
+		}
 	}
 	if task.ImageURL != "" {
 		result["url"] = task.ImageURL

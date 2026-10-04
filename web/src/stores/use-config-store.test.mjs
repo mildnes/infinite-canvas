@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { channelIdForActiveModel, filterChannelModelsByCapability, modelMatchesCapability } from "./use-config-store.ts";
+import { channelIdForActiveModel, filterChannelModelsByCapability, modelMatchesCapability, normalizeLocalChannels } from "./use-config-store.ts";
+
+test("本地渠道规范化和恢复保留输出声明与显式空格式，按渠道隔离", () => {
+    const channels = [
+        { id: "allowed", models: ["custom-renderer"], imageOutputCapabilities: { "custom-renderer": { formats: ["png-transparent"], defaultFormat: "png-transparent" } } },
+        { id: "disabled", models: ["custom-renderer"], imageOutputCapabilities: { "custom-renderer": { formats: [] } } },
+        { id: "legacy", models: ["custom-renderer"] },
+    ];
+    const restored = normalizeLocalChannels(JSON.parse(JSON.stringify({ localChannels: channels })));
+    for (let i = 0; i < channels.length; i++) assert.deepEqual(restored[i].imageOutputCapabilities, channels[i].imageOutputCapabilities);
+});
 
 test("声明的模型能力优先于模型名称识别", () => {
     const capabilities = { "acme-renderer-v7": ["image"] };

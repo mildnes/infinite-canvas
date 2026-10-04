@@ -202,6 +202,7 @@ export type AdminModelChannel = {
     apiKey: string;
     models: string[];
     modelCapabilities?: ModelCapabilities;
+    imageOutputCapabilities?: ImageOutputCapabilities;
     imageQualityCapabilities?: ImageQualityCapabilities;
     weight: number;
     timeout: number;

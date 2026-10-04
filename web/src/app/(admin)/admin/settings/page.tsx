@@ -10,6 +10,7 @@ import { EditorView } from "@uiw/react-codemirror";
 import { ChannelModelSelectorModal } from "@/components/channel-model-selector-modal";
 import type { WorkflowChannelSettings } from "@/components/workflow/workflow-channel-pane";
 import { IMAGE_QUALITY_OPTIONS, type ImageQualityCapability } from "@/lib/image-quality";
+import { imageOutputFormatOptions, type ImageOutputCapability } from "@/lib/image-output-format";
 import { isWorkflowProtocol, modelChannelApiKeyUrls, modelChannelDefaultBaseUrls, modelChannelProtocolOptions } from "@/lib/model-channel";
 import type { ModelCapability } from "@/lib/model-capability";
 import { fetchAdminSettings, fetchChannelModels, fetchMCPServerTools, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminMCPServer, type AdminMCPTool, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider } from "@/services/api/admin";
@@ -18,6 +19,7 @@ import { clearStorageConfigCache as clearImageStorageConfigCache } from "@/servi
 import { modelMatchesCapability, notifyPublicSettingsUpdated } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { normalizeImageQualityCapabilities } from "./image-quality-capabilities";
+import { normalizeImageOutputCapabilities } from "./image-output-capabilities";
 
 const CodeMirror = dynamic(() => import("@uiw/react-codemirror"), { ssr: false });
 const WorkflowChannelPane = dynamic(() => import("@/components/workflow/workflow-channel-pane").then((module) => module.WorkflowChannelPane), { ssr: false });
@@ -104,6 +106,7 @@ export default function AdminSettingsPage() {
     const selectedChannelModels = Form.useWatch("models", channelForm) || [];
     const channelModelCapabilities = Form.useWatch("modelCapabilities", { form: channelForm, preserve: true }) || {};
     const channelImageQualityCapabilities = Form.useWatch("imageQualityCapabilities", { form: channelForm, preserve: true }) || {};
+    const channelImageOutputCapabilities = Form.useWatch("imageOutputCapabilities", { form: channelForm, preserve: true }) || {};
     const defaultImageModel = Form.useWatch(["public", "modelChannel", "defaultImageModel"], form) || "";
     const channelApiKeyUrl = channelProtocol ? modelChannelApiKeyUrls[channelProtocol] : undefined;
     const modelLabel = (model: string, _channel?: unknown) => model;
@@ -291,6 +294,13 @@ export default function AdminSettingsPage() {
         if (capability === undefined) delete next[model];
         else next[model] = capability;
         channelForm.setFieldValue("imageQualityCapabilities", normalizeImageQualityCapabilities(next, selectedChannelModels));
+    };
+
+    const updateChannelImageOutputCapability = (model: string, capability?: ImageOutputCapability) => {
+        const next = { ...(channelForm.getFieldValue("imageOutputCapabilities") || {}) };
+        if (capability === undefined) delete next[model];
+        else next[model] = capability;
+        channelForm.setFieldValue("imageOutputCapabilities", normalizeImageOutputCapabilities(next, selectedChannelModels));
     };
 
     function rememberModels(models: string[]) {
@@ -1211,6 +1221,47 @@ export default function AdminSettingsPage() {
                                     </Form.Item>
                                 </Col>
                             ) : null}
+                            {selectedChannelModels.length ? (
+                                <Col span={24}>
+                                    <Form.Item label="图片输出格式声明（可选）" extra="未声明时保持自动透传；启用后仅发送所选格式，默认格式必须属于允许格式。留空表示明确不支持格式。">
+                                        <Collapse size="small" items={selectedChannelModels.map((model: string) => {
+                                            const capability: ImageOutputCapability | undefined = channelImageOutputCapabilities[model];
+                                            const options = imageOutputFormatOptions.map(({ value, label }) => ({ value, label }));
+                                            return {
+                                                key: model,
+                                                label: model,
+                                                extra: <Tag>{capability ? (capability.formats.length ? "已声明" : "明确不支持") : "未声明"}</Tag>,
+                                                children: (
+                                                    <Flex vertical gap={10}>
+                                                        <Flex align="center" gap={8}>
+                                                            <Switch aria-label={`${model} 启用输出格式声明`} checked={Boolean(capability)} onChange={(enabled) => updateChannelImageOutputCapability(model, enabled ? { formats: [] } : undefined)} />
+                                                            <Typography.Text>启用输出格式声明</Typography.Text>
+                                                        </Flex>
+                                                        {capability ? <>
+                                                            <Typography.Text>上游允许的图片格式</Typography.Text>
+                                                            <Checkbox.Group
+                                                                aria-label={`${model} 上游图片格式`}
+                                                                options={options}
+                                                                value={capability.formats}
+                                                                onChange={(formats) => updateChannelImageOutputCapability(model, { ...capability, formats: formats as ImageOutputCapability["formats"] })}
+                                                            />
+                                                            <Typography.Text>默认格式</Typography.Text>
+                                                            <Select
+                                                                aria-label={`${model} 图片默认格式`}
+                                                                allowClear
+                                                                placeholder="未设置时保持自动透传"
+                                                                options={options.filter(({ value }) => capability.formats.includes(value))}
+                                                                value={capability.defaultFormat}
+                                                                onChange={(defaultFormat) => updateChannelImageOutputCapability(model, { ...capability, defaultFormat })}
+                                                            />
+                                                        </> : null}
+                                                    </Flex>
+                                                ),
+                                            };
+                                        })} />
+                                    </Form.Item>
+                                </Col>
+                            ) : null}
                             </> : <Col span={24} className="mb-3">
                                 <WorkflowChannelPane
                                     key={`${editingChannelIndex ?? "new"}:${workflowChannelDraft.id}:${workflowChannelDraft.protocol}`}
@@ -1497,6 +1548,7 @@ function normalizeChannel(item: Partial<AdminModelChannel> = {}): AdminModelChan
         apiKey: item.apiKey || "",
         models,
         modelCapabilities: normalizeModelCapabilities(item.modelCapabilities, models),
+        imageOutputCapabilities: normalizeImageOutputCapabilities(item.imageOutputCapabilities, models),
         imageQualityCapabilities: normalizeImageQualityCapabilities(item.imageQualityCapabilities, models),
         uploadApiKey: item.uploadApiKey || "",
         bridgeId: item.bridgeId || "",

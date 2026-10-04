@@ -199,19 +199,20 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		}
 	}
 	copyAIResponse(w, request, channel, aiLogContext{
-		StartedAt:          startedAt,
-		Endpoint:           path,
-		Method:             http.MethodPost,
-		Model:              modelName,
-		Channel:            channel,
-		UserID:             user.ID,
-		UserDisplayName:    firstNonEmpty(user.DisplayName, user.Username),
-		Credits:            credits,
-		RequestBody:        summarizeAIRequest(body, contentType),
-		ImageOutputFormat:  imageOutputFormat.Format,
-		ImageOutputNotice:  imageOutputFormat.Notice,
-		ImageQuality:       imageQuality.Quality,
-		ImageQualityNotice: imageQuality.Notice,
+		StartedAt:             startedAt,
+		Endpoint:              path,
+		Method:                http.MethodPost,
+		Model:                 modelName,
+		Channel:               channel,
+		UserID:                user.ID,
+		UserDisplayName:       firstNonEmpty(user.DisplayName, user.Username),
+		Credits:               credits,
+		RequestBody:           summarizeAIRequest(body, contentType),
+		ImageOutputFormat:     imageOutputFormat.Format,
+		ImageOutputNotice:     imageOutputFormat.Notice,
+		ImageOutputNoticeCode: imageOutputFormat.NoticeCode,
+		ImageQuality:          imageQuality.Quality,
+		ImageQualityNotice:    imageQuality.Notice,
 	}, func() {
 		if credits > 0 {
 			if err := service.RefundUserCredits(user.ID, channel.ID, modelName, credits, upstreamPath); err != nil {
@@ -229,22 +230,28 @@ func geminiStreamRequested(body []byte) bool {
 }
 
 type aiLogContext struct {
-	StartedAt          time.Time
-	Endpoint           string
-	Method             string
-	Model              string
-	Channel            model.ModelChannel
-	UserID             string
-	UserDisplayName    string
-	Credits            int
-	RequestBody        string
-	ImageOutputFormat  string
-	ImageOutputNotice  string
-	ImageQuality       string
-	ImageQualityNotice string
+	StartedAt             time.Time
+	Endpoint              string
+	Method                string
+	Model                 string
+	Channel               model.ModelChannel
+	UserID                string
+	UserDisplayName       string
+	Credits               int
+	RequestBody           string
+	ImageOutputFormat     string
+	ImageOutputNotice     string
+	ImageOutputNoticeCode string
+	SkipLog               bool
+	ImageQuality          string
+	ImageQualityNotice    string
 }
 
 func copyAIResponse(w http.ResponseWriter, request *http.Request, channel model.ModelChannel, logContext aiLogContext, onFailure func()) {
+	if logContext.ImageOutputFormat == string(model.ImageOutputFormatPNGTransparent) && request.Context().Value(imageOutputValidationSkipped{}) != true {
+		copyValidatedImageResponse(w, request, channel, logContext, onFailure)
+		return
+	}
 	response, err := service.HTTPClientForChannel(channel).Do(request)
 	if err != nil {
 		log.Printf("AI proxy request failed: url=%s err=%v", request.URL.String(), err)
@@ -271,7 +278,7 @@ func copyAIResponse(w http.ResponseWriter, request *http.Request, channel model.
 		w.Header().Set("X-Image-Output-Format", logContext.ImageOutputFormat)
 	}
 	if logContext.ImageOutputNotice != "" {
-		w.Header().Set("X-Image-Output-Notice", "fallback-default")
+		w.Header().Set("X-Image-Output-Notice", firstNonEmpty(logContext.ImageOutputNoticeCode, "fallback-default"))
 	}
 	if logContext.ImageQuality != "" {
 		w.Header().Set("X-Image-Quality", logContext.ImageQuality)
@@ -321,10 +328,13 @@ func copyAIResponseBody(w http.ResponseWriter, body io.Reader) string {
 }
 
 func saveAIProxyLog(context aiLogContext, status int, responseBody string, errorMessage string) {
+	if context.SkipLog {
+		return
+	}
 	if context.StartedAt.IsZero() {
 		context.StartedAt = time.Now()
 	}
-	context.RequestBody = appendImageOutputLogMetadata(context.RequestBody, context.ImageOutputFormat, context.ImageOutputNotice)
+	context.RequestBody = appendImageOutputLogMetadata(context.RequestBody, context.ImageOutputFormat, context.ImageOutputNotice, context.ImageOutputNoticeCode)
 	context.RequestBody = appendImageQualityLogMetadata(context.RequestBody, context.ImageQuality, context.ImageQualityNotice)
 	if service.IsGeminiChannel(context.Channel) {
 		if context.Endpoint == "/images/generations" || context.Endpoint == "/images/edits" || context.Endpoint == "/audio/speech" {
@@ -371,7 +381,7 @@ func appendImageQualityLogMetadata(requestBody string, quality string, notice st
 	return string(encoded)
 }
 
-func appendImageOutputLogMetadata(requestBody string, format string, notice string) string {
+func appendImageOutputLogMetadata(requestBody string, format string, notice string, codes ...string) string {
 	if format == "" {
 		return requestBody
 	}
@@ -382,6 +392,9 @@ func appendImageOutputLogMetadata(requestBody string, format string, notice stri
 	payload["_image_output_format"] = format
 	if notice != "" {
 		payload["_image_output_notice"] = notice
+	}
+	if len(codes) > 0 && codes[0] != "" {
+		payload["_image_output_notice_code"] = codes[0]
 	}
 	encoded, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {

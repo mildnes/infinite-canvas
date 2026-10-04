@@ -2,113 +2,41 @@ package service
 
 import (
 	"strings"
-	"time"
 
 	"github.com/tigerowo/infinite-canvas/model"
+	"github.com/tigerowo/infinite-canvas/shared"
 )
 
-// ResolveImageOutputCapability returns only formats with an explicit protocol
-// and model contract. Unknown channels keep their existing automatic behavior.
-func ResolveImageOutputCapability(channel model.ModelChannel, modelName string) (model.ImageOutputCapability, bool) {
-	modelName = strings.ToLower(strings.TrimSpace(modelName))
+// ResolveDeclaredImageOutputCapability returns a channel's explicit per-model
+// output contract, including declarations that explicitly allow no formats.
+func ResolveDeclaredImageOutputCapability(channel model.ModelChannel, modelName string) (model.ImageOutputCapability, bool) {
+	modelName = strings.TrimSpace(modelName)
 	if modelName == "" {
 		return model.ImageOutputCapability{}, false
 	}
 
-	protocol := strings.ToLower(strings.TrimSpace(channel.Protocol))
-	switch {
-	case isKIEAdminChannel(channel):
-		if supportsKIEJpegOutput(modelName) {
-			return imageOutputCapability(model.ImageOutputFormatJPEG), true
-		}
-	case protocol == ModelChannelProtocolAPIMart:
-		normalizedModel := normalizeImageOutputModelName(modelName)
-		switch {
-		case isAPIMartTransparentPNGOutputFormatModel(normalizedModel):
-			return imageOutputCapability(model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG), true
-		case isAPIMartOutputFormatModel(modelName):
-			return imageOutputCapability(model.ImageOutputFormatJPEG), true
-		case isAPIMartSeedreamOutputFormatModel(normalizedModel):
-			return imageOutputCapability(model.ImageOutputFormatJPEG), true
-		}
-	case protocol == ModelChannelProtocolOpenAI && !isGrok2APIProtocolChannel(channel):
-		if isOpenAIGPTImageModel(modelName) {
-			return imageOutputCapability(model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG), true
-		}
-	}
-	return model.ImageOutputCapability{}, false
+	capabilities := normalizeImageOutputCapabilities(channel.ImageOutputCapabilities)
+	capability, ok := capabilities[modelName]
+	return capability, ok
 }
 
-func imageOutputCapability(formats ...model.ImageOutputFormat) model.ImageOutputCapability {
-	defaultFormat := model.ImageOutputFormatJPEG
+// ResolveImageOutputCapability prefers a channel declaration and uses the
+// shared protocol rules only when that model has no declaration.
+func ResolveImageOutputCapability(channel model.ModelChannel, modelName string) (model.ImageOutputCapability, bool) {
+	if capability, ok := ResolveDeclaredImageOutputCapability(channel, modelName); ok {
+		return capability, true
+	}
+
+	formats, defaultFormat, ok := shared.MatchImageOutputCapabilityRule(channel.Protocol, channel.BaseURL, channel.Name, modelName)
+	if !ok {
+		return model.ImageOutputCapability{}, false
+	}
+
+	capability := model.ImageOutputCapability{DefaultFormat: model.ImageOutputFormat(defaultFormat)}
 	for _, format := range formats {
-		if format == model.ImageOutputFormatPNGTransparent {
-			defaultFormat = format
-			break
-		}
+		capability.Formats = append(capability.Formats, model.ImageOutputFormat(format))
 	}
-	return model.ImageOutputCapability{Formats: formats, DefaultFormat: defaultFormat}
-}
-
-func normalizeImageOutputModelName(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	value = strings.ReplaceAll(value, "_", "-")
-	value = strings.ReplaceAll(value, ".", "-")
-	value = strings.ReplaceAll(value, "/", "-")
-	return value
-}
-
-func isOpenAIGPTImageModel(value string) bool {
-	value = strings.ToLower(strings.TrimSpace(value))
-	for _, family := range []string{"gpt-image-1", "gpt-image-1-mini", "gpt-image-1.5", "gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"} {
-		if isImageModelFamilyOrSnapshot(value, family) {
-			return true
-		}
-	}
-	return false
-}
-
-func isAPIMartOutputFormatModel(modelName string) bool {
-	modelName = normalizeImageOutputModelName(modelName)
-	return modelName == "gpt-image-1"
-}
-
-func isAPIMartTransparentPNGOutputFormatModel(modelName string) bool {
-	switch normalizeImageOutputModelName(modelName) {
-	case "gpt-image-1-official", "gpt-image-1-5-official", "gpt-image-2-official",
-		"gpt-image-2-5-flare", "gpt-image-2-5-sunburst":
-		return true
-	default:
-		return false
-	}
-}
-
-func isAPIMartSeedreamOutputFormatModel(modelName string) bool {
-	return strings.Contains(modelName, "seedream-5") && !strings.Contains(modelName, "seedream-5-0-pro")
-}
-
-func isImageModelFamilyOrSnapshot(value string, family string) bool {
-	if value == family {
-		return true
-	}
-	suffix, ok := strings.CutPrefix(value, family+"-")
-	return ok && isDateSnapshot(suffix)
-}
-
-func isDateSnapshot(value string) bool {
-	if len(value) != len("2000-01-01") {
-		return false
-	}
-	_, err := time.Parse("2006-01-02", value)
-	return err == nil
-}
-
-func supportsKIEJpegOutput(modelName string) bool {
-	switch strings.TrimPrefix(modelName, "kie/") {
-	case "nano-banana-2", "nano-banana-pro", "google/nano-banana", "google/nano-banana-edit",
-		"qwen/text-to-image", "qwen/image-edit", "qwen/image-to-image", "qwen2/image-edit", "qwen2/text-to-image":
-		return true
-	default:
-		return false
-	}
+	modelName = strings.TrimSpace(modelName)
+	normalized := normalizeImageOutputCapabilities(map[string]model.ImageOutputCapability{modelName: capability}, []string{modelName})
+	return normalized[modelName], true
 }

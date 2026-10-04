@@ -16,6 +16,7 @@ RUN --mount=type=cache,target=/root/.bun/install/cache bun install --frozen-lock
 COPY VERSION /app/VERSION
 COPY CHANGELOG.md /app/CHANGELOG.md
 COPY web ./
+COPY shared /app/shared
 COPY canvas-agent/scripts /app/canvas-agent/scripts
 COPY --from=bridge-build /bridge/ /app/web/public/
 ENV CANVAS_PREBUILT_BRIDGE=1
@@ -34,6 +35,7 @@ COPY model ./model
 COPY repository ./repository
 COPY router ./router
 COPY service ./service
+COPY shared ./shared
 COPY main.go ./
 RUN go build -o /server . && go build -o /media-cloud ./cmd/media-cloud && go build -o /media-gc ./cmd/media-gc && go build -o /image-log-summaries ./cmd/image-log-summaries && go build -o /canvas-media-repair ./cmd/canvas-media-repair
 

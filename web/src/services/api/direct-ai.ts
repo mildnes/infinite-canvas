@@ -1,5 +1,8 @@
 import { apiPost } from "@/services/api/request";
+import { message } from "antd";
 import { readFileAsDataUrl } from "@/lib/image-utils";
+import { imageOutputNoticeText } from "@/lib/image-output-notice";
+import { useUserStore } from "@/stores/use-user-store";
 import { buildApiUrl, localChannelForActiveModel, type AiConfig, type DirectAIProvider } from "@/stores/use-config-store";
 import { directProtocolAdapters } from "./protocols/direct-registry";
 import { isPlainRecord, readPath, readString } from "./protocols/shared";
@@ -9,7 +12,7 @@ type DirectRequestBody = Record<string, unknown> | FormData;
 type DirectReferenceKind = "image" | "video" | "audio";
 type DirectReference = { marker: string; file: File; kind: DirectReferenceKind };
 type DirectUploadSpec = { url: string; fileField: string; fileNameField?: string; extraFields?: Record<string, string>; responsePaths: string[] };
-type DirectRequestPlan = { provider: DirectAIProvider; url: string; contentType: string; body: unknown; uploads?: Partial<Record<DirectReferenceKind, DirectUploadSpec>>; imageQuality?: string; imageQualityNotice?: string };
+type DirectRequestPlan = { provider: DirectAIProvider; url: string; contentType: string; body: unknown; uploads?: Partial<Record<DirectReferenceKind, DirectUploadSpec>>; imageQuality?: string; imageQualityNotice?: string; imageOutputFormat?: string; imageOutputNotice?: string; imageOutputNoticeCode?: string };
 type DirectImageResponse = { created?: number; data: Array<{ url?: string; b64_json?: string }> };
 type SerializedDirectBody = { body: unknown; references: DirectReference[] };
 
@@ -58,15 +61,22 @@ export async function pollDirectVideoTask(config: AiConfig, provider: DirectAIPr
 
 async function prepareDirectRequest(config: AiConfig, provider: DirectAIProvider, endpoint: "/images/generations" | "/images/edits" | "/videos", body: DirectRequestBody) {
     const channel = requireDirectChannel(config);
+    const owner = useUserStore.getState();
+    const pathname = typeof window === "undefined" ? "" : window.location.pathname;
     const serialized = await serializeDirectBody(body);
     assertSafeDirectBody(serialized.body);
     const plan = await apiPost<DirectRequestPlan>("/api/ai/direct-request", {
-        channel: { protocol: channel.protocol, baseUrl: channel.baseUrl, imageQualityCapabilities: channel.imageQualityCapabilities },
+        channel: { protocol: channel.protocol, baseUrl: channel.baseUrl, name: channel.name, models: channel.models, imageOutputCapabilities: channel.imageOutputCapabilities, imageQualityCapabilities: channel.imageQualityCapabilities },
         model: config.model || config.videoModel,
         endpoint,
         body: serialized.body,
     });
     if (plan.provider !== provider) throw new Error("前后端渠道识别结果不一致");
+    const current = useUserStore.getState();
+    const notice = imageOutputNoticeText(plan.imageOutputNoticeCode || "") || plan.imageOutputNotice;
+    if (notice && current.token === owner.token && current.user?.id === owner.user?.id && typeof window !== "undefined" && window.location.pathname === pathname) {
+        message.info({ content: notice, key: `direct-image-output:${channel.id}:${plan.imageOutputNoticeCode || notice}` });
+    }
     const protocol = directProtocolAdapters[provider];
     const requestBody = await uploadAndReplaceReferences(protocol, plan, serialized.references, channel.apiKey);
     return { plan, requestBody, apiKey: channel.apiKey, protocol };

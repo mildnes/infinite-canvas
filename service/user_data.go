@@ -49,6 +49,7 @@ type userLocalModelChannelInput struct {
 	BaseURL                  string                                  `json:"baseUrl"`
 	APIKey                   string                                  `json:"apiKey"`
 	Models                   []string                                `json:"models"`
+	ImageOutputCapabilities  map[string]model.ImageOutputCapability  `json:"imageOutputCapabilities,omitempty"`
 	ImageQualityCapabilities map[string]model.ImageQualityCapability `json:"imageQualityCapabilities,omitempty"`
 }
 
@@ -100,6 +101,7 @@ func SelectUserLocalModelChannelForModel(userID string, modelName string, channe
 			BaseURL:                  baseURL,
 			APIKey:                   apiKey,
 			Models:                   models,
+			ImageOutputCapabilities:  normalizeImageOutputCapabilities(channel.ImageOutputCapabilities, models),
 			ImageQualityCapabilities: normalizeImageQualityCapabilities(channel.ImageQualityCapabilities),
 			Weight:                   1,
 			Timeout:                  600,

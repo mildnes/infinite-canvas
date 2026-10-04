@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import sharedOutputCapabilityRules from "../../../shared/image-output-capability-rules.json" with { type: "json" };
 
 import {
     hasImageOutputFormatContext,
+    imageOutputCapabilityRules,
     imageOutputCapabilityForConfig,
     imageOutputCapabilityForWorkflowFields,
     normalizeImageOutputFormat,
@@ -38,19 +40,37 @@ test("GPT Image 1 mini, 1.5, and 2.5 model names keep the OpenAI capability", ()
 });
 
 test("OpenAI GPT Image capability accepts only supported families and dated snapshots", () => {
-    for (const model of ["gpt-image-2-2026-10-04", "gpt-image-2.5-flare-2026-09-30"]) {
+    for (const model of ["gpt-image-9", "gpt-image-2-2026-10-04", "gpt-image-2.5-flare-2026-09-30"]) {
         assert.ok(imageOutputCapabilityForConfig({
             channelMode: "local",
             model,
             localChannels: [{ id: "openai", protocol: "openai", models: [model] }],
         }), model);
     }
-    for (const model of ["gpt-image-2-unofficial", "gpt-image-1.5-preview", "gpt-image-2.5-2026-02-30"]) {
+    for (const model of ["gpt-image-2-unofficial", "gpt-image-1.5-preview", "gpt-image-2-2026-02-30"]) {
         assert.equal(imageOutputCapabilityForConfig({
             channelMode: "local",
             model,
             localChannels: [{ id: "openai", protocol: "openai", models: [model] }],
         }), null, model);
+    }
+});
+
+test("local protocol/model inference comes from the shared backend rule file", () => {
+    assert.deepEqual(imageOutputCapabilityRules, sharedOutputCapabilityRules.rules);
+    const examples = [
+        ["openai", "", "gpt-2.5-sunburst-2k", ["png-transparent", "jpeg"]],
+        ["openai", "", "gpt-2.5-flare-2k", ["png-transparent", "jpeg"]],
+        ["apimart", "", "gpt-image-2.5-sunburst", ["png-transparent", "jpeg"]],
+        ["apimart", "", "gpt-image-2-official", ["png-transparent", "jpeg"]],
+    ] as const;
+
+    for (const [protocol, baseUrl, model, formats] of examples) {
+        assert.deepEqual(imageOutputCapabilityForConfig({
+            channelMode: "local",
+            model,
+            localChannels: [{ id: "channel", protocol, baseUrl, models: [model] }],
+        }), { formats: [...formats], defaultFormat: "png-transparent" }, model);
     }
 });
 
@@ -143,6 +163,33 @@ test("remote public capabilities take precedence over local APIMart inference", 
     assert.deepEqual(imageOutputCapabilityForConfig(config), { formats: ["jpeg"], defaultFormat: "jpeg" });
 });
 
+test("an undeclared remote custom model keeps automatic output and resolves no format", () => {
+    const config: ImageOutputConfig = {
+        channelMode: "remote",
+        imageModel: "custom-image-model",
+        publicChannels: [{ id: "remote", models: ["custom-image-model"] }],
+    };
+
+    const capability = imageOutputCapabilityForConfig(config);
+    assert.equal(capability, null);
+    assert.deepEqual(resolveImageOutputFormat("png-transparent", capability), { format: "auto", fellBack: false });
+});
+
+test("a declared remote custom model resolves a transparent PNG selection", () => {
+    const capability = imageOutputCapabilityForConfig({
+        channelMode: "remote",
+        imageModel: "custom-image-model",
+        publicChannels: [{
+            id: "remote",
+            models: ["custom-image-model"],
+            imageOutputCapabilities: { "custom-image-model": { formats: ["png-transparent"], defaultFormat: "png-transparent" } },
+        }],
+    });
+
+    assert.deepEqual(capability, { formats: ["png-transparent"], defaultFormat: "png-transparent" });
+    assert.deepEqual(resolveImageOutputFormat("png-transparent", capability), { format: "png-transparent", fellBack: false });
+});
+
 test("local OpenAI compatible xAI endpoints do not advertise output formats", () => {
     const capability = imageOutputCapabilityForConfig({
         channelMode: "local",
@@ -150,6 +197,34 @@ test("local OpenAI compatible xAI endpoints do not advertise output formats", ()
         localChannels: [{ id: "xai", protocol: "openai", baseUrl: "https://api.x.ai/v1", models: ["gpt-image-1"] }],
     });
     assert.equal(capability, null);
+});
+
+test("local channel declarations override inference and an empty declaration disables formats", () => {
+    const declared = imageOutputCapabilityForConfig({
+        channelMode: "local",
+        model: "gpt-image-2",
+        imageChannelId: "openai",
+        localChannels: [{
+            id: "openai",
+            protocol: "openai",
+            models: ["gpt-image-2"],
+            imageOutputCapabilities: { "gpt-image-2": { formats: ["jpeg"], defaultFormat: "jpeg" } },
+        }],
+    });
+    const disabled = imageOutputCapabilityForConfig({
+        channelMode: "local",
+        model: "gpt-image-2",
+        imageChannelId: "openai",
+        localChannels: [{
+            id: "openai",
+            protocol: "openai",
+            models: ["gpt-image-2"],
+            imageOutputCapabilities: { "gpt-image-2": { formats: [] } },
+        }],
+    });
+
+    assert.deepEqual(declared, { formats: ["jpeg"], defaultFormat: "jpeg" });
+    assert.deepEqual(disabled, { formats: [] });
 });
 
 test("remote channel uses its declared capability and selected-channel identity", () => {
@@ -286,6 +361,9 @@ test("workflow format capabilities require enabled and overridable explicit outp
 });
 
 test("unsupported selected format falls back to the channel default", () => {
-    assert.deepEqual(resolveImageOutputFormat("png-transparent", { formats: ["jpeg"], defaultFormat: "jpeg" }), { format: "jpeg", fellBack: true });
+    assert.deepEqual(resolveImageOutputFormat("png-transparent", { formats: ["jpeg"], defaultFormat: "jpeg" }), { format: "jpeg", fellBack: true, notice: "fallback-default" });
     assert.deepEqual(resolveImageOutputFormat("auto", { formats: ["jpeg"], defaultFormat: "jpeg" }), { format: "auto", fellBack: false });
+    assert.deepEqual(resolveImageOutputFormat("png-transparent", { formats: [], defaultFormat: "jpeg" }), { format: "auto", fellBack: true, notice: "fallback-default" });
+    assert.deepEqual(resolveImageOutputFormat("png-transparent", { formats: ["jpeg"] }), { format: "auto", fellBack: true, notice: "fallback-default" });
+    assert.deepEqual(resolveImageOutputFormat("auto", { formats: [] }), { format: "auto", fellBack: false });
 });

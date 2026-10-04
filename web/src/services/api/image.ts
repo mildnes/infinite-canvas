@@ -8,6 +8,7 @@ import { isKIESeedreamLayerDecompositionModel } from "@/lib/kie-models";
 import { isMimoChannel, mimoModels } from "@/lib/mimo-tts";
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig, normalizeGeminiBaseUrl } from "@/lib/gemini";
 import { imageOutputCapabilityForConfig, resolveImageOutputFormat, type ImageOutputFormat } from "@/lib/image-output-format";
+import { imageOutputNoticeText } from "@/lib/image-output-notice";
 import { autoSyncImage, imageToDataUrl, resolveImageUrl, type UploadedImage } from "@/services/image-storage";
 import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
@@ -74,6 +75,9 @@ export type CanvasImageTask = {
     completed_at?: string;
     error?: { message?: string };
     error_detail?: string;
+    imageOutputFormat?: string;
+    imageOutputNotice?: string;
+    imageOutputNoticeCode?: string;
 };
 export type CanvasImageTaskOptions = { nodeId?: string; source?: "canvas" | "image-workbench" | "workflow"; sourceId?: string; clientTaskId?: string };
 
@@ -213,9 +217,13 @@ function imageResponseMimeFromHeader(response: Response, fallback: string) {
 
 function notifyImageOutputFallback(response: Response, config: AiConfig, owner: ImageRequestOwner) {
     const notice = (response.headers.get("X-Image-Output-Notice") || "").trim();
-    if (notice !== "fallback-default" || !isCurrentImageRequestOwner(owner)) return;
-    const text = "当前渠道不支持所选格式，已切换为渠道默认格式";
-    const key = `${channelIdForActiveModel(config)}:${config.model}:${config.imageOutputFormat}:${notice}`;
+    notifyImageOutputNotice(notice, `${channelIdForActiveModel(config)}:${config.model}:${config.imageOutputFormat}`, owner);
+}
+
+function notifyImageOutputNotice(notice: string, context: string, owner: ImageRequestOwner) {
+    const text = imageOutputNoticeText(notice);
+    if (!text || !isCurrentImageRequestOwner(owner)) return;
+    const key = `${context}:${notice}`;
     const now = Date.now();
     if (key === lastImageOutputNotice && now - lastImageOutputNoticeAt < 2000) return;
     lastImageOutputNotice = key;
@@ -1286,6 +1294,7 @@ export async function createCanvasImageTask(config: AiConfig & { seedIndex?: num
 }
 
 export async function pollCanvasImageTaskStatus(taskId: string): Promise<CanvasImageTask> {
+    const requestOwner = captureImageRequestOwner();
     const token = useUserStore.getState().token;
     if (!token) throw new Error("请先登录后再使用云端渠道");
     const response = await fetch(`/api/v1/canvas/image-tasks/${encodeURIComponent(taskId)}`, {
@@ -1297,6 +1306,7 @@ export async function pollCanvasImageTaskStatus(taskId: string): Promise<CanvasI
     }
     const payload = (await response.json()) as { code?: number; msg?: string; data?: CanvasImageTask };
     if (payload.code !== 0 || !payload.data) throw new ImageRequestError(payload.msg || "读取图片任务失败", payload);
+    if (payload.data.imageOutputNoticeCode) notifyImageOutputNotice(payload.data.imageOutputNoticeCode, taskId, requestOwner);
     return syncCanvasImageTask(payload.data);
 }
 
@@ -1780,6 +1790,7 @@ export async function listCanvasImageTasks(config: AiConfig, sources: Array<"ima
 }
 
 export async function batchCanvasImageTaskStatus(config: AiConfig | undefined, ids: string[], signal?: AbortSignal) {
+    const requestOwner = captureImageRequestOwner();
     const taskIds = Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean)));
     if ((config && !usesAccountProxy(config)) || !taskIds.length) return [];
     const token = useUserStore.getState().token;
@@ -1796,6 +1807,9 @@ export async function batchCanvasImageTaskStatus(config: AiConfig | undefined, i
     }
     const payload = (await response.json()) as { code?: number; msg?: string; data?: CanvasImageTask[] };
     if (payload.code !== 0 || !Array.isArray(payload.data)) throw new ImageRequestError(payload.msg || "读取图片任务失败", payload);
+    for (const task of payload.data) {
+        if (task.imageOutputNoticeCode) notifyImageOutputNotice(task.imageOutputNoticeCode, task.id, requestOwner);
+    }
     return payload.data;
 }
 
