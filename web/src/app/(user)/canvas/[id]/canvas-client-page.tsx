@@ -3891,7 +3891,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
             setRunningNodeId(node.id);
             const retryStartedAt = Date.now();
-            const retrySuffix = retryWorkflowRef ? nanoid() : node.id;
+            // 每次重试都必须拥有新的客户端任务 ID。沿用节点 ID 会命中服务端的
+            // 幂等短路，失败任务不会重新发起生成。
+            const retrySuffix = `${node.id}-${nanoid(6)}`;
             const retryVideoTaskId = node.type === CanvasNodeType.Video ? `client_video_task_${retrySuffix}` : "";
             const retryImageTaskId = isCanvasImageNodeType(node.type) ? `client_image_task_${retrySuffix}` : "";
             const retryAudioTaskId = node.type === CanvasNodeType.Audio ? `client_audio_task_${retrySuffix}` : "";
@@ -5242,8 +5244,9 @@ async function resolveMetadataReferences(metadata: CanvasNodeMetadata) {
     if (!metadata.references?.length) return null;
     const references = await Promise.all(
         metadata.references.map(async (url, index) => {
-            const dataUrl = url.startsWith("image:") ? await resolveImageUrl(url, "") : url;
-            return dataUrl ? { id: `${index}`, name: `reference-${index}.png`, type: "image/png", dataUrl, storageKey: url.startsWith("image:") ? url : undefined } : null;
+            const storageKey = url.startsWith("image:") || url.startsWith("server:") ? url : undefined;
+            const dataUrl = storageKey ? await resolveImageUrl(storageKey, "") : url;
+            return dataUrl ? { id: `${index}`, name: `reference-${index}.png`, type: "image/png", dataUrl, storageKey } : null;
         }),
     );
     return references.every(Boolean) ? (references as ReferenceImage[]) : null;

@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/service"
 )
@@ -39,8 +40,13 @@ func CreateCanvasImageTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if clientTaskID != "" {
 		if existing, found, readErr := service.GetUserCanvasImageTask(user.ID, clientTaskID); readErr == nil && found {
-			OK(w, service.CanvasImageTaskResponse(existing))
-			return
+			if isReusableCanvasImageTaskStatus(existing.Status) {
+				OK(w, service.CanvasImageTaskResponse(existing))
+				return
+			}
+			// 终态失败任务只保留作历史记录；同一个客户端 ID 再次提交时
+			// 生成新的存储主键，避免 SaveCanvasImageTask 的冲突保护返回旧失败行。
+			clientTaskID = clientTaskID + "-retry-" + uuid.NewString()
 		}
 	}
 	modelName := readAIModelFromBody(body, contentType)
@@ -117,6 +123,15 @@ func CreateCanvasImageTask(w http.ResponseWriter, r *http.Request) {
 	}
 	OK(w, service.CanvasImageTaskResponse(task))
 	go runCanvasImageTask(task, user, body, contentType, task.ChannelID, task.UserChannelID)
+}
+
+func isReusableCanvasImageTaskStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "queued", "processing", "running", "in_progress", "completed", "success", "succeeded":
+		return true
+	default:
+		return false
+	}
 }
 
 func GetCanvasImageTask(w http.ResponseWriter, r *http.Request, id string) {
