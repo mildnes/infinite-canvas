@@ -85,6 +85,32 @@ description: settings 表中 public 和 private 配置结构说明
 | `allowRegister` | boolean | 是否允许用户注册，默认允许；关闭后注册入口隐藏，注册接口拒绝新用户创建 |
 | `linuxDo.enabled` | boolean | 是否开启 Linux.do 登录 |
 
+### 图片输出格式能力
+
+公开配置 `modelChannel.channels[].imageOutputCapabilities` 按模型声明可选输出格式，由服务端根据实际协议和模型推导，不需要新的数据库表或管理员填写第二份能力配置。例如：
+
+```json
+{
+  "gpt-image-2": {
+    "formats": ["png-transparent", "jpeg"],
+    "defaultFormat": "png-transparent"
+  }
+}
+```
+
+`AiConfig.imageOutputFormat`、画布 Agent 配置、节点元数据和生成记录保存 `png-transparent` 或 `jpeg`；缺少字段或内部值为 `auto` 时不发送新增参数。新配置优先透明 PNG，若当前渠道不支持则按声明的默认格式回退。未指定渠道时，前端只使用全部候选渠道共同支持的格式；未知能力继续沿用渠道原有输出方式。
+
+| 能力 | 请求行为 |
+| --- | --- |
+| OpenAI 协议的 GPT Image 模型 | 透明 PNG 对应 `output_format: "png"` 与 `background: "transparent"`；JPG 对应 `output_format: "jpeg"` |
+| 已支持输出格式的 APIMart/KIE 模型 | 当前只声明 JPG，不把普通 PNG 支持推断为透明背景支持；KIE 使用其合法 `jpg` 枚举 |
+| Grok2API/xAI 及其他未声明格式能力的模型 | 不新增格式或背景参数，保留原有协议转换 |
+| RunningHub/ComfyUI | 仅使用工作流已明确绑定、启用且安全的输出格式字段；透明输出还需透明背景映射 |
+
+Images 请求在根参数或编辑表单中传递格式，Responses 在 `image_generation` 工具中传递，图片 Chat 使用现有 `image_config`。普通文本请求不受影响。服务端根据实际渠道再次校验，回退信息写入调用日志；`X-Image-Output-Format` 表示生效的请求档位，不代表已验证图片包含透明 alpha。实际结果以媒体 MIME 和文件字节为准。
+
+`response_format=b64_json` 只控制返回的传输编码，不能指定 PNG/JPG。媒体保存按实际内容识别 MIME 和扩展名；不会把 JPG 改名为 PNG，也不会做事后转换。透明 PNG 依赖上游真实能力，部署验收需检查 alpha 通道。[OpenAI 图片生成参数说明](https://developers.openai.com/api/docs/guides/image-generation)
+
 ## private.value
 
 ```json

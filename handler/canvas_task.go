@@ -60,6 +60,11 @@ func CreateCanvasImageTask(w http.ResponseWriter, r *http.Request) {
 		failAIChannelSelect(w, err, "AI 接口请求失败")
 		return
 	}
+	body, contentType, outputFormat, err := normalizeImageOutputFormatRequest(body, contentType, channel, modelName, endpoint)
+	if err != nil {
+		Fail(w, "图片输出格式参数无效")
+		return
+	}
 	credits := 0
 	if resolvedUserChannelID == "" {
 		credits, err = service.ModelCost(channel.ID, modelName)
@@ -86,12 +91,18 @@ func CreateCanvasImageTask(w http.ResponseWriter, r *http.Request) {
 		GenerationType:  strings.TrimPrefix(endpoint, "/images/"),
 		Endpoint:        endpoint,
 		ContentType:     contentType,
-		RequestBody:     summarizeAIRequest(body, contentType),
+		RequestBody:     appendImageOutputLogMetadata(summarizeAIRequest(body, contentType), outputFormat.Format, outputFormat.Notice),
 	})
 	if err != nil {
 		log.Printf("create canvas image task failed: user=%s err=%v", user.ID, err)
 		Fail(w, "AI 接口请求失败")
 		return
+	}
+	if outputFormat.Format != "" {
+		w.Header().Set("X-Image-Output-Format", outputFormat.Format)
+	}
+	if outputFormat.Notice != "" {
+		w.Header().Set("X-Image-Output-Notice", "fallback-default")
 	}
 	OK(w, service.CanvasImageTaskResponse(task))
 	go runCanvasImageTask(task, user, body, contentType, task.ChannelID, task.UserChannelID)

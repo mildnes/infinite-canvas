@@ -19,6 +19,7 @@ const sourceOptions = [
     { label: "画面高度", value: "height" },
     { label: "生成数量", value: "count" },
     { label: "生成质量", value: "quality" },
+    { label: "图片输出格式", value: "outputFormat" },
     { label: "透明背景", value: "transparentBackground" },
     { label: "视频时长", value: "videoSeconds" },
     { label: "视频质量", value: "vquality" },

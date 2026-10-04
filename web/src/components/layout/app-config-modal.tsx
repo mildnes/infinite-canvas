@@ -15,10 +15,11 @@ import { clearStorageConfigCache as clearImageStorageCache, defaultUserStoragePr
 import { audioFormatOptions, audioVoiceOptions, glmTtsFormatOptions, glmTtsVoiceOptions, isGlmTtsModel, normalizeAudioSpeedValue, normalizeGlmTtsFormat, normalizeGlmTtsSpeed, normalizeGlmTtsVoice } from "@/lib/audio-generation";
 import { grokTtsFormatOptions, grokTtsLanguageOptions, isGrok2APITtsConfig, normalizeGrokTtsFormat, normalizeGrokTtsLanguage, normalizeGrokTtsSpeed } from "@/lib/grok-tts";
 import { isGeminiConfig, isGeminiTtsModel } from "@/lib/gemini";
+import { imageOutputCapabilityForWorkflowFields, normalizeImageOutputFormat } from "@/lib/image-output-format";
 import { geminiTtsVoiceOptions, normalizeGeminiTtsVoice } from "@/lib/gemini-tts";
 import { isMimoPresetTtsModel, isMimoTtsModel, isMimoVoiceCloneModel, isMimoVoiceDesignModel, mimoTtsFormatOptions, mimoTtsVoiceOptions } from "@/lib/mimo-tts";
 import { isWorkflowProtocol, modelChannelApiKeyUrls, modelChannelDefaultBaseUrls, modelChannelProtocolOptions } from "@/lib/model-channel";
-import type { WorkflowChannelData, WorkflowEntry } from "@/lib/workflow-channel";
+import type { WorkflowChannelData, WorkflowEntry, WorkflowSummary } from "@/lib/workflow-channel";
 import { listWorkflowChannels, readWorkflowChannel, replaceWorkflowChannels, saveWorkflowChannel } from "@/services/workflow-channel-storage";
 import { filterChannelModelsByCapability, normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig, type LocalModelChannel, type ModelCapability } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
@@ -39,6 +40,11 @@ const modelGroups: ModelGroup[] = [
     { capability: "text", modelKey: "textModel", channelKey: "textChannelId", modelsKey: "textModels", defaultLabel: "默认文本模型", optionsLabel: "文本模型可选项" },
     { capability: "audio", modelKey: "audioModel", workflowKey: "audioWorkflowRef", channelKey: "audioChannelId", modelsKey: "audioModels", defaultLabel: "默认音频模型", optionsLabel: "音频模型可选项" },
 ];
+
+function summarizeLocalWorkflow({ provider, kind, workflowId, title, capability, enabled, fields }: WorkflowEntry): WorkflowSummary {
+    const imageOutputCapability = capability === "image" ? imageOutputCapabilityForWorkflowFields(fields) : undefined;
+    return { provider, kind, workflowId, title, capability, enabled, ...(imageOutputCapability ? { imageOutputCapability } : {}) };
+}
 
 const WorkflowChannelPane = dynamic(() => import("@/components/workflow/workflow-channel-pane").then((module) => module.WorkflowChannelPane), { ssr: false });
 
@@ -90,7 +96,15 @@ export function AppConfigModal() {
         const protocol = modelSelectChannel.protocol;
         let canceled = false;
 		void readWorkflowChannel(user?.id || "guest", protocol, modelSelectChannel.id)
-            .then((items) => { if (!canceled) setWorkflowEntries(items); })
+			.then((items) => {
+                if (canceled) return;
+                setWorkflowEntries(items);
+                const summaries = items.map(summarizeLocalWorkflow);
+                const current = useConfigStore.getState().config;
+                const currentChannel = normalizeLocalChannels(current).find((channel) => channel.id === modelSelectChannel.id);
+                if (JSON.stringify(currentChannel?.workflowSummaries || []) === JSON.stringify(summaries)) return;
+                useConfigStore.getState().updateConfig("localChannels", normalizeLocalChannels(current).map((channel) => channel.id === modelSelectChannel.id ? { ...channel, workflowSummaries: summaries } : channel));
+            })
             .catch((error) => { if (!canceled) message.error(error instanceof Error ? error.message : "读取工作流配置失败"); });
         return () => { canceled = true; };
     }, [modelSelectChannelId, modelSelectChannel?.protocol, user?.id]);
@@ -128,6 +142,7 @@ export function AppConfigModal() {
                     if (canceled || useUserStore.getState().token !== accountToken || useUserStore.getState().user?.id !== accountId) return;
                     Object.entries(modelFields)
                         .forEach(([key, value]) => updateConfig(key as keyof AiConfig, value as never));
+                    updateConfig("imageOutputFormat", normalizeImageOutputFormat(modelFields.imageOutputFormat));
                 }
                 accountConfigRef.current = { ready: true, workflowChannels: remoteWorkflowChannels };
                 updateConfig("syncStorageConfig", syncS3);
@@ -297,7 +312,7 @@ export function AppConfigModal() {
         if (!modelSelectChannel || !isWorkflowProtocol(modelSelectChannel.protocol)) return;
         const protocol = modelSelectChannel.protocol;
         setWorkflowEntries(items);
-        patchLocalChannel(modelSelectChannel.id, { workflowSummaries: items.map(({ provider, kind, workflowId, title, capability, enabled }) => ({ provider, kind, workflowId, title, capability, enabled })) });
+        patchLocalChannel(modelSelectChannel.id, { workflowSummaries: items.map(summarizeLocalWorkflow) });
 		void saveWorkflowChannel(user?.id || "guest", protocol, modelSelectChannel.id, items).catch((error) => {
 			message.error(error instanceof Error ? error.message : "保存工作流配置失败");
         });

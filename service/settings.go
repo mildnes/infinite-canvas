@@ -1300,6 +1300,7 @@ func publicChannelInfos(channels []model.ModelChannel, options ...[]string) []mo
 				workflows = append(workflows, model.WorkflowSummary{
 					Provider: entry.Provider, Kind: entry.Kind, WorkflowID: entry.WorkflowID,
 					Title: entry.Title, Capability: entry.Capability, Enabled: true,
+					ImageOutputCapability: workflowImageOutputCapability(entry),
 				})
 			}
 			if len(workflows) > 0 {
@@ -1317,16 +1318,26 @@ func publicChannelInfos(channels []model.ModelChannel, options ...[]string) []mo
 				continue
 			}
 		}
+		imageOutputCapabilities := make(map[string]model.ImageOutputCapability)
+		for _, modelName := range models {
+			if capability, ok := ResolveImageOutputCapability(channel, modelName); ok {
+				imageOutputCapabilities[modelName] = capability
+			}
+		}
+		if len(imageOutputCapabilities) == 0 {
+			imageOutputCapabilities = nil
+		}
 		result = append(result, model.PublicModelChannelInfo{
-			ID:       channel.ID,
-			Protocol: channel.Protocol,
-			Name:     channel.Name,
-			BaseURL:  channel.BaseURL,
-			Models:   models,
-			Weight:   channel.Weight,
-			Timeout:  channel.Timeout,
-			Enabled:  channel.Enabled,
-			Remark:   channel.Remark,
+			ID:                      channel.ID,
+			Protocol:                channel.Protocol,
+			Name:                    channel.Name,
+			BaseURL:                 channel.BaseURL,
+			Models:                  models,
+			ImageOutputCapabilities: imageOutputCapabilities,
+			Weight:                  channel.Weight,
+			Timeout:                 channel.Timeout,
+			Enabled:                 channel.Enabled,
+			Remark:                  channel.Remark,
 		})
 	}
 	return result

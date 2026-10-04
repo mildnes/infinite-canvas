@@ -1,6 +1,7 @@
 package service
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -113,6 +114,147 @@ func TestResolveWorkflowFieldsUsesFullAspectRatioOption(t *testing.T) {
 	values, err := ResolveWorkflowFields(entry, WorkflowRunInput{Size: "16:9-1k"})
 	if err != nil || len(values) != 1 || values[0].Value != "16:9 (Widescreen)" {
 		t.Fatalf("比例必须转成工作流枚举的完整值，values=%#v err=%v", values, err)
+	}
+}
+
+func TestWorkflowImageOutputCapabilityRequiresExplicitFormatAndTransparencyMappings(t *testing.T) {
+	enabled := true
+	entry := model.WorkflowEntry{
+		Provider:   "runninghub",
+		Capability: "image",
+		Fields: []model.WorkflowFieldMapping{
+			{NodeID: "1", FieldName: "format", FieldType: "COMBO", Source: "outputFormat", Options: []any{"png", "jpg"}, Enabled: &enabled},
+			{NodeID: "2", FieldName: "transparent", FieldType: "BOOLEAN", Source: "transparentBackground", Options: []any{false, true}, Enabled: &enabled},
+		},
+	}
+	capability := workflowImageOutputCapability(entry)
+	want := &model.ImageOutputCapability{Formats: []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG}, DefaultFormat: model.ImageOutputFormatPNGTransparent}
+	if !reflect.DeepEqual(capability, want) {
+		t.Fatalf("capability = %#v, want %#v", capability, want)
+	}
+
+	entry.Fields[1].Source = ""
+	want = &model.ImageOutputCapability{Formats: []model.ImageOutputFormat{model.ImageOutputFormatJPEG}, DefaultFormat: model.ImageOutputFormatJPEG}
+	if got := workflowImageOutputCapability(entry); !reflect.DeepEqual(got, want) {
+		t.Fatalf("only JPEG may be exposed without an explicit transparency binding: got=%#v want=%#v", got, want)
+	}
+	entry.Fields[1].Source = "transparentBackground"
+	entry.Fields[1].Options = []any{true}
+	want = &model.ImageOutputCapability{Formats: []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent}, DefaultFormat: model.ImageOutputFormatPNGTransparent}
+	if got := workflowImageOutputCapability(entry); !reflect.DeepEqual(got, want) {
+		t.Fatalf("JPEG must be excluded when the transparency field only accepts true: got=%#v want=%#v", got, want)
+	}
+	entry.Fields = []model.WorkflowFieldMapping{{NodeID: "1", FieldName: "output", FieldType: "COMBO", Source: "", Options: []any{"png", "jpg"}, Enabled: &enabled}}
+	if got := workflowImageOutputCapability(entry); got != nil {
+		t.Fatalf("field name/options alone must not imply format capability: %#v", got)
+	}
+}
+
+func TestPublicWorkflowSummaryIncludesImageOutputCapability(t *testing.T) {
+	enabled := true
+	channels := []model.ModelChannel{{
+		ID:       "runninghub-channel",
+		Protocol: "runninghub",
+		Enabled:  true,
+		Workflows: []model.WorkflowEntry{{
+			Provider: "runninghub", Kind: "workflow", WorkflowID: "image-1", Title: "Image", Capability: "image", Enabled: true,
+			Fields: []model.WorkflowFieldMapping{
+				{NodeID: "1", FieldName: "format", Source: "outputFormat", FieldType: "COMBO", Options: []any{"png", "jpg"}, Enabled: &enabled},
+				{NodeID: "2", FieldName: "alpha", Source: "transparentBackground", FieldType: "BOOLEAN", Options: []any{false, true}, Enabled: &enabled},
+			},
+		}},
+	}}
+	infos := publicChannelInfos(channels, []string(nil), []string(nil))
+	if len(infos) != 1 || len(infos[0].Workflows) != 1 {
+		t.Fatalf("public workflows = %#v, want one workflow", infos)
+	}
+	want := &model.ImageOutputCapability{Formats: []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG}, DefaultFormat: model.ImageOutputFormatPNGTransparent}
+	if !reflect.DeepEqual(infos[0].Workflows[0].ImageOutputCapability, want) {
+		t.Fatalf("workflow summary capability = %#v, want %#v", infos[0].Workflows[0].ImageOutputCapability, want)
+	}
+}
+
+func TestResolveWorkflowFieldsAppliesSelectedOutputFormatAndTransparentBackground(t *testing.T) {
+	enabled := true
+	entry := model.WorkflowEntry{
+		Provider:   "comfyui",
+		Capability: "image",
+		Fields: []model.WorkflowFieldMapping{
+			{NodeID: "1", FieldName: "format", FieldType: "COMBO", Source: "imageOutputFormat", Options: []any{"png", "jpg"}, Enabled: &enabled},
+			{NodeID: "2", FieldName: "transparent", FieldType: "BOOLEAN", Source: "transparentBackground", Options: []any{false, true}, Enabled: &enabled},
+		},
+	}
+	values, err := ResolveWorkflowFields(entry, WorkflowRunInput{ImageOutputFormat: model.ImageOutputFormatJPEG})
+	if err != nil || len(values) != 2 || values[0].Value != "jpg" || values[1].Value != false {
+		t.Fatalf("selected JPEG must map output format and opaque background: values=%#v err=%v", values, err)
+	}
+	values, err = ResolveWorkflowFields(entry, WorkflowRunInput{ImageOutputFormat: model.ImageOutputFormatPNGTransparent})
+	if err != nil || len(values) != 2 || values[0].Value != "png" || values[1].Value != true {
+		t.Fatalf("selected transparent PNG must map both explicit fields: values=%#v err=%v", values, err)
+	}
+}
+
+func TestResolveWorkflowFieldsAutoPreservesConfiguredFieldValues(t *testing.T) {
+	enabled := true
+	entry := model.WorkflowEntry{Fields: []model.WorkflowFieldMapping{
+		{NodeID: "1", FieldName: "format", FieldType: "COMBO", Source: "outputFormat", FieldValue: "webp", Options: []any{"png", "jpg", "webp"}, Enabled: &enabled},
+		{NodeID: "2", FieldName: "transparent", FieldType: "BOOLEAN", Source: "transparentBackground", FieldValue: true, Options: []any{false, true}, Enabled: &enabled},
+	}}
+	fieldValues := map[string]any{"field:1:format": "webp", "field:2:transparent": false}
+	values, err := ResolveWorkflowFields(entry, WorkflowRunInput{FieldValues: fieldValues})
+	if err != nil || len(values) != 2 || values[0].Value != "webp" || values[1].Value != false {
+		t.Fatalf("auto must keep existing per-field editor values: values=%#v err=%v", values, err)
+	}
+}
+
+func TestResolveWorkflowFieldsUnsupportedSelectedFormatFallsBackToMappedDefault(t *testing.T) {
+	enabled := true
+	entry := model.WorkflowEntry{Provider: "comfyui", Capability: "image", Fields: []model.WorkflowFieldMapping{
+		{NodeID: "1", FieldName: "format", FieldType: "COMBO", Source: "outputFormat", Options: []any{"jpg"}, Enabled: &enabled},
+	}}
+	values, err := ResolveWorkflowFields(entry, WorkflowRunInput{ImageOutputFormat: model.ImageOutputFormatPNGTransparent})
+	if err != nil || len(values) != 1 || values[0].Value != "jpg" {
+		t.Fatalf("unsupported selected format must fall back to workflow default: values=%#v err=%v", values, err)
+	}
+}
+
+func TestResolveWorkflowFieldsJPEGFallsBackWhenTransparentEnumOnlyAllowsTrue(t *testing.T) {
+	enabled := true
+	entry := model.WorkflowEntry{Provider: "comfyui", Capability: "image", Fields: []model.WorkflowFieldMapping{
+		{NodeID: "1", FieldName: "format", FieldType: "COMBO", Source: "outputFormat", Options: []any{"png", "jpg"}, Enabled: &enabled},
+		{NodeID: "2", FieldName: "transparent", FieldType: "BOOLEAN", Source: "transparentBackground", Options: []any{true}, Enabled: &enabled},
+	}}
+	values, err := ResolveWorkflowFields(entry, WorkflowRunInput{ImageOutputFormat: model.ImageOutputFormatJPEG})
+	if err != nil || len(values) != 2 || values[0].Value != "png" || values[1].Value != true {
+		t.Fatalf("JPEG must fall back to a legal transparent PNG mapping: values=%#v err=%v", values, err)
+	}
+}
+
+func TestResolveWorkflowFieldsSelectedTransparentPNGFallsBackTogetherWithBackground(t *testing.T) {
+	enabled := true
+	entry := model.WorkflowEntry{Provider: "comfyui", Capability: "image", Fields: []model.WorkflowFieldMapping{
+		{NodeID: "1", FieldName: "format", FieldType: "COMBO", Source: "outputFormat", Options: []any{"jpg"}, Enabled: &enabled},
+		{NodeID: "2", FieldName: "transparent", FieldType: "BOOLEAN", Source: "transparentBackground", Options: []any{false, true}, Enabled: &enabled},
+	}}
+	values, err := ResolveWorkflowFields(entry, WorkflowRunInput{ImageOutputFormat: model.ImageOutputFormatPNGTransparent})
+	if err != nil || len(values) != 2 || values[0].Value != "jpg" || values[1].Value != false {
+		t.Fatalf("PNG fallback must also disable transparency: values=%#v err=%v", values, err)
+	}
+}
+
+func TestResolveWorkflowFieldsNoOutputCapabilityPreservesLegacyValues(t *testing.T) {
+	enabled := true
+	entry := model.WorkflowEntry{Fields: []model.WorkflowFieldMapping{
+		{NodeID: "1", FieldName: "transparent", FieldType: "BOOLEAN", Source: "transparentBackground", Options: []any{false, true}, Enabled: &enabled},
+	}}
+	input := WorkflowRunInput{
+		ImageOutputFormat:     model.ImageOutputFormatPNGTransparent,
+		TransparentBackground: true,
+		FieldValues:           map[string]any{"field:1:transparent": false},
+	}
+	values, err := ResolveWorkflowFields(entry, input)
+	if err != nil || len(values) != 1 || values[0].Value != false {
+		t.Fatalf("unmapped output capability must preserve legacy field values: values=%#v err=%v", values, err)
 	}
 }
 

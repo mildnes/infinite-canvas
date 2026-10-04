@@ -12,6 +12,7 @@ import { ModelPicker } from "@/components/model-picker";
 import { AssetPickerModal, type InsertAssetPayload } from "@/app/(user)/canvas/components/asset-picker-modal";
 import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
 import { formatBytes, formatDuration, getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
+import { normalizeImageOutputFormat } from "@/lib/image-output-format";
 import { createCanvasImageTask, requestEdit, requestGeneration, requestImageQuestion, type CanvasImageTask } from "@/services/api/image";
 import { saveImageGenerationLogs } from "@/services/api/generation-logs";
 import { deleteUserWorkflow, draftUserWorkflow, fetchUserConfig, fetchUserWorkflows, saveUserWorkflow, type CreativeWorkflowRecord } from "@/services/api/user-config";
@@ -37,7 +38,7 @@ type WorkflowVariable = {
 
 export type WorkflowGenerationConfig = Pick<
     AiConfig,
-    "model" | "imageModel" | "imageChannelId" | "quality" | "size" | "count" | "apiMode" | "timeout" | "streamImages" | "streamPartialImages" | "responseFormatB64Json" | "codexCli"
+    "model" | "imageModel" | "imageChannelId" | "imageOutputFormat" | "quality" | "size" | "count" | "apiMode" | "timeout" | "streamImages" | "streamPartialImages" | "responseFormatB64Json" | "codexCli"
 > & {
     systemPrompt: string;
     promptTemplate: string;
@@ -1604,7 +1605,7 @@ function WorkflowEditorModal({
                         onChange={(value) => patchConfig({ apiMode: value })}
                     />
                     <ImageSettingsPanel
-                        config={{ ...defaultConfig, ...workflow.config, model: workflow.config.model || defaultConfig.model, imageModel: workflow.config.imageModel || workflow.config.model || defaultConfig.imageModel }}
+                        config={{ ...modelConfig, ...workflow.config, imageWorkflowRef: undefined, model: workflow.config.model || modelConfig.model, imageModel: workflow.config.imageModel || workflow.config.model || modelConfig.imageModel }}
                         onConfigChange={(key, value) => patchConfig({ [key]: value } as Partial<WorkflowGenerationConfig>)}
                         theme={theme}
                         showTitle={false}
@@ -1778,6 +1779,7 @@ function createWorkflowConfig(config: AiConfig): WorkflowGenerationConfig {
         model: config.model || defaultConfig.model,
         imageModel: config.imageModel || config.model || defaultConfig.imageModel,
         imageChannelId: config.imageChannelId || "",
+        imageOutputFormat: config.imageOutputFormat || "auto",
         quality: config.quality || defaultConfig.quality,
         size: config.size || defaultConfig.size,
         count: config.count || "1",
@@ -1846,13 +1848,18 @@ function normalizeVariable(variable: WorkflowVariable): WorkflowVariable {
 }
 
 function normalizeWorkflow(workflow: CreativeWorkflow): CreativeWorkflow {
+    const savedConfig = workflow.config || {};
     return {
         ...workflow,
         scope: workflow.scope === "public" ? "public" : "private",
         editable: workflow.editable !== false,
         mode: workflow.mode === "multi_image_series" ? "multi_image_series" : "single_image",
         variables: (workflow.variables || []).map(normalizeVariable),
-        config: { ...createWorkflowConfig(defaultConfig), ...(workflow.config || {}) },
+        config: {
+            ...createWorkflowConfig(defaultConfig),
+            ...savedConfig,
+            imageOutputFormat: normalizeImageOutputFormat(savedConfig.imageOutputFormat),
+        },
         seriesConfig: { ...createWorkflowSeriesConfig(defaultConfig), ...(workflow.seriesConfig || {}) },
         createdAt: workflow.createdAt || Date.now(),
         updatedAt: workflow.updatedAt || Date.now(),
@@ -2125,9 +2132,5 @@ function referenceUsedByWorkflowTask(reference: ReferenceImage, tasks: WorkflowT
 function formatDate(value: number) {
     return new Date(value).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
-
-
-
-
 
 

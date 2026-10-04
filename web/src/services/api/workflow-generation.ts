@@ -1,4 +1,5 @@
 import { readFileAsDataUrl } from "@/lib/image-utils";
+import type { ImageOutputFormatSelection } from "@/lib/image-output-format";
 import { storageKeyFromContentUrl } from "@/lib/storage-reference";
 import type { WorkflowCapability, WorkflowRef } from "@/lib/workflow-channel";
 
@@ -14,6 +15,7 @@ export type WorkflowRunInput = {
     mask?: string;
     size?: string;
     quality?: string;
+    imageOutputFormat?: ImageOutputFormatSelection;
     transparentBackground?: boolean;
     count?: number;
     videoSeconds?: string;

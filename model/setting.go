@@ -75,12 +75,13 @@ type WorkflowEntry struct {
 }
 
 type WorkflowSummary struct {
-	Provider   string  `json:"provider"`
-	Kind       string  `json:"kind"`
-	WorkflowID string  `json:"workflowId"`
-	Title      string  `json:"title"`
-	Capability string  `json:"capability"`
-	Enabled    bool    `json:"enabled"`
+	Provider              string                 `json:"provider"`
+	Kind                  string                 `json:"kind"`
+	WorkflowID            string                 `json:"workflowId"`
+	Title                 string                 `json:"title"`
+	Capability            string                 `json:"capability"`
+	Enabled               bool                   `json:"enabled"`
+	ImageOutputCapability *ImageOutputCapability `json:"imageOutputCapability,omitempty"`
 }
 
 // ModelCost 模型算力点配置。
@@ -88,6 +89,18 @@ type ModelCost struct {
 	ChannelID string `json:"channelId,omitempty"`
 	Model     string `json:"model"`
 	Credits   int    `json:"credits"`
+}
+
+type ImageOutputFormat string
+
+const (
+	ImageOutputFormatPNGTransparent ImageOutputFormat = "png-transparent"
+	ImageOutputFormatJPEG           ImageOutputFormat = "jpeg"
+)
+
+type ImageOutputCapability struct {
+	Formats       []ImageOutputFormat `json:"formats"`
+	DefaultFormat ImageOutputFormat   `json:"defaultFormat"`
 }
 
 // PublicModelChannelSetting 公开模型渠道配置。
@@ -115,16 +128,17 @@ type SystemPromptSetting struct {
 }
 
 type PublicModelChannelInfo struct {
-	ID        string            `json:"id"`
-	Protocol  string            `json:"protocol"`
-	Name      string            `json:"name"`
-	BaseURL   string            `json:"baseUrl"`
-	Models    []string          `json:"models"`
-	Weight    int               `json:"weight"`
-	Timeout   int               `json:"timeout"`
-	Enabled   bool              `json:"enabled"`
-	Remark    string            `json:"remark"`
-	Workflows []WorkflowSummary `json:"workflows,omitempty"`
+	ID                      string                           `json:"id"`
+	Protocol                string                           `json:"protocol"`
+	Name                    string                           `json:"name"`
+	BaseURL                 string                           `json:"baseUrl"`
+	Models                  []string                         `json:"models"`
+	ImageOutputCapabilities map[string]ImageOutputCapability `json:"imageOutputCapabilities,omitempty"`
+	Weight                  int                              `json:"weight"`
+	Timeout                 int                              `json:"timeout"`
+	Enabled                 bool                             `json:"enabled"`
+	Remark                  string                           `json:"remark"`
+	Workflows               []WorkflowSummary                `json:"workflows,omitempty"`
 }
 
 // PublicSetting 公开配置。

@@ -75,6 +75,7 @@ export default function IndexPage() {
         autoGenerateMedia: true,
         imageModel: effectiveConfig.imageModel,
         imageChannelId: effectiveConfig.imageChannelId,
+        imageOutputFormat: effectiveConfig.imageOutputFormat || "auto",
         imageQuality: effectiveConfig.quality,
         imageSize: effectiveConfig.size,
         videoQuality: effectiveConfig.vquality,

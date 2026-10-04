@@ -91,6 +91,10 @@ func prepareDirectAIRequest(input directAIRequestInput) (directAIRequestPlan, er
 	}
 
 	contentType := "application/json"
+	body, contentType, _, err = normalizeImageOutputFormatRequest(body, contentType, channel, input.Model, input.Endpoint)
+	if err != nil {
+		return directAIRequestPlan{}, errors.New("图片输出格式参数无效")
+	}
 	upstreamPath := resolveAIProxyPath(channel, input.Model, input.Endpoint)
 	prepared, provider, err := prepareAIProtocolRequest(aiProtocolRequest{
 		mode: aiProtocolDirectRequest, body: body, contentType: contentType, modelName: input.Model,

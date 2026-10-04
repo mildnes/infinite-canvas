@@ -145,6 +145,12 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		failAIChannelSelect(w, err, "AI 接口请求失败")
 		return
 	}
+	body, contentType, imageOutputFormat, err := normalizeImageOutputFormatRequest(body, contentType, channel, modelName, path)
+	if err != nil {
+		log.Printf("AI proxy image output format normalization failed: model=%s channel=%s err=%v", modelName, channel.ID, err)
+		Fail(w, "AI 图片输出格式参数无效")
+		return
+	}
 	credits := 0
 	if userChannelID == "" {
 		credits, err = service.ModelCost(channel.ID, modelName)
@@ -187,15 +193,17 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		}
 	}
 	copyAIResponse(w, request, channel, aiLogContext{
-		StartedAt:       startedAt,
-		Endpoint:        path,
-		Method:          http.MethodPost,
-		Model:           modelName,
-		Channel:         channel,
-		UserID:          user.ID,
-		UserDisplayName: firstNonEmpty(user.DisplayName, user.Username),
-		Credits:         credits,
-		RequestBody:     summarizeAIRequest(body, contentType),
+		StartedAt:         startedAt,
+		Endpoint:          path,
+		Method:            http.MethodPost,
+		Model:             modelName,
+		Channel:           channel,
+		UserID:            user.ID,
+		UserDisplayName:   firstNonEmpty(user.DisplayName, user.Username),
+		Credits:           credits,
+		RequestBody:       summarizeAIRequest(body, contentType),
+		ImageOutputFormat: imageOutputFormat.Format,
+		ImageOutputNotice: imageOutputFormat.Notice,
 	}, func() {
 		if credits > 0 {
 			if err := service.RefundUserCredits(user.ID, channel.ID, modelName, credits, upstreamPath); err != nil {
@@ -213,15 +221,17 @@ func geminiStreamRequested(body []byte) bool {
 }
 
 type aiLogContext struct {
-	StartedAt       time.Time
-	Endpoint        string
-	Method          string
-	Model           string
-	Channel         model.ModelChannel
-	UserID          string
-	UserDisplayName string
-	Credits         int
-	RequestBody     string
+	StartedAt         time.Time
+	Endpoint          string
+	Method            string
+	Model             string
+	Channel           model.ModelChannel
+	UserID            string
+	UserDisplayName   string
+	Credits           int
+	RequestBody       string
+	ImageOutputFormat string
+	ImageOutputNotice string
 }
 
 func copyAIResponse(w http.ResponseWriter, request *http.Request, channel model.ModelChannel, logContext aiLogContext, onFailure func()) {
@@ -247,13 +257,19 @@ func copyAIResponse(w http.ResponseWriter, request *http.Request, channel model.
 		Fail(w, readUpstreamAIErrorMessage(payload, response.StatusCode))
 		return
 	}
+	if logContext.ImageOutputFormat != "" {
+		w.Header().Set("X-Image-Output-Format", logContext.ImageOutputFormat)
+	}
+	if logContext.ImageOutputNotice != "" {
+		w.Header().Set("X-Image-Output-Notice", "fallback-default")
+	}
 
 	if copyAIProtocolResponse(w, response, request, channel, logContext, onFailure) {
 		return
 	}
 
 	for key, values := range response.Header {
-		if strings.EqualFold(key, "Content-Length") {
+		if strings.EqualFold(key, "Content-Length") || strings.EqualFold(key, "X-Image-Output-Format") || strings.EqualFold(key, "X-Image-Output-Notice") {
 			continue
 		}
 		for _, value := range values {
@@ -292,6 +308,7 @@ func saveAIProxyLog(context aiLogContext, status int, responseBody string, error
 	if context.StartedAt.IsZero() {
 		context.StartedAt = time.Now()
 	}
+	context.RequestBody = appendImageOutputLogMetadata(context.RequestBody, context.ImageOutputFormat, context.ImageOutputNotice)
 	if service.IsGeminiChannel(context.Channel) {
 		if context.Endpoint == "/images/generations" || context.Endpoint == "/images/edits" || context.Endpoint == "/audio/speech" {
 			responseBody = "[redacted Gemini media response]"
@@ -314,6 +331,25 @@ func saveAIProxyLog(context aiLogContext, status int, responseBody string, error
 		ResponseBody:    responseBody,
 		Error:           errorMessage,
 	})
+}
+
+func appendImageOutputLogMetadata(requestBody string, format string, notice string) string {
+	if format == "" {
+		return requestBody
+	}
+	var payload map[string]any
+	if json.Unmarshal([]byte(requestBody), &payload) != nil || payload == nil {
+		payload = map[string]any{"request": requestBody}
+	}
+	payload["_image_output_format"] = format
+	if notice != "" {
+		payload["_image_output_notice"] = notice
+	}
+	encoded, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return requestBody
+	}
+	return string(encoded)
 }
 
 func firstNonEmpty(values ...string) string {

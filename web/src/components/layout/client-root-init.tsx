@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { App } from "antd";
 
 import { fetchUserConfig } from "@/services/api/user-config";
+import { normalizeImageOutputFormat } from "@/lib/image-output-format";
 import { clearStorageConfigCache as clearImageStorageConfigCache, defaultUserStorageProvider, defaultUserWebDAVStorageProvider, saveUserStorageProvider, saveUserWebDAVStorageProvider, STORAGE_SYNC_COMPLETED_EVENT, STORAGE_SYNC_FAILED_EVENT } from "@/services/image-storage";
 import { clearStorageConfigCache as clearFileStorageConfigCache } from "@/services/file-storage";
 import { defaultConfig, useConfigStore, type AiConfig } from "@/stores/use-config-store";
@@ -91,6 +92,7 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
                 if (payload.modelConfig) {
                     Object.entries(payload.modelConfig)
                         .forEach(([key, value]) => updateConfig(key as keyof AiConfig, value as never));
+                    updateConfig("imageOutputFormat", normalizeImageOutputFormat(payload.modelConfig.imageOutputFormat));
                 }
                 updateConfig("syncStorageConfig", syncS3);
                 updateConfig("syncWebDAVStorageConfig", syncWebDAV);

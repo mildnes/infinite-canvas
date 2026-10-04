@@ -42,6 +42,7 @@ export type CanvasAgentContext = {
         audioModel: string;
         imageQuality: string;
         imageSize: string;
+        imageOutputFormat: string;
         videoQuality: string;
         videoSize: string;
         imageCount: string;
@@ -122,6 +123,7 @@ export function buildCanvasAgentContext(input: BuildCanvasAgentContextInput): Ca
             audioModel,
             imageQuality: input.config.quality,
             imageSize: input.config.size,
+            imageOutputFormat: input.config.imageOutputFormat || "auto",
             videoQuality: input.config.vquality,
             videoSize: input.config.videoSize,
             imageCount: input.config.canvasImageCount || input.config.count,

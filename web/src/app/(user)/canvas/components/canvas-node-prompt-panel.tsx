@@ -115,10 +115,10 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                         <>
                             <ModelPicker className="!w-[180px] !min-w-0 !shrink-0" config={config} value={config.model} channelId={config.imageChannelId} workflowRef={node.metadata?.workflowRef} onWorkflowChange={(workflowRef) => onConfigChange(node.id, { workflowRef })} onChange={(model, channelId) => onConfigChange(node.id, { model, channelId })} capability="image" onMissingConfig={() => openConfigDialog(true)} />
                             <CanvasImageSettingsPopover
-                                config={node.metadata?.workflowRef ? { ...config, model: "" } : config}
+                                config={config}
                                 placement="topLeft"
                                 buttonClassName="!h-10 !w-[148px] !shrink-0 !justify-start !rounded-full !px-3"
-                                onConfigChange={(key, value) => onConfigChange(node.id, key === "count" ? { count: Number(value) || 1 } : { [key]: value })}
+                                onConfigChange={(key, value) => onConfigChange(node.id, key === "count" ? { count: Number(value) || 1 } : key === "imageOutputFormat" ? { imageOutputFormat: value as CanvasNodeMetadata["imageOutputFormat"] } : { [key]: value })}
                                 onMissingConfig={() => openConfigDialog(true)}
                                 onOpenChange={onImageSettingsOpenChange}
                                 showSize={!isPanorama}
@@ -189,12 +189,15 @@ function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: Can
     return {
         ...globalConfig,
         model: mode === "text" ? resolveModelForCapability(globalConfig, node.metadata?.model, "text") : node.metadata?.model || defaultModel || (mode === "audio" ? defaultConfig.audioModel : globalConfig.model || defaultConfig.model),
+        imageModel: mode === "image" ? node.metadata?.model || defaultModel || globalConfig.imageModel : globalConfig.imageModel,
+        imageWorkflowRef: mode === "image" ? node.metadata?.workflowRef : globalConfig.imageWorkflowRef,
         activeChannelId,
         imageChannelId,
         videoChannelId,
         textChannelId,
         audioChannelId,
         quality: node.metadata?.quality || globalConfig.quality || defaultConfig.quality,
+        imageOutputFormat: node.metadata?.imageOutputFormat || "auto",
         size: isPanoramaNodeType(node.type) ? PANORAMA_IMAGE_SIZE : node.metadata?.size || (mode === "video" ? globalConfig.videoSize || defaultConfig.videoSize : globalConfig.size || defaultConfig.size),
         videoSeconds: node.metadata?.seconds || globalConfig.videoSeconds || defaultConfig.videoSeconds,
         vquality: node.metadata?.vquality || globalConfig.vquality || defaultConfig.vquality,

@@ -5,6 +5,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 import { directAIProviderForProtocol, isWorkflowProtocol, type DirectAIProvider, type ModelChannelProtocol } from "@/lib/model-channel";
+import type { ImageOutputFormatSelection, ImageOutputCapabilities } from "@/lib/image-output-format";
 import type { WorkflowRef, WorkflowSummary } from "@/lib/workflow-channel";
 import { apiGet } from "@/services/api/request";
 import type { AdminPublicSettings } from "@/services/api/admin";
@@ -75,6 +76,7 @@ export type AiConfig = {
     textModels: string[];
     audioModels: string[];
     quality: string;
+    imageOutputFormat?: ImageOutputFormatSelection;
     size: string;
     videoSize: string;
     count: string;
@@ -93,7 +95,7 @@ export type AiConfig = {
         workflowAgent: string;
     };
     localChannels: LocalModelChannel[];
-    publicChannels: Array<{ id?: string; protocol?: LocalModelChannel["protocol"]; name?: string; baseUrl?: string; models?: string[]; workflows?: WorkflowSummary[]; weight?: number; timeout?: number; enabled?: boolean; remark?: string }>;
+    publicChannels: Array<{ id?: string; protocol?: LocalModelChannel["protocol"]; name?: string; baseUrl?: string; models?: string[]; imageOutputCapabilities?: ImageOutputCapabilities; workflows?: WorkflowSummary[]; weight?: number; timeout?: number; enabled?: boolean; remark?: string }>;
     syncStorageConfig: boolean;
     syncWebDAVStorageConfig: boolean;
     activeChannelId: string;
@@ -149,6 +151,7 @@ export const defaultConfig: AiConfig = {
     textModels: [],
     audioModels: [],
     quality: "auto",
+    imageOutputFormat: "png-transparent",
     size: "1:1",
     videoSize: "1280x720",
     count: "1",
@@ -419,7 +422,13 @@ export const useConfigStore = create<ConfigStore>()(
             merge: (persisted, current) => {
                 const persistedState = (persisted || {}) as Partial<ConfigStore>;
                 const persistedConfig = (persistedState.config || {}) as Partial<AiConfig>;
-                const config = { ...defaultConfig, ...persistedConfig };
+                const config = {
+                    ...defaultConfig,
+                    ...persistedConfig,
+                    imageOutputFormat: Object.prototype.hasOwnProperty.call(persistedConfig, "imageOutputFormat")
+                        ? persistedConfig.imageOutputFormat
+                        : persistedState.config ? "auto" : defaultConfig.imageOutputFormat,
+                };
                 const localChannels = normalizeLocalChannels(config);
                 const modelChannels = localChannels.filter((channel) => !isWorkflowProtocol(channel.protocol));
                 const localModels = normalizeModelList(modelChannels.flatMap((channel) => channel.models));

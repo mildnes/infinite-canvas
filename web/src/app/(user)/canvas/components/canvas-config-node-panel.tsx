@@ -119,7 +119,7 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, videoFram
                 {mode === "video" ? (
                     <CanvasVideoSettingsPopover config={config} placement="topRight" buttonClassName="canvas-compact-control !h-10 !w-full !justify-start !rounded-lg !px-2" frameOptions={videoFrameOptions} resourceOptions={videoResourceOptions} metadata={node.metadata} firstFrameNodeId={node.metadata?.firstFrameNodeId} lastFrameNodeId={node.metadata?.lastFrameNodeId} onFrameChange={(patch) => onConfigChange(node.id, patch)} onMetadataChange={(patch) => onConfigChange(node.id, patch)} onConfigChange={(key, value) => onConfigChange(node.id, videoConfigPatch(key, value))} />
                 ) : mode === "image" ? (
-                    <CanvasImageSettingsPopover config={node.metadata?.workflowRef ? { ...config, model: "" } : config} placement="topRight" autoAdjustOverflow={false} buttonClassName="canvas-compact-control !h-10 !w-full !justify-start !rounded-lg !px-2" onConfigChange={(key, value) => onConfigChange(node.id, key === "count" ? { count: Number(value) || 1 } : { [key]: value })} />
+                    <CanvasImageSettingsPopover config={config} placement="topRight" autoAdjustOverflow={false} buttonClassName="canvas-compact-control !h-10 !w-full !justify-start !rounded-lg !px-2" onConfigChange={(key, value) => onConfigChange(node.id, key === "count" ? { count: Number(value) || 1 } : key === "imageOutputFormat" ? { imageOutputFormat: value as CanvasNodeMetadata["imageOutputFormat"] } : { [key]: value })} />
                 ) : mode === "audio" ? (
                     <CanvasAudioSettingsPopover config={config} resourceOptions={videoResourceOptions} metadata={node.metadata} onMetadataChange={(patch) => onConfigChange(node.id, patch)} placement="topRight" buttonClassName="canvas-compact-control !h-10 !w-full !justify-start !rounded-lg !px-2" onConfigChange={(key, value) => onConfigChange(node.id, audioConfigPatch(key, value))} />
                 ) : null}
@@ -167,12 +167,15 @@ function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: Can
     return {
         ...globalConfig,
         model: node.metadata?.model || defaultModel || (mode === "audio" ? defaultConfig.audioModel : globalConfig.model || defaultConfig.model),
+        imageModel: mode === "image" ? node.metadata?.model || defaultModel || globalConfig.imageModel : globalConfig.imageModel,
+        imageWorkflowRef: mode === "image" ? node.metadata?.workflowRef : globalConfig.imageWorkflowRef,
         activeChannelId,
         imageChannelId,
         videoChannelId,
         textChannelId,
         audioChannelId,
         quality: node.metadata?.quality || globalConfig.quality || defaultConfig.quality,
+        imageOutputFormat: node.metadata?.imageOutputFormat || "auto",
         size: node.metadata?.size || (mode === "video" ? globalConfig.videoSize || defaultConfig.videoSize : globalConfig.size || defaultConfig.size),
         videoSeconds: node.metadata?.seconds || globalConfig.videoSeconds || defaultConfig.videoSeconds,
         vquality: node.metadata?.vquality || globalConfig.vquality || defaultConfig.vquality,
@@ -210,7 +213,7 @@ function modelChannelId(config: AiConfig, mode: CanvasGenerationMode) {
 }
 
 function modePatch(config: AiConfig, mode: CanvasGenerationMode): Partial<CanvasNodeMetadata> {
-    if (mode === "image") return { generationMode: mode, model: config.imageModel, channelId: config.imageChannelId, workflowRef: config.imageWorkflowRef };
+    if (mode === "image") return { generationMode: mode, model: config.imageModel, channelId: config.imageChannelId, imageOutputFormat: config.imageOutputFormat || "auto", workflowRef: config.imageWorkflowRef };
     if (mode === "video") return { generationMode: mode, model: config.videoModel, channelId: config.videoChannelId, workflowRef: config.videoWorkflowRef };
     if (mode === "text") return { generationMode: mode, model: config.textModel, channelId: config.textChannelId, workflowRef: undefined };
     return { generationMode: mode, model: config.audioModel, channelId: config.audioChannelId || config.activeChannelId, workflowRef: config.audioWorkflowRef };

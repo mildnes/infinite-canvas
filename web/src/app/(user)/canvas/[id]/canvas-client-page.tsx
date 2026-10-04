@@ -13,6 +13,7 @@ import { createCanvasAudioTask, pollCanvasAudioTaskStatus, type CanvasAudioTask 
 import { createVideoGenerationTask, pollVideoGenerationTaskStatus, VIDEO_POLL_INTERVAL_MS, type VideoResponse } from "@/services/api/video";
 import { getWorkflowTask, submitWorkflowTask, workflowMediaSource, workflowMediaStorageKey, type WorkflowGenerationTask } from "@/services/api/workflow-generation";
 import type { WorkflowRef } from "@/lib/workflow-channel";
+import { hasImageOutputFormatContext, imageOutputCapabilityForConfig, resolveImageOutputFormat } from "@/lib/image-output-format";
 import { channelProtocolForConfig, defaultConfig, resolveModelForCapability, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { collectImageStorageKeys, deleteStoredImages, resolveImageUrl, uploadImage, uploadRemoteImageToServer, type UploadedImage } from "@/services/image-storage";
 import { downloadRemoteMedia, resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer, type UploadedFile } from "@/services/file-storage";
@@ -351,6 +352,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const addAsset = useAssetStore((state) => state.addAsset);
     const cleanupAssetImages = useAssetStore((state) => state.cleanupImages);
     const currentUserToken = useUserStore((state) => state.token);
+    const currentAccountId = useUserStore((state) => state.user?.id || "anonymous");
     const hydrated = useCanvasStore((state) => state.hydrated);
     const createProject = useCanvasStore((state) => state.createProject);
     const openProject = useCanvasStore((state) => state.openProject);
@@ -422,6 +424,28 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const [dropTargetGroupId, setDropTargetGroupId] = useState<string | null>(null);
     const [referencePickerNodeId, setReferencePickerNodeId] = useState<string | null>(null);
     const [canvasNow, setCanvasNow] = useState(Date.now());
+    const warnedImageOutputFallbacksRef = useRef(new Set<string>());
+    const resolveCanvasImageOutputFormat = useCallback((config: AiConfig, notifyFallback = true) => {
+        const model = config.imageModel || config.model;
+        const requestedFormat = config.imageOutputFormat || "auto";
+        const capability = imageOutputCapabilityForConfig(config, model);
+        const resolved = resolveImageOutputFormat(requestedFormat, capability);
+        const fallbackToAuto = requestedFormat !== "auto" && !capability && (Boolean(config.imageWorkflowRef) || hasImageOutputFormatContext(config, model));
+        const format = fallbackToAuto ? "auto" : resolved.format;
+        if (notifyFallback && (resolved.fellBack || fallbackToAuto)) {
+            const channelId = config.imageWorkflowRef?.channelId || config.imageChannelId || config.activeChannelId || "auto";
+            const key = `${currentAccountId}:${projectId}:${channelId}:${model}:${requestedFormat}`;
+            if (!warnedImageOutputFallbacksRef.current.has(key)) {
+                warnedImageOutputFallbacksRef.current.add(key);
+                message.info(config.imageWorkflowRef && fallbackToAuto
+                    ? "当前工作流未声明图片输出格式，已使用工作流默认格式"
+                    : resolved.fellBack
+                        ? "当前渠道不支持所选格式，已回退到渠道默认格式"
+                        : "当前渠道未声明图片输出格式能力，已恢复渠道默认格式");
+            }
+        }
+        return { ...config, imageOutputFormat: format };
+    }, [currentAccountId, message, projectId]);
     const resolvedAgentConfig = useMemo<CanvasAgentConfig>(() => {
         const imageSelection = resolveCanvasAgentImageSelection(effectiveConfig, agentConfig);
         return agentConfig ? { ...agentConfig, ...imageSelection, textApiMode: agentConfig.textApiMode || "chat", textReasoningEnabled: agentConfig.textReasoningEnabled ?? false, textStreaming: agentConfig.textStreaming ?? false, autoGenerateMedia: agentConfig.autoGenerateMedia ?? true } : {
@@ -827,8 +851,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         (type: CanvasNodeType, pending: PendingConnectionCreate) => {
             const workflowRef = isCanvasImageNodeType(type) ? effectiveConfig.imageWorkflowRef : type === CanvasNodeType.Video ? effectiveConfig.videoWorkflowRef : type === CanvasNodeType.Audio ? effectiveConfig.audioWorkflowRef : undefined;
             const metadata = type === CanvasNodeType.Config
-                ? { model: effectiveConfig.imageModel || effectiveConfig.model, size: effectiveConfig.size, count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count), workflowRef: effectiveConfig.imageWorkflowRef }
-                : workflowRef ? { workflowRef } : undefined;
+                ? { model: effectiveConfig.imageModel || effectiveConfig.model, channelId: effectiveConfig.imageChannelId, size: effectiveConfig.size, count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count), imageOutputFormat: effectiveConfig.imageOutputFormat || "auto", workflowRef: effectiveConfig.imageWorkflowRef }
+                : isCanvasImageNodeType(type) ? { imageOutputFormat: effectiveConfig.imageOutputFormat || "auto", workflowRef } : workflowRef ? { workflowRef } : undefined;
             const newNode = createCanvasNode(type, pending.position, metadata);
             const connection = normalizeConnection(pending.connection.nodeId, newNode.id, [...nodesRef.current, newNode], pending.connection.handleType);
             if (!connection) {
@@ -843,7 +867,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             setPendingConnectionCreate(null);
             setConnecting(null);
         },
-        [effectiveConfig.audioWorkflowRef, effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.imageWorkflowRef, effectiveConfig.model, effectiveConfig.size, effectiveConfig.videoWorkflowRef, message, setConnecting],
+        [effectiveConfig.audioWorkflowRef, effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageChannelId, effectiveConfig.imageModel, effectiveConfig.imageOutputFormat, effectiveConfig.imageWorkflowRef, effectiveConfig.model, effectiveConfig.size, effectiveConfig.videoWorkflowRef, message, setConnecting],
     );
 
     const cancelPendingConnectionCreate = useCallback(() => {
@@ -1104,11 +1128,13 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 type === CanvasNodeType.Config
                     ? {
                         model: effectiveConfig.imageModel || effectiveConfig.model,
+                        channelId: effectiveConfig.imageChannelId,
                         size: effectiveConfig.size,
                         count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count),
+                        imageOutputFormat: effectiveConfig.imageOutputFormat || "auto",
                         workflowRef: effectiveConfig.imageWorkflowRef,
                     }
-                    : workflowRef ? { workflowRef } : undefined;
+                    : isCanvasImageNodeType(type) ? { imageOutputFormat: effectiveConfig.imageOutputFormat || "auto", workflowRef } : workflowRef ? { workflowRef } : undefined;
             const newNode = createCanvasNode(
                 type,
                 targetPosition,
@@ -1123,7 +1149,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             setSelectedConnectionId(null);
             if (type !== CanvasNodeType.Text && type !== CanvasNodeType.Audio && type !== CanvasNodeType.Director) setDialogNodeId(newNode.id);
         },
-        [effectiveConfig.audioWorkflowRef, effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.imageWorkflowRef, effectiveConfig.model, effectiveConfig.size, effectiveConfig.videoWorkflowRef, getCanvasCenter],
+        [effectiveConfig.audioWorkflowRef, effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageChannelId, effectiveConfig.imageModel, effectiveConfig.imageOutputFormat, effectiveConfig.imageWorkflowRef, effectiveConfig.model, effectiveConfig.size, effectiveConfig.videoWorkflowRef, getCanvasCenter],
     );
 
     const deleteCanvasTaskRecords = useCallback(
@@ -2187,7 +2213,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
     const downloadNodeImage = useCallback((node: CanvasNodeData) => {
         if ((!isCanvasImageNodeType(node.type) && node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) || !node.metadata?.content) return;
-        saveAs(node.metadata.content, `canvas-${node.type}-${node.id}.${node.type === CanvasNodeType.Video ? "mp4" : node.type === CanvasNodeType.Audio ? audioExtension(node.metadata.mimeType) : imageExtension(node.metadata.content)}`);
+        saveAs(node.metadata.content, `canvas-${node.type}-${node.id}.${node.type === CanvasNodeType.Video ? "mp4" : node.type === CanvasNodeType.Audio ? audioExtension(node.metadata.mimeType) : imageExtension(node.metadata.content, node.metadata.mimeType)}`);
     }, []);
 
     const disconnectNodeReference = useCallback((fromNodeId: string, toNodeId: string) => {
@@ -2567,7 +2593,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         async (node: CanvasNodeData, payload: CanvasImageMaskEditPayload) => {
             if (!node.metadata?.content) return;
             const baseGenerationConfig = buildGenerationConfig(effectiveConfig, node, "image");
-            const generationConfig = { ...baseGenerationConfig, model: payload.model || baseGenerationConfig.model, activeChannelId: payload.channelId || baseGenerationConfig.imageChannelId || baseGenerationConfig.activeChannelId, imageChannelId: payload.channelId || baseGenerationConfig.imageChannelId, count: "1", size: node.metadata?.size || "auto" };
+            const selectedModel = payload.model || baseGenerationConfig.model;
+            const generationConfig = resolveCanvasImageOutputFormat({ ...baseGenerationConfig, model: selectedModel, imageModel: selectedModel, activeChannelId: payload.channelId || baseGenerationConfig.imageChannelId || baseGenerationConfig.activeChannelId, imageChannelId: payload.channelId || baseGenerationConfig.imageChannelId, count: "1", size: node.metadata?.size || "auto" });
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
                 openConfigDialog(true);
                 return;
@@ -2606,7 +2633,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, isAiConfigReady, message, openConfigDialog, projectId],
+        [effectiveConfig, isAiConfigReady, message, openConfigDialog, projectId, resolveCanvasImageOutputFormat],
     );
 
     const upscaleImageNode = useCallback(async (node: CanvasNodeData, params: CanvasImageUpscaleParams) => {
@@ -2644,7 +2671,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const generateAngleNode = useCallback(
         async (node: CanvasNodeData, params: CanvasImageAngleParams) => {
             if (!node.metadata?.content) return;
-            const generationConfig = { ...buildGenerationConfig(effectiveConfig, node, "image"), count: "1" };
+            const generationConfig = resolveCanvasImageOutputFormat({ ...buildGenerationConfig(effectiveConfig, node, "image"), count: "1" });
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
                 openConfigDialog(true);
                 return;
@@ -2685,7 +2712,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, message, openConfigDialog, projectId],
+        [effectiveConfig, message, openConfigDialog, projectId, resolveCanvasImageOutputFormat],
     );
 
     const handleFontSizeChange = useCallback((nodeId: string, fontSize: number) => {
@@ -2868,8 +2895,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const handleGenerateNode = useCallback(
         async (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => {
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
-            const generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, mode);
             const workflowRef = mode === "text" ? undefined : sourceNode?.metadata?.workflowRef;
+            const rawGenerationConfig = buildGenerationConfig(effectiveConfig, sourceNode, mode);
+            const generationConfig = mode === "image" ? resolveCanvasImageOutputFormat({ ...rawGenerationConfig, imageWorkflowRef: workflowRef || rawGenerationConfig.imageWorkflowRef }) : rawGenerationConfig;
             if (workflowRef && !useUserStore.getState().token) {
                 message.error("工作流生成需要先登录");
                 return;
@@ -3329,7 +3357,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, openConfigDialog],
+        [effectiveConfig, message, openConfigDialog, resolveCanvasImageOutputFormat],
     );
 
     const getCanvasAgentContext = useCallback(
@@ -3488,6 +3516,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         },
                         imageQuality: agentEffectiveConfig.quality,
                         imageSize: agentEffectiveConfig.size,
+                        imageOutputFormat: agentEffectiveConfig.imageOutputFormat || "auto",
                         videoQuality: agentEffectiveConfig.vquality,
                         videoSize: agentEffectiveConfig.videoSize,
                         autoGenerateMedia: resolvedAgentConfig.autoGenerateMedia,
@@ -3692,8 +3721,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         return { ok: false, code: "image_reference_required", message: "图片编辑需要至少一个已有内容的图片节点" };
                     }
 
-                    const generationConfig = buildGenerationConfig(agentEffectiveConfig, undefined, mode);
                     const agentWorkflowRef = mode === "image" ? agentEffectiveConfig.imageWorkflowRef : mode === "video" ? agentEffectiveConfig.videoWorkflowRef : agentEffectiveConfig.audioWorkflowRef;
+                    const rawGenerationConfig = buildGenerationConfig(agentEffectiveConfig, undefined, mode);
+                    const generationConfig = mode === "image" ? resolveCanvasImageOutputFormat({ ...rawGenerationConfig, imageWorkflowRef: agentWorkflowRef || rawGenerationConfig.imageWorkflowRef }) : rawGenerationConfig;
                     if (!agentWorkflowRef && (!generationConfig.model || !isAiConfigReady(generationConfig, generationConfig.model))) {
                         return { ok: false, code: "model_not_configured", message: "请先在全局配置中完成" + (mode === "video" ? "视频" : mode === "audio" ? "音频" : "图片") + "模型配置" };
                     }
@@ -3711,6 +3741,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     };
                     if (mode === "image") {
                         metadata.quality = generationConfig.quality;
+                        metadata.imageOutputFormat = generationConfig.imageOutputFormat || "auto";
                         metadata.count = typeof args.count === "number" ? Math.max(1, Math.floor(args.count)) : 1;
                     }
                     if (mode === "video") {
@@ -3815,18 +3846,22 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             const batchRoot = node.metadata?.batchRootId ? nodesRef.current.find((item) => item.id === node.metadata?.batchRootId) : null;
             const savedImageMetadata = isCanvasImageNodeType(node.type) ? { ...batchRoot?.metadata, ...node.metadata } : undefined;
             const hasSavedImageMetadata = Boolean(savedImageMetadata?.generationType);
-            const generationConfig =
+            const rawGenerationConfig =
                 hasSavedImageMetadata && savedImageMetadata
                     ? {
                         ...effectiveConfig,
                         model: savedImageMetadata.model || effectiveConfig.imageModel || effectiveConfig.model,
                         imageChannelId: savedImageMetadata.channelId || effectiveConfig.imageChannelId,
+                        imageModel: savedImageMetadata.model || effectiveConfig.imageModel,
+                        imageWorkflowRef: retryWorkflowRef,
                         activeChannelId: savedImageMetadata.channelId || effectiveConfig.imageChannelId,
                         quality: savedImageMetadata.quality || effectiveConfig.quality,
+                        imageOutputFormat: savedImageMetadata.imageOutputFormat || "auto",
                         size: isPanorama ? PANORAMA_IMAGE_SIZE : savedImageMetadata.size || effectiveConfig.size,
                         count: "1",
                     }
                     : { ...buildGenerationConfig(effectiveConfig, sourceNode, node.type === CanvasNodeType.Text ? "text" : node.type === CanvasNodeType.Video ? "video" : node.type === CanvasNodeType.Audio ? "audio" : "image"), count: "1" };
+            const generationConfig = isCanvasImageNodeType(node.type) ? resolveCanvasImageOutputFormat({ ...rawGenerationConfig, imageWorkflowRef: retryWorkflowRef || rawGenerationConfig.imageWorkflowRef }, true) : rawGenerationConfig;
             if (retryWorkflowRef && !useUserStore.getState().token) {
                 message.error("工作流生成需要先登录");
                 return;
@@ -3903,7 +3938,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     ? await workflowImageTask(await submitCanvasWorkflowTask(retryWorkflowRef, generationConfig, "image", requestPrompt, useReferenceImages ? retryImages : [], [], [], retryTargetId, projectId, retryImageTaskId))
                     : await createCanvasImageTask({ ...generationConfig, quality: isPanorama && generationConfig.quality === "auto" ? "medium" : generationConfig.quality }, requestPrompt, useReferenceImages ? retryImages : [], { nodeId: node.id, sourceId: projectId, clientTaskId: retryImageTaskId });
                 const generationMetadata = savedImageMetadata?.generationType
-                    ? { generationType: savedImageMetadata.generationType, model: generationConfig.model, channelId: generationConfig.imageChannelId || generationConfig.activeChannelId, size: generationConfig.size, quality: generationConfig.quality, count: savedImageMetadata.count || 1, references: savedImageMetadata.references }
+                    ? { generationType: savedImageMetadata.generationType, model: generationConfig.model, channelId: generationConfig.imageChannelId || generationConfig.activeChannelId, size: generationConfig.size, quality: generationConfig.quality, imageOutputFormat: generationConfig.imageOutputFormat || "auto", count: savedImageMetadata.count || 1, references: savedImageMetadata.references }
                     : buildImageGenerationMetadata(useReferenceImages ? "edit" : "generation", generationConfig, 1, retryImages);
                 setNodes((prev) => {
                     const next = prev.map((item) =>
@@ -3941,7 +3976,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, message, openConfigDialog, projectId],
+        [effectiveConfig, message, openConfigDialog, projectId, resolveCanvasImageOutputFormat],
     );
 
     const generateImageFromTextNode = useCallback(
@@ -3963,8 +3998,10 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 {
                     prompt: "",
                     model: effectiveConfig.imageModel || effectiveConfig.model,
+                    channelId: effectiveConfig.imageChannelId,
                     size: effectiveConfig.size,
                     count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count),
+                    imageOutputFormat: effectiveConfig.imageOutputFormat || "auto",
                 },
             );
             const connection = { id: nanoid(), fromNodeId: sourceNode.id, toNodeId: configNode.id };
@@ -3978,7 +4015,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             setSelectedConnectionId(null);
             setDialogNodeId(configNode.id);
         },
-        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.model, effectiveConfig.size, message],
+        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageChannelId, effectiveConfig.imageModel, effectiveConfig.imageOutputFormat, effectiveConfig.model, effectiveConfig.size, message],
     );
 
     const insertAssistantImage = useCallback(
@@ -5071,8 +5108,9 @@ function Shortcut({ keys, value }: { keys: string[]; value: string }) {
     );
 }
 
-function imageExtension(dataUrl: string) {
-    return dataUrl.match(/^data:image[/]([^;]+)/)?.[1] || dataUrl.match(/image[/]([^;]+)/)?.[1] || "png";
+function imageExtension(dataUrl: string, mimeType?: string) {
+    const extension = mimeType?.toLowerCase().match(/^image[/]([^;+]+)/)?.[1] || dataUrl.match(/^data:image[/]([^;]+)/)?.[1] || dataUrl.match(/image[/]([^;]+)/)?.[1] || "png";
+    return extension === "jpeg" ? "jpg" : extension;
 }
 
 function audioExtension(mimeType?: string) {
@@ -5130,6 +5168,7 @@ function buildImageGenerationMetadata(type: CanvasImageGenerationType, config: A
         channelId: config.imageChannelId || config.activeChannelId,
         size: config.size,
         quality: config.quality,
+        imageOutputFormat: config.imageOutputFormat || "auto",
         count,
         references: references.map(referenceUrl).filter((url): url is string => Boolean(url)),
     };
@@ -5753,12 +5792,15 @@ function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefine
     return {
         ...config,
         model: mode === "text" ? resolveModelForCapability(config, node?.metadata?.model, "text") : node?.metadata?.model || defaultModel || (mode === "audio" ? defaultConfig.audioModel : config.model || defaultConfig.model),
+        imageModel: mode === "image" ? node?.metadata?.model || defaultModel || config.imageModel : config.imageModel,
         activeChannelId,
         imageChannelId,
         videoChannelId,
         textChannelId,
         audioChannelId,
         quality: node?.metadata?.quality || config.quality || defaultConfig.quality,
+        imageWorkflowRef: mode === "image" ? (node ? node.metadata?.workflowRef : config.imageWorkflowRef) : config.imageWorkflowRef,
+        imageOutputFormat: node ? node.metadata?.imageOutputFormat || "auto" : config.imageOutputFormat || "auto",
         size: isPanoramaNodeType(node?.type) ? PANORAMA_IMAGE_SIZE : node?.metadata?.size || (mode === "video" ? config.videoSize || defaultConfig.videoSize : config.size || defaultConfig.size),
         videoSeconds: node?.metadata?.seconds || config.videoSeconds || defaultConfig.videoSeconds,
         vquality: node?.metadata?.vquality || config.vquality || defaultConfig.vquality,
@@ -5816,6 +5858,10 @@ async function submitCanvasWorkflowTask(ref: WorkflowRef, config: AiConfig, mode
         Promise.all(audios.map((audio) => workflowMediaSource(audio.url, audio.storageKey))),
     ]);
     if (useUserStore.getState().token !== token) throw new Error("登录状态已变化");
+    const imageOutputCapability = mode === "image" ? imageOutputCapabilityForConfig(config, config.imageModel || config.model) : null;
+    const imageOutputFormat = imageOutputCapability
+        ? resolveImageOutputFormat(config.imageOutputFormat || "auto", imageOutputCapability).format
+        : "auto";
     const task = await submitWorkflowTask(token, {
         ref,
         expectedCapability: mode,
@@ -5826,6 +5872,7 @@ async function submitCanvasWorkflowTask(ref: WorkflowRef, config: AiConfig, mode
         referenceAudios,
         size: config.size,
         quality: config.quality,
+        imageOutputFormat: mode === "image" && imageOutputFormat !== "auto" ? imageOutputFormat : undefined,
         count: mode === "image" ? 1 : undefined,
         videoSeconds: config.videoSeconds,
         videoQuality: config.vquality,

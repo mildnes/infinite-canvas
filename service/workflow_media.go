@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"path"
@@ -223,6 +224,11 @@ func ValidateGeneratedMediaBytes(data []byte, declared string) error {
 }
 
 func generatedMediaPayload(data []byte, mimeType, sourceURL string) GeneratedMediaPayload {
+	detected := strings.TrimSpace(strings.Split(http.DetectContentType(data), ";")[0])
+	if strings.HasPrefix(detected, "image/") && isWorkflowResultMIME(detected) && mimeType != detected {
+		log.Printf("generated image MIME mismatch: declared=%s actual=%s", mimeType, detected)
+		mimeType = detected
+	}
 	sum := sha256.Sum256(data)
 	return GeneratedMediaPayload{Data: data, MimeType: mimeType, SourceURL: sourceURL, SHA256: hex.EncodeToString(sum[:])}
 }

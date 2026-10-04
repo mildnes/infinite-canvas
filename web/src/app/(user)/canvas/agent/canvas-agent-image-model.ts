@@ -13,13 +13,15 @@ export function resolveCanvasAgentImageSelection(config: AiConfig, agentConfig?:
     return {
         imageModel,
         imageChannelId: requestedChannel?.id || defaultChannel?.id || modelChannels[0]?.id || config.imageChannelId,
+        imageOutputFormat: agentConfig ? agentConfig.imageOutputFormat || "auto" : config.imageOutputFormat || "auto",
     };
 }
 
-export function applyCanvasAgentImageSelection(config: AiConfig, selection: Pick<CanvasAgentConfig, "imageModel" | "imageChannelId">): AiConfig {
+export function applyCanvasAgentImageSelection(config: AiConfig, selection: Pick<CanvasAgentConfig, "imageModel" | "imageChannelId" | "imageOutputFormat">): AiConfig {
     return {
         ...config,
         imageModel: selection.imageModel || config.imageModel,
         imageChannelId: selection.imageChannelId || config.imageChannelId,
+        imageOutputFormat: selection.imageOutputFormat || config.imageOutputFormat || "auto",
     };
 }

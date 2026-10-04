@@ -1,3 +1,5 @@
+import type { ImageOutputCapability } from "@/lib/image-output-format";
+
 export type WorkflowCapability = "image" | "video" | "audio";
 export type WorkflowKind = "workflow" | "app";
 
@@ -69,7 +71,9 @@ export type WorkflowEntry = {
     workflowGraph?: WorkflowGraphPreview;
 };
 
-export type WorkflowSummary = Pick<WorkflowEntry, "provider" | "kind" | "workflowId" | "title" | "capability" | "enabled">;
+export type WorkflowSummary = Pick<WorkflowEntry, "provider" | "kind" | "workflowId" | "title" | "capability" | "enabled"> & {
+    imageOutputCapability?: ImageOutputCapability;
+};
 
 export type WorkflowChannelData = {
     channelId: string;

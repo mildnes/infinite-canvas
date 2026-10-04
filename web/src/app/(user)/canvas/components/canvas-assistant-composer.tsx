@@ -72,8 +72,8 @@ export function CanvasAssistantComposer({
     const selectedImageModel = agentConfig.imageModel || effectiveConfig.imageModel;
     const selectedImageChannelId = agentConfig.imageChannelId || effectiveConfig.imageChannelId;
     const imageConfig = useMemo(
-        () => ({ ...effectiveConfig, model: selectedImageModel, imageModel: selectedImageModel, imageChannelId: selectedImageChannelId, quality: agentConfig.imageQuality, size: agentConfig.imageSize }),
-        [agentConfig.imageQuality, agentConfig.imageSize, effectiveConfig, selectedImageChannelId, selectedImageModel],
+        () => ({ ...effectiveConfig, model: selectedImageModel, imageModel: selectedImageModel, imageChannelId: selectedImageChannelId, imageOutputFormat: agentConfig.imageOutputFormat || effectiveConfig.imageOutputFormat || "auto", quality: agentConfig.imageQuality, size: agentConfig.imageSize }),
+        [agentConfig.imageOutputFormat, agentConfig.imageQuality, agentConfig.imageSize, effectiveConfig, selectedImageChannelId, selectedImageModel],
     );
     const videoConfig = useMemo(() => ({ ...effectiveConfig, vquality: agentConfig.videoQuality, size: agentConfig.videoSize }), [agentConfig.videoQuality, agentConfig.videoSize, effectiveConfig]);
     const reasoningEnabled = agentConfig.textReasoningEnabled === true;
@@ -156,6 +156,7 @@ export function CanvasAssistantComposer({
                             onConfigChange={(key, value) => {
                                 if (key === "quality") onAgentConfigChange({ imageQuality: value });
                                 else if (key === "size") onAgentConfigChange({ imageSize: value });
+                                else if (key === "imageOutputFormat") onAgentConfigChange({ imageOutputFormat: value as CanvasAgentConfig["imageOutputFormat"] });
                             }}
                         />
                         <CanvasVideoSettingsPopover

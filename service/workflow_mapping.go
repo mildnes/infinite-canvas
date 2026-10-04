@@ -21,31 +21,32 @@ type WorkflowRef struct {
 }
 
 type WorkflowRunInput struct {
-	Ref                   WorkflowRef    `json:"ref"`
-	ExpectedCapability    string         `json:"expectedCapability"`
-	Prompt                string         `json:"prompt"`
-	SystemPrompt          string         `json:"systemPrompt"`
-	FieldValues           map[string]any `json:"fieldValues"`
-	ReferenceImages       []string       `json:"referenceImages"`
-	ReferenceVideos       []string       `json:"referenceVideos"`
-	ReferenceAudios       []string       `json:"referenceAudios"`
-	Mask                  string         `json:"mask"`
-	Size                  string         `json:"size"`
-	Quality               string         `json:"quality"`
-	TransparentBackground bool           `json:"transparentBackground"`
-	Count                 int            `json:"count"`
-	VideoSeconds          string         `json:"videoSeconds"`
-	VideoQuality          string         `json:"videoQuality"`
-	VideoGenerateAudio    bool           `json:"videoGenerateAudio"`
-	VideoWatermark        bool           `json:"videoWatermark"`
-	AudioVoice            string         `json:"audioVoice"`
-	AudioFormat           string         `json:"audioFormat"`
-	AudioSpeed            float64        `json:"audioSpeed"`
-	AudioInstructions     string         `json:"audioInstructions"`
-	Source                string         `json:"source"`
-	SourceID              string         `json:"sourceId"`
-	NodeID                string         `json:"nodeId"`
-	ClientTaskID          string         `json:"clientTaskId"`
+	Ref                   WorkflowRef             `json:"ref"`
+	ExpectedCapability    string                  `json:"expectedCapability"`
+	Prompt                string                  `json:"prompt"`
+	SystemPrompt          string                  `json:"systemPrompt"`
+	FieldValues           map[string]any          `json:"fieldValues"`
+	ReferenceImages       []string                `json:"referenceImages"`
+	ReferenceVideos       []string                `json:"referenceVideos"`
+	ReferenceAudios       []string                `json:"referenceAudios"`
+	Mask                  string                  `json:"mask"`
+	Size                  string                  `json:"size"`
+	Quality               string                  `json:"quality"`
+	ImageOutputFormat     model.ImageOutputFormat `json:"imageOutputFormat,omitempty"`
+	TransparentBackground bool                    `json:"transparentBackground"`
+	Count                 int                     `json:"count"`
+	VideoSeconds          string                  `json:"videoSeconds"`
+	VideoQuality          string                  `json:"videoQuality"`
+	VideoGenerateAudio    bool                    `json:"videoGenerateAudio"`
+	VideoWatermark        bool                    `json:"videoWatermark"`
+	AudioVoice            string                  `json:"audioVoice"`
+	AudioFormat           string                  `json:"audioFormat"`
+	AudioSpeed            float64                 `json:"audioSpeed"`
+	AudioInstructions     string                  `json:"audioInstructions"`
+	Source                string                  `json:"source"`
+	SourceID              string                  `json:"sourceId"`
+	NodeID                string                  `json:"nodeId"`
+	ClientTaskID          string                  `json:"clientTaskId"`
 }
 
 type WorkflowOverride struct {
@@ -55,6 +56,7 @@ type WorkflowOverride struct {
 }
 
 func ResolveWorkflowFields(entry model.WorkflowEntry, input WorkflowRunInput) ([]WorkflowOverride, error) {
+	input = normalizeWorkflowImageOutputSelection(entry, input)
 	result := make([]WorkflowOverride, 0, len(entry.Fields))
 	seen := map[string]bool{}
 	mappedMedia := map[string]bool{}
@@ -95,7 +97,7 @@ func ResolveWorkflowFields(entry model.WorkflowEntry, input WorkflowRunInput) ([
 				continue
 			}
 		}
-		value, present, err := workflowFieldValue(field, input, entry.Capability)
+		value, present, err := workflowFieldValue(field, input, entry)
 		if err != nil {
 			return nil, fmt.Errorf("字段 %s：%w", identity, err)
 		}
@@ -156,7 +158,7 @@ func validateWorkflowMedia(raw, mediaID string) error {
 	return nil
 }
 
-func workflowFieldValue(field model.WorkflowFieldMapping, input WorkflowRunInput, capability string) (any, bool, error) {
+func workflowFieldValue(field model.WorkflowFieldMapping, input WorkflowRunInput, entry model.WorkflowEntry) (any, bool, error) {
 	source := strings.TrimSpace(field.Source)
 	if source == "" && field.BindPrompt {
 		source = "prompt"
@@ -175,8 +177,13 @@ func workflowFieldValue(field model.WorkflowFieldMapping, input WorkflowRunInput
 			}
 		}
 	}
+	if isWorkflowImageOutputFormatSource(source) {
+		source = "outputFormat"
+	} else if strings.EqualFold(strings.TrimSpace(source), "transparentBackground") {
+		source = "transparentBackground"
+	}
 	mediaSource := source == "referenceImage" || source == "referenceVideo" || source == "referenceAudio" || source == "mask"
-	if input.FieldValues != nil && !mediaSource && !field.RandomEnabled {
+	if input.FieldValues != nil && !mediaSource && !field.RandomEnabled && !workflowImageOutputSelectionBinds(source, input.ImageOutputFormat) {
 		if value, ok := input.FieldValues["field:"+field.NodeID+":"+field.FieldName]; ok {
 			return value, !workflowValueEmpty(value), nil
 		}
@@ -205,6 +212,8 @@ func workflowFieldValue(field model.WorkflowFieldMapping, input WorkflowRunInput
 		value = input.Prompt
 	case "systemPrompt":
 		value = input.SystemPrompt
+	case "outputFormat":
+		value, _ = workflowImageOutputFormatValue(field, input.ImageOutputFormat, entry)
 	case "referenceImage", "referenceVideo", "referenceAudio", "mask":
 		index := field.SourceIndex
 		if source == "referenceImage" && field.ImageOrder > 0 {
@@ -232,7 +241,7 @@ func workflowFieldValue(field model.WorkflowFieldMapping, input WorkflowRunInput
 	case "size":
 		value = input.Size
 	case "resolution":
-		if capability == "video" {
+		if entry.Capability == "video" {
 			value = workflowVideoFieldValue(field, input.VideoQuality, normalizeWorkflowResolutionToken)
 		} else {
 			value = input.Size
@@ -244,13 +253,22 @@ func workflowFieldValue(field model.WorkflowFieldMapping, input WorkflowRunInput
 		if source == "height" {
 			index = 1
 		}
-		value = workflowDimensionPart(capability, input.Size, input.VideoQuality, index)
+		value = workflowDimensionPart(entry.Capability, input.Size, input.VideoQuality, index)
 	case "count":
 		value = input.Count
 	case "quality":
 		value = input.Quality
 	case "transparentBackground":
-		value = input.TransparentBackground
+		if input.ImageOutputFormat == model.ImageOutputFormatPNGTransparent {
+			value = true
+		} else if input.ImageOutputFormat == model.ImageOutputFormatJPEG {
+			if !workflowFieldAllowsBooleanValue(field, false) {
+				return nil, false, nil
+			}
+			value = false
+		} else {
+			value = input.TransparentBackground
+		}
 	case "videoSeconds":
 		value = workflowVideoFieldValue(field, input.VideoSeconds, normalizeWorkflowDurationToken)
 	case "vquality":
@@ -271,6 +289,166 @@ func workflowFieldValue(field model.WorkflowFieldMapping, input WorkflowRunInput
 		return nil, false, fmt.Errorf("不支持的来源 %q", source)
 	}
 	return value, !workflowValueEmpty(value), nil
+}
+
+func workflowImageOutputCapability(entry model.WorkflowEntry) *model.ImageOutputCapability {
+	formatFields := make([]*model.WorkflowFieldMapping, 0, 1)
+	transparentBackgroundFields := make([]model.WorkflowFieldMapping, 0, 1)
+	for index := range entry.Fields {
+		field := &entry.Fields[index]
+		if field.Enabled != nil && !*field.Enabled || field.SafeToOverride != nil && !*field.SafeToOverride {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(field.Source)) {
+		case "outputformat", "imageoutputformat":
+			formatFields = append(formatFields, field)
+		case "transparentbackground":
+			transparentBackgroundFields = append(transparentBackgroundFields, *field)
+		}
+	}
+	if len(formatFields) == 0 {
+		return nil
+	}
+
+	formats := make([]model.ImageOutputFormat, 0, 2)
+	if workflowOutputFormatSupportedByAll(formatFields, model.ImageOutputFormatPNGTransparent) && workflowTransparentBackgroundSupportedByAll(transparentBackgroundFields) {
+		formats = append(formats, model.ImageOutputFormatPNGTransparent)
+	}
+	if workflowOutputFormatSupportedByAll(formatFields, model.ImageOutputFormatJPEG) && workflowJPEGBackgroundSupported(transparentBackgroundFields) {
+		formats = append(formats, model.ImageOutputFormatJPEG)
+	}
+	if len(formats) == 0 {
+		return nil
+	}
+	return &model.ImageOutputCapability{Formats: formats, DefaultFormat: formats[0]}
+}
+
+func workflowImageOutputFormatValue(field model.WorkflowFieldMapping, requested model.ImageOutputFormat, entry model.WorkflowEntry) (any, bool) {
+	if requested == "" || strings.EqualFold(string(requested), "auto") {
+		defaultValue := firstWorkflowValue(field.FieldValue, field.Value, field.DefaultValue, field.Default)
+		return defaultValue, !workflowValueEmpty(defaultValue)
+	}
+	capability := workflowImageOutputCapability(entry)
+	if capability == nil {
+		return nil, false
+	}
+	if !containsImageOutputFormat(capability.Formats, requested) {
+		requested = capability.DefaultFormat
+	}
+	return workflowImageFormatOption(field, requested)
+}
+
+func normalizeWorkflowImageOutputSelection(entry model.WorkflowEntry, input WorkflowRunInput) WorkflowRunInput {
+	requested := input.ImageOutputFormat
+	if requested != model.ImageOutputFormatPNGTransparent && requested != model.ImageOutputFormatJPEG {
+		input.ImageOutputFormat = ""
+		return input
+	}
+	capability := workflowImageOutputCapability(entry)
+	if capability == nil {
+		input.ImageOutputFormat = ""
+		return input
+	}
+	if !containsImageOutputFormat(capability.Formats, requested) {
+		input.ImageOutputFormat = capability.DefaultFormat
+	}
+	return input
+}
+
+func workflowImageFormatOption(field model.WorkflowFieldMapping, format model.ImageOutputFormat) (any, bool) {
+	for _, option := range field.Options {
+		candidate, ok := workflowOptionScalar(option)
+		if !ok {
+			continue
+		}
+		normalized := strings.ToLower(strings.TrimSpace(candidate))
+		switch format {
+		case model.ImageOutputFormatPNGTransparent:
+			if normalized == "png" {
+				return candidate, true
+			}
+		case model.ImageOutputFormatJPEG:
+			if normalized == "jpeg" || normalized == "jpg" {
+				return candidate, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func workflowFieldSupportsTransparentBackground(field model.WorkflowFieldMapping) bool {
+	if len(field.Options) == 0 {
+		return strings.EqualFold(strings.TrimSpace(field.FieldType), "boolean") || strings.EqualFold(strings.TrimSpace(field.FieldType), "bool")
+	}
+	for _, option := range field.Options {
+		candidate, ok := workflowOptionScalar(option)
+		if ok && strings.EqualFold(strings.TrimSpace(candidate), "true") {
+			return true
+		}
+	}
+	return false
+}
+
+func workflowFieldAllowsBooleanValue(field model.WorkflowFieldMapping, expected bool) bool {
+	if len(field.Options) == 0 {
+		return strings.EqualFold(strings.TrimSpace(field.FieldType), "boolean") || strings.EqualFold(strings.TrimSpace(field.FieldType), "bool")
+	}
+	want := strconv.FormatBool(expected)
+	for _, option := range field.Options {
+		candidate, ok := workflowOptionScalar(option)
+		if ok && strings.EqualFold(strings.TrimSpace(candidate), want) {
+			return true
+		}
+	}
+	return false
+}
+
+func workflowOutputFormatSupportedByAll(fields []*model.WorkflowFieldMapping, format model.ImageOutputFormat) bool {
+	for _, field := range fields {
+		if _, ok := workflowImageFormatOption(*field, format); !ok {
+			return false
+		}
+	}
+	return len(fields) > 0
+}
+
+func workflowTransparentBackgroundSupportedByAll(fields []model.WorkflowFieldMapping) bool {
+	for _, field := range fields {
+		if !workflowFieldSupportsTransparentBackground(field) {
+			return false
+		}
+	}
+	return len(fields) > 0
+}
+
+func workflowJPEGBackgroundSupported(fields []model.WorkflowFieldMapping) bool {
+	for _, field := range fields {
+		if !workflowFieldAllowsBooleanValue(field, false) {
+			return false
+		}
+	}
+	return true
+}
+
+func containsImageOutputFormat(formats []model.ImageOutputFormat, requested model.ImageOutputFormat) bool {
+	for _, format := range formats {
+		if format == requested {
+			return true
+		}
+	}
+	return false
+}
+
+func workflowImageOutputSelectionBinds(source string, requested model.ImageOutputFormat) bool {
+	if requested != model.ImageOutputFormatPNGTransparent && requested != model.ImageOutputFormatJPEG {
+		return false
+	}
+	return isWorkflowImageOutputFormatSource(source) || strings.EqualFold(strings.TrimSpace(source), "transparentBackground")
+}
+
+func isWorkflowImageOutputFormatSource(source string) bool {
+	source = strings.ToLower(strings.TrimSpace(source))
+	return source == "outputformat" || source == "imageoutputformat"
 }
 
 func workflowValueEmpty(value any) bool {

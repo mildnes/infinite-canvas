@@ -166,7 +166,7 @@ sourceNodeIds 同时承担两件事：
 - 文本推理只使用全局文本模型；图片、视频和音频分别使用全局配置的对应模型。
 - generation.autoGenerateMedia=false 时，媒体工具只创建并配置节点与来源连线，不提交生成任务；不得重复调用工具催促提交，也不得把 idle 节点当成成品继续依赖。generation.autoGenerateMedia=true 时按现有链路直接提交。
 - Agent 不选择、发明、替换或展示另一套私有模型。
-- 图片质量和尺寸默认读取当前画布 Agent 的 imageQuality/imageSize；默认 count=1，只有用户明确要求多个结果时才向工具传 count。
+- 图片质量、尺寸和输出格式默认遵循当前画布 Agent 的 imageQuality/imageSize/imageOutputFormat；默认 count=1，只有用户明确要求多个结果时才向工具传 count。
 - 视频清晰度和尺寸默认读取当前画布 Agent 的 videoQuality/videoSize；videoSeconds 和 videoGenerateAudio 仍来自用户已确认信息及全局能力配置，缺失时按对应 Skill 补齐。
 - 图片尺寸与视频尺寸彼此独立；不得用视频 size 覆盖图片 size，反之亦然。
 - 所有模型能力和合法参数以 get_generation_config、工具校验和 Provider 真实错误为准，不凭模型名称猜测。

@@ -1,8 +1,11 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"image"
+	"image/jpeg"
 	"io"
 	"os"
 	"path/filepath"
@@ -46,6 +49,30 @@ func TestReadTrustedGeneratedMediaProxyKeepsSSRFProtection(t *testing.T) {
 	_, err := ReadTrustedGeneratedMedia(context.Background(), "/api/proxy-image?url=http%3A%2F%2F127.0.0.1%2Fsecret.png")
 	if err == nil {
 		t.Fatal("proxy-wrapped private address must remain blocked")
+	}
+}
+
+func TestGeneratedImagesUseActualMIME(t *testing.T) {
+	pngData, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var jpegData bytes.Buffer
+	if err := jpeg.Encode(&jpegData, image.NewRGBA(image.Rect(0, 0, 1, 1)), nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, sample := range []struct {
+		data     []byte
+		declared string
+		actual   string
+	}{
+		{pngData, "image/jpeg", "image/png"},
+		{jpegData.Bytes(), "image/png", "image/jpeg"},
+	} {
+		payload, err := ReadTrustedGeneratedMedia(context.Background(), "data:"+sample.declared+";base64,"+base64.StdEncoding.EncodeToString(sample.data))
+		if err != nil || payload.MimeType != sample.actual || !bytes.Equal(payload.Data, sample.data) {
+			t.Fatalf("actual MIME must win without converting bytes: %+v, %v", payload, err)
+		}
 	}
 }
 

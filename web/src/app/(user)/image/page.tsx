@@ -35,6 +35,7 @@ import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/app/(user)/canvas/components/asset-picker-modal";
 import { canvasThemes } from "@/lib/canvas-theme";
+import { imageOutputCapabilityForConfig, normalizeImageOutputFormat, resolveImageOutputFormat } from "@/lib/image-output-format";
 import {
     CreativeWorkflowWorkspace,
     type WorkflowExternalTaskFailure,
@@ -118,7 +119,7 @@ type GenerationLog = {
     lastPolledAt?: number;
 };
 
-type GenerationLogConfig = Pick<AiConfig, "channelMode" | "model" | "imageModel" | "activeChannelId" | "imageChannelId" | "quality" | "size" | "count" | "apiMode" | "streamImages" | "streamPartialImages" | "responseFormatB64Json" | "codexCli">;
+type GenerationLogConfig = Pick<AiConfig, "channelMode" | "model" | "imageModel" | "activeChannelId" | "imageChannelId" | "quality" | "imageOutputFormat" | "size" | "count" | "apiMode" | "streamImages" | "streamPartialImages" | "responseFormatB64Json" | "codexCli">;
 type RequestSnapshot = { text: string; requestConfig: AiConfig; displayConfig: GenerationLogConfig; references: ReferenceImage[]; workflowRef?: WorkflowRef };
 type GenerationCategory = { id: string; name: string; createdAt: number };
 type ResultViewMode = "all" | "category";
@@ -483,6 +484,7 @@ export default function ImagePage() {
                     referenceImages,
                     size: snapshot.requestConfig.size,
                     quality: snapshot.requestConfig.quality,
+                    imageOutputFormat: snapshot.requestConfig.imageOutputFormat === "auto" ? undefined : snapshot.requestConfig.imageOutputFormat,
                     count: 1,
                     source: "image-workbench",
                     sourceId: pendingLog.id,
@@ -1041,6 +1043,7 @@ export default function ImagePage() {
             updateConfig("activeChannelId", nextChannelId);
         }
         if (log.config.quality) updateConfig("quality", log.config.quality);
+        updateConfig("imageOutputFormat", normalizeImageOutputFormat(log.config.imageOutputFormat));
         if (log.config.size) updateConfig("size", log.config.size);
         if (log.config.count) updateConfig("count", log.config.count);
         if (log.config.apiMode) updateConfig("apiMode", log.config.apiMode);
@@ -1070,7 +1073,13 @@ export default function ImagePage() {
             openConfigDialog(true);
             return null;
         }
-        const requestConfig = { ...baseConfig, model: requestModel, imageModel: requestModel, activeChannelId: requestChannelId, imageChannelId: requestChannelId, count: "1" };
+        const requestConfig = { ...baseConfig, model: requestModel, imageModel: requestModel, imageWorkflowRef: workflowRef || undefined, activeChannelId: requestChannelId, imageChannelId: requestChannelId, count: "1" };
+        const capability = imageOutputCapabilityForConfig(requestConfig, requestModel);
+        const output = resolveImageOutputFormat(requestConfig.imageOutputFormat, capability);
+        if (output.fellBack || !capability && normalizeImageOutputFormat(requestConfig.imageOutputFormat) !== "auto") {
+            message.info(`当前渠道不支持所选格式，已使用${output.format === "auto" ? "渠道默认格式" : output.format === "jpeg" ? "JPG" : "透明 PNG"}`);
+        }
+        requestConfig.imageOutputFormat = output.format;
         return {
             text,
             requestConfig,
@@ -2845,6 +2854,7 @@ function normalizeLogConfig(log: Partial<GenerationLog>): GenerationLogConfig {
         activeChannelId: taskChannelId || log.config?.activeChannelId || log.config?.imageChannelId || "",
         imageChannelId: taskChannelId || log.config?.imageChannelId || log.config?.activeChannelId || "",
         quality: log.config?.quality || log.quality || "",
+        imageOutputFormat: normalizeImageOutputFormat(log.config?.imageOutputFormat),
         size: log.config?.size || log.size || "",
         count: log.config?.count || String(log.imageCount || log.successCount || 1),
         apiMode: log.config?.apiMode || "images",
@@ -2878,6 +2888,7 @@ function buildGenerationLogConfig(config: AiConfig): GenerationLogConfig {
         activeChannelId: config.imageChannelId || config.activeChannelId,
         imageChannelId: config.imageChannelId,
         quality: config.quality,
+        imageOutputFormat: normalizeImageOutputFormat(config.imageOutputFormat),
         size: config.size,
         count: config.count,
         apiMode: config.apiMode,

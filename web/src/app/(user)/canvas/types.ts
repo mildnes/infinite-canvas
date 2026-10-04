@@ -1,3 +1,5 @@
+import type { ImageOutputFormatSelection } from "@/lib/image-output-format";
+
 export type Position = {
     x: number;
     y: number;
@@ -49,6 +51,7 @@ export type CanvasNodeMetadata = {
     channelId?: string;
     size?: string;
     quality?: string;
+    imageOutputFormat?: ImageOutputFormatSelection;
     count?: number;
     seconds?: string;
     vquality?: string;
@@ -211,6 +214,7 @@ export type CanvasAgentConfig = {
     autoGenerateMedia: boolean;
     imageModel?: string;
     imageChannelId?: string;
+    imageOutputFormat?: ImageOutputFormatSelection;
     imageQuality: string;
     imageSize: string;
     videoQuality: string;

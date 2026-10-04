@@ -1,9 +1,10 @@
 "use client";
 
-import { type ReactNode, useState } from "react";
-import { ConfigProvider, Switch } from "antd";
+import { type ReactNode, useEffect, useRef, useState } from "react";
+import { App, ConfigProvider, Switch } from "antd";
 
 import { type CanvasTheme } from "@/lib/canvas-theme";
+import { hasImageOutputFormatContext, imageOutputCapabilityForConfig, imageOutputFormatOptions, normalizeImageOutputFormat, resolveImageOutputFormat } from "@/lib/image-output-format";
 import { IMAGE_QUALITY_OPTIONS, imageQualityLabel as formatImageQualityLabel } from "@/lib/image-quality";
 import type { AiConfig } from "@/stores/use-config-store";
 
@@ -36,7 +37,8 @@ export const imageSizeOptions = aspectOptions.map((item) => ({
 
 type ImageSettingsPanelProps = {
     config: AiConfig;
-    onConfigChange: (key: "quality" | "size" | "count", value: string) => void;
+    model?: string;
+    onConfigChange: (key: "quality" | "size" | "count" | "imageOutputFormat", value: string) => void;
     theme: CanvasTheme;
     showTitle?: boolean;
     showSize?: boolean;
@@ -46,13 +48,44 @@ type ImageSettingsPanelProps = {
     quickCount?: number;
 };
 
-export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = true, showSize = true, showCount = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5", maxCount = 15, quickCount = 10 }: ImageSettingsPanelProps) {
+export function ImageSettingsPanel({ config, model, onConfigChange, theme, showTitle = true, showSize = true, showCount = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5", maxCount = 15, quickCount = 10 }: ImageSettingsPanelProps) {
+    const { message } = App.useApp();
     const [snapDimensionToStep, setSnapDimensionToStep] = useState(true);
+    const notifiedFallback = useRef("");
     const quality = config.quality || "auto";
     const count = Math.max(1, Math.min(maxCount, Math.floor(Math.abs(Number(config.count)) || 1)));
     const activeSize = config.size || "auto";
     const selectedAspect = aspectOptions.find((item) => (item.size || item.value) === activeSize || item.value === activeSize);
     const dimensions = readSizeDimensions(activeSize, selectedAspect || aspectOptions[0]);
+    const imageModel = model || config.imageModel || config.model;
+    const outputCapability = imageOutputCapabilityForConfig(config, imageModel);
+    const hasOutputCapability = Boolean(outputCapability);
+    const hasOutputFormatContext = hasImageOutputFormatContext(config, imageModel);
+    const savedOutputFormat = normalizeImageOutputFormat(config.imageOutputFormat);
+    const outputFormatResolution = resolveImageOutputFormat(savedOutputFormat, outputCapability);
+    const selectedOutputFormat = savedOutputFormat === "auto"
+        ? undefined
+        : outputFormatResolution.fellBack ? outputCapability?.defaultFormat : outputFormatResolution.format;
+
+    useEffect(() => {
+        const targetFormat = outputFormatResolution.fellBack ? outputFormatResolution.format : hasOutputFormatContext && !hasOutputCapability && savedOutputFormat !== "auto" ? "auto" : "";
+        if (!targetFormat || targetFormat === savedOutputFormat) {
+            notifiedFallback.current = "";
+            return;
+        }
+        const targetKey = config.imageWorkflowRef
+            ? JSON.stringify(config.imageWorkflowRef)
+            : `${config.imageChannelId || config.activeChannelId}:${imageModel}`;
+        const noticeKey = `${targetKey}:${savedOutputFormat}:${targetFormat}`;
+        if (notifiedFallback.current === noticeKey) return;
+        notifiedFallback.current = noticeKey;
+        onConfigChange("imageOutputFormat", targetFormat);
+        message.open({
+            key: `image-output-format-fallback-${noticeKey}`,
+            type: "info",
+            content: targetFormat === "auto" ? "当前模型未声明输出格式能力，已恢复渠道默认格式" : `当前模型不支持所选格式，已切换为${targetFormat === "jpeg" ? "JPG" : "透明 PNG"}`,
+        });
+    }, [config.activeChannelId, config.imageChannelId, config.imageWorkflowRef, hasOutputCapability, hasOutputFormatContext, imageModel, message, onConfigChange, outputFormatResolution.fellBack, outputFormatResolution.format, savedOutputFormat]);
     const selectAspect = (value: string) => {
         const option = aspectOptions.find((item) => item.value === value);
         onConfigChange("size", option?.size || option?.value || "auto");
@@ -86,6 +119,19 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                         ))}
                     </div>
                 </div>
+                {outputCapability ? (
+                    <div className="space-y-2.5">
+                        <SettingTitle color={theme.node.muted}>输出格式</SettingTitle>
+                        {savedOutputFormat === "auto" ? <div className="text-xs" style={{ color: theme.node.muted }}>沿用渠道默认格式</div> : null}
+                        <div className="grid grid-cols-2 gap-2.5">
+                            {imageOutputFormatOptions.filter((item) => outputCapability.formats.includes(item.value)).map((item) => (
+                                <OptionPill key={item.value} selected={selectedOutputFormat === item.value} theme={theme} onClick={() => onConfigChange("imageOutputFormat", item.value)}>
+                                    {item.label}
+                                </OptionPill>
+                            ))}
+                        </div>
+                    </div>
+                ) : null}
                 {showSize ? (
                     <>
                         <div className="space-y-2.5">
