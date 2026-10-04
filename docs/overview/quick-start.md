@@ -13,13 +13,15 @@ description: 用最少步骤把无限画布跑起来
 git clone git@github.com:tigerowo/infinite-canvas.git
 cd infinite-canvas
 cp .env.example .env
-docker compose up -d
+export IMAGE_REF='registry.example.com:4443/mildnes/infinite-canvas@sha256:<digest>'
+docker compose pull
+docker compose up -d --no-build
 ```
 
 启动后访问：
 
 ```text
-http://localhost:3000
+http://localhost:30101
 ```
 
 默认管理员账号：

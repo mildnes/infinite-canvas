@@ -12,6 +12,7 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 ## 本轮恢复待复验
 
+- [新增待验收] Gitea Actions 仅在 `feat/grok2api-protocol` 分支执行 Go 测试、前端逻辑测试和真实 Next.js 生产构建，全部通过后才发布 `linux/amd64` 提交 SHA 镜像；发布工作流记录 digest 并使用 registry BuildKit 缓存。生产工作流必须人工输入完整 `image_ref` 和 `DEPLOY` 后才拉取指定镜像，部署 Compose 保留 `.env`、`./data:/app/data` 和 `30101:3000`，并记录上一版镜像用于回滚；仍需在 Gitea Runner 和 Debian 12 x64 部署机实测。
 - [开发环境实测，待部署复验] 使用 Bun 1.3.14 执行 `bun install --frozen-lockfile` 后，`bun run build` 已通过真实 Next.js 16.2.9/Turbopack 生产构建，51 项前端逻辑回归通过。构建先生成 Bridge、同步共享图片能力规则，再执行 Next.js；`bun run dev` 也自动同步，单独运行图片逻辑测试前执行 `bun run sync:shared`。应用及测试读取 `web/src/lib/image-output-capability-rules.json` 同一生成副本，已核对与原始共享文件字节一致且被 Git 忽略。CI 的 push 触发已覆盖 `feat/grok2api-protocol`；远端流水线及部署端干净检出构建仍待确认，纯逻辑测试不得代替真实构建。
 - [新增待验收] 后台渠道编辑器的“自动推导”可点击；自动状态下勾选框显示按协议和模型名推导的有效能力，手动勾选或批量应用应立即更新，恢复自动推导仅移除当前模型声明。保存并重开后状态一致；手动取消全部勾选保存为 `[]`，不得恢复成自动能力，批量清除声明则恢复自动推导；其他模型、渠道和图片质量声明不受影响。自定义模型名无法准确推导时仍需手动声明图片等能力。
 - [新增待验收] 管理后台新增或修改 `gpt-2.5-flare-*`、`gpt-2.5-sunburst-*` 等不含 `image` 关键字的图片模型后，保存、刷新和重新登录仍保留；配置弹窗、图片工作台、画布图片节点与 Agent 图片模型选择器均能显示并使用该模型，后台默认图片模型不再静默回退。

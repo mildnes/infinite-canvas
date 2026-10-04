@@ -96,8 +96,13 @@ git clone https://github.com/tigerowo/infinite-canvas.git
 cd infinite-canvas
 cp .env.example .env
 # 修改默认账号密码等信息
-docker compose up -d --build
+# 从 Gitea Actions 的 image-metadata.txt 复制完整 digest 引用
+export IMAGE_REF='registry.example.com:4443/mildnes/infinite-canvas@sha256:<digest>'
+docker compose pull
+docker compose up -d --no-build
 ```
+
+生产镜像启动后访问 `http://localhost:30101`。
 
 本地非 Docker 开发运行：
 ```bash
@@ -117,7 +122,7 @@ cp .env.example .env
 docker compose -f docker-compose.local.yml up -d --build
 ```
 
-运行后默认端口3000，可访问 `http://localhost:3000`
+本地源码构建运行后默认端口 3000，可访问 `http://localhost:3000`
 
 如需要拉取提示词，可前往:`http://localhost:3000/admin/prompts`
 

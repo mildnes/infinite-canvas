@@ -2,6 +2,8 @@
 FROM golang:1.25-alpine AS bridge-build
 
 WORKDIR /app/canvas-agent/native/comfy-bridge
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
 COPY canvas-agent/native/comfy-bridge ./
 RUN mkdir -p /bridge && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /bridge/InfiniteCanvas-ComfyBridge.exe . \
     && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o /bridge/InfiniteCanvas-ComfyBridge-linux-amd64 . \
@@ -26,6 +28,8 @@ RUN bun run build
 FROM golang:1.25-alpine AS api-build
 
 WORKDIR /app
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
 COPY go.mod go.sum ./
 COPY config ./config
 COPY cmd ./cmd

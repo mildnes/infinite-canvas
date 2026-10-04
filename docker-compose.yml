@@ -1,9 +1,6 @@
 services:
   app:
-    image: ghcr.io/tigerowo/infinite-canvas:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ${IMAGE_REF:?set IMAGE_REF to an immutable Gitea image reference}
     pull_policy: always
     container_name: infinite-canvas
     env_file:
@@ -11,5 +8,5 @@ services:
     volumes:
       - ./data:/app/data
     ports:
-      - "3000:3000"
+      - "30101:3000"
     restart: unless-stopped
