@@ -9,7 +9,7 @@ type DirectRequestBody = Record<string, unknown> | FormData;
 type DirectReferenceKind = "image" | "video" | "audio";
 type DirectReference = { marker: string; file: File; kind: DirectReferenceKind };
 type DirectUploadSpec = { url: string; fileField: string; fileNameField?: string; extraFields?: Record<string, string>; responsePaths: string[] };
-type DirectRequestPlan = { provider: DirectAIProvider; url: string; contentType: string; body: unknown; uploads?: Partial<Record<DirectReferenceKind, DirectUploadSpec>> };
+type DirectRequestPlan = { provider: DirectAIProvider; url: string; contentType: string; body: unknown; uploads?: Partial<Record<DirectReferenceKind, DirectUploadSpec>>; imageQuality?: string; imageQualityNotice?: string };
 type DirectImageResponse = { created?: number; data: Array<{ url?: string; b64_json?: string }> };
 type SerializedDirectBody = { body: unknown; references: DirectReference[] };
 
@@ -61,7 +61,7 @@ async function prepareDirectRequest(config: AiConfig, provider: DirectAIProvider
     const serialized = await serializeDirectBody(body);
     assertSafeDirectBody(serialized.body);
     const plan = await apiPost<DirectRequestPlan>("/api/ai/direct-request", {
-        channel: { protocol: channel.protocol, baseUrl: channel.baseUrl },
+        channel: { protocol: channel.protocol, baseUrl: channel.baseUrl, imageQualityCapabilities: channel.imageQualityCapabilities },
         model: config.model || config.videoModel,
         endpoint,
         body: serialized.body,

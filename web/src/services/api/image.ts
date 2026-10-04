@@ -3,7 +3,7 @@ import { message } from "antd";
 
 import { isMiniMaxChannel, miniMaxModels } from "@/lib/minimax-video";
 import { dataUrlToFile, detectImageFileType } from "@/lib/image-utils";
-import { normalizeImageQuality } from "@/lib/image-quality";
+import { applyImageQualityToFormData, applyImageQualityToObject, imageQualityLabel, normalizeImageQuality, resolveImageQuality } from "@/lib/image-quality";
 import { isKIESeedreamLayerDecompositionModel } from "@/lib/kie-models";
 import { isMimoChannel, mimoModels } from "@/lib/mimo-tts";
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig, normalizeGeminiBaseUrl } from "@/lib/gemini";
@@ -116,6 +116,8 @@ const IMAGE_REQUEST_TIMEOUT_SECONDS = 600;
 const PROMPT_REWRITE_GUARD_PREFIX = "Use the following text as the complete prompt. Do not rewrite it:";
 let lastImageOutputNotice = "";
 let lastImageOutputNoticeAt = 0;
+let lastImageQualityNotice = "";
+let lastImageQualityNoticeAt = 0;
 
 export { normalizeImageQuality };
 
@@ -219,6 +221,32 @@ function notifyImageOutputFallback(response: Response, config: AiConfig, owner: 
     lastImageOutputNotice = key;
     lastImageOutputNoticeAt = now;
     message.info(text);
+}
+
+function notifyImageQualityFallback(response: Response, config: AiConfig, owner: ImageRequestOwner) {
+    if (response.headers.get("X-Image-Quality-Notice") !== "fallback-default" || !isCurrentImageRequestOwner(owner)) return;
+    showImageQualityFallback((response.headers.get("X-Image-Quality") || "").trim(), config);
+}
+
+function showImageQualityFallback(actualQuality: string, config: AiConfig) {
+    const text = actualQuality
+        ? `当前渠道不支持所选图片质量，已调整为${imageQualityLabel(actualQuality)}。`
+        : "当前渠道不支持图片质量参数，已使用供应商默认值。";
+    const key = `${channelIdForActiveModel(config)}:${config.model}:${config.quality}:${actualQuality}`;
+    const now = Date.now();
+    if (key === lastImageQualityNotice && now - lastImageQualityNoticeAt < 2000) return;
+    lastImageQualityNotice = key;
+    lastImageQualityNoticeAt = now;
+    message.info(text);
+}
+
+function imageRequestQuality(config: AiConfig, quality: string) {
+    // Account requests are normalized against the actual channel on the server.
+    if (usesAccountProxy(config)) return quality;
+    const capability = localChannelForActiveModel(config)?.imageQualityCapabilities?.[config.model];
+    const resolved = resolveImageQuality(quality, capability);
+    if (resolved.fellBack) showImageQualityFallback(resolved.quality || "", config);
+    return resolved.quality;
 }
 
 function normalizeBoundedInteger(value: string | number, fallback: number, min: number, max: number) {
@@ -346,7 +374,7 @@ function applyImageGenerationParams(body: Record<string, unknown>, config: AiCon
     const zhipu = isZhipuImageModel(model);
     if (zhipu) {
         if (params.size) body.size = params.size;
-        if (params.quality !== "auto") body.quality = params.quality;
+        if (params.quality !== "auto") applyImageQualityToObject(body, params.quality);
         return;
     }
 
@@ -362,7 +390,7 @@ function applyImageGenerationParams(body: Record<string, unknown>, config: AiCon
     }
 
     if (params.size) body.size = params.size;
-    if (params.quality && !config.codexCli) body.quality = params.quality;
+    applyImageQualityToObject(body, imageRequestQuality(config, params.quality));
     applyImageOutputFormat(body, config);
 }
 
@@ -954,7 +982,7 @@ async function requestImageEditSingle(config: AiConfig, prompt: string, referenc
     formData.set("prompt", withPromptGuard(config, withSystemPrompt(config, prompt)));
     if (params.n > 1) formData.set("n", String(params.n));
     if (params.size) formData.set("size", params.size);
-    if (params.quality && !config.codexCli) formData.set("quality", params.quality);
+    applyImageQualityToFormData(formData, imageRequestQuality(config, params.quality));
     if (config.responseFormatB64Json) formData.set("response_format", "b64_json");
     const outputFormat: Record<string, unknown> = {};
     applyImageOutputFormat(outputFormat, config);
@@ -1005,7 +1033,7 @@ function createResponsesImageTool(config: AiConfig, params: ImageRequestParams, 
         action: isEdit ? "edit" : "generate",
         size: params.size || "auto",
     };
-    if (params.quality && !config.codexCli) tool.quality = params.quality;
+    applyImageQualityToObject(tool, imageRequestQuality(config, params.quality));
     if (config.streamImages) tool.partial_images = params.streamPartialImages;
     const body = { tools: [tool] };
     applyImageOutputFormat(body, config, "responses");
@@ -1123,6 +1151,7 @@ async function requestAndParseImages(config: AiConfig, endpoint: string, request
             throw new ImageRequestError(error.message, error.detail);
         }
         notifyImageOutputFallback(response, config, requestOwner);
+        notifyImageQualityFallback(response, config, requestOwner);
         const parsed = await parseResponse(response, imageResponseMimeFromHeader(response, imageResponseMime(config, requestInterface)));
         logged = true;
         void writeLocalAICallLog(config, endpoint, startedAt, response.status, timeoutSeconds, stringifyLogPayload(requestBody), parsed.responseBody, "");
@@ -1248,6 +1277,7 @@ export async function createCanvasImageTask(config: AiConfig & { seedIndex?: num
         throw new ImageRequestError(error.message, error.detail);
     }
     notifyImageOutputFallback(response, config, requestOwner);
+    notifyImageQualityFallback(response, config, requestOwner);
     const responseMime = imageResponseMimeFromHeader(response, "");
     const payload = (await response.json()) as { code?: number; msg?: string; data?: CanvasImageTask };
     if (payload.code !== 0 || !payload.data) throw new ImageRequestError(payload.msg || "图片任务创建失败", payload);
@@ -1352,7 +1382,7 @@ async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: num
         formData.set("model", config.model);
         formData.set("prompt", withPromptGuard(config, withSystemPrompt(config, prompt)));
         if (params.n > 1) formData.set("n", String(params.n));
-        if (params.quality && !config.codexCli) formData.set("quality", params.quality);
+        applyImageQualityToFormData(formData, imageRequestQuality(config, params.quality));
         if (config.responseFormatB64Json) formData.set("response_format", "b64_json");
         const outputFormat: Record<string, unknown> = {};
         applyImageOutputFormat(outputFormat, config);

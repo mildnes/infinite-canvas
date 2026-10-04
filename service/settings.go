@@ -361,6 +361,7 @@ func normalizePrivateSetting(setting model.PrivateSetting) model.PrivateSetting 
 			setting.Channels[i].Models = []string{}
 		}
 		setting.Channels[i].ModelCapabilities = normalizeModelCapabilities(setting.Channels[i].ModelCapabilities)
+		setting.Channels[i].ImageQualityCapabilities = normalizeImageQualityCapabilities(setting.Channels[i].ImageQualityCapabilities)
 		if setting.Channels[i].Weight <= 0 {
 			setting.Channels[i].Weight = 1
 		}
@@ -677,6 +678,7 @@ func normalizeModelChannel(channel model.ModelChannel) model.ModelChannel {
 	if channel.Models == nil {
 		channel.Models = []string{}
 	}
+	channel.ImageQualityCapabilities = normalizeImageQualityCapabilities(channel.ImageQualityCapabilities)
 	if channel.Weight <= 0 {
 		channel.Weight = 1
 	}
@@ -711,6 +713,54 @@ func normalizeModelCapabilities(capabilities map[string][]model.ModelCapability)
 			}
 		}
 		result[modelName] = normalized
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func normalizeImageQualityCapabilities(capabilities map[string]model.ImageQualityCapability) map[string]model.ImageQualityCapability {
+	if len(capabilities) == 0 {
+		return nil
+	}
+
+	result := make(map[string]model.ImageQualityCapability, len(capabilities))
+	for modelName, capability := range capabilities {
+		modelName = strings.TrimSpace(modelName)
+		if modelName == "" {
+			continue
+		}
+
+		values := make([]string, 0, len(capability.Values))
+		allowed := make(map[string]bool, len(capability.Values))
+		for _, value := range capability.Values {
+			value = strings.TrimSpace(value)
+			if value == "" || allowed[value] {
+				continue
+			}
+			allowed[value] = true
+			values = append(values, value)
+		}
+
+		qualityMap := make(map[string]string, len(capability.Map))
+		for input, output := range capability.Map {
+			input = strings.ToLower(strings.TrimSpace(input))
+			output = strings.TrimSpace(output)
+			if input == "" || !allowed[output] {
+				continue
+			}
+			qualityMap[input] = output
+		}
+		if len(qualityMap) == 0 {
+			qualityMap = nil
+		}
+
+		defaultValue := strings.TrimSpace(capability.DefaultValue)
+		if !allowed[defaultValue] {
+			defaultValue = ""
+		}
+		result[modelName] = model.ImageQualityCapability{Values: values, Map: qualityMap, DefaultValue: defaultValue}
 	}
 	if len(result) == 0 {
 		return nil
@@ -1383,10 +1433,17 @@ func publicChannelInfos(channels []model.ModelChannel, options ...[]string) []mo
 			}
 		}
 		imageOutputCapabilities := make(map[string]model.ImageOutputCapability)
+		imageQualityCapabilities := make(map[string]model.ImageQualityCapability)
 		modelCapabilities := make(map[string][]model.ModelCapability)
+		declaredImageQualityCapabilities := normalizeImageQualityCapabilities(channel.ImageQualityCapabilities)
 		for _, modelName := range models {
 			if capability, ok := ResolveImageOutputCapability(channel, modelName); ok {
 				imageOutputCapabilities[modelName] = capability
+			}
+			if capability, ok := declaredImageQualityCapabilities[modelName]; ok {
+				imageQualityCapabilities[modelName] = capability
+			} else if capability, ok := ResolveImageQualityCapability(channel, modelName); ok {
+				imageQualityCapabilities[modelName] = capability
 			}
 			if capabilities, ok := channel.ModelCapabilities[modelName]; ok {
 				modelCapabilities[modelName] = append([]model.ModelCapability{}, capabilities...)
@@ -1395,21 +1452,25 @@ func publicChannelInfos(channels []model.ModelChannel, options ...[]string) []mo
 		if len(imageOutputCapabilities) == 0 {
 			imageOutputCapabilities = nil
 		}
+		if len(imageQualityCapabilities) == 0 {
+			imageQualityCapabilities = nil
+		}
 		if len(modelCapabilities) == 0 {
 			modelCapabilities = nil
 		}
 		result = append(result, model.PublicModelChannelInfo{
-			ID:                      channel.ID,
-			Protocol:                channel.Protocol,
-			Name:                    channel.Name,
-			BaseURL:                 channel.BaseURL,
-			Models:                  models,
-			ModelCapabilities:       modelCapabilities,
-			ImageOutputCapabilities: imageOutputCapabilities,
-			Weight:                  channel.Weight,
-			Timeout:                 channel.Timeout,
-			Enabled:                 channel.Enabled,
-			Remark:                  channel.Remark,
+			ID:                       channel.ID,
+			Protocol:                 channel.Protocol,
+			Name:                     channel.Name,
+			BaseURL:                  channel.BaseURL,
+			Models:                   models,
+			ModelCapabilities:        modelCapabilities,
+			ImageOutputCapabilities:  imageOutputCapabilities,
+			ImageQualityCapabilities: imageQualityCapabilities,
+			Weight:                   channel.Weight,
+			Timeout:                  channel.Timeout,
+			Enabled:                  channel.Enabled,
+			Remark:                   channel.Remark,
 		})
 	}
 	return result

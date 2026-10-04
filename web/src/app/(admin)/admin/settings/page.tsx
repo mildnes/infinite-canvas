@@ -1416,6 +1416,7 @@ function normalizeChannel(item: Partial<AdminModelChannel> = {}): AdminModelChan
         apiKey: item.apiKey || "",
         models,
         modelCapabilities: normalizeModelCapabilities(item.modelCapabilities, models),
+        imageQualityCapabilities: normalizeImageQualityCapabilities(item.imageQualityCapabilities, models),
         uploadApiKey: item.uploadApiKey || "",
         bridgeId: item.bridgeId || "",
         comfyUrl: item.comfyUrl || "",
@@ -1426,6 +1427,22 @@ function normalizeChannel(item: Partial<AdminModelChannel> = {}): AdminModelChan
         enabled: item.enabled !== false,
         remark: item.remark || "",
     };
+}
+
+function normalizeImageQualityCapabilities(capabilities: AdminModelChannel["imageQualityCapabilities"], models: string[]) {
+    if (!capabilities) return undefined;
+    const modelSet = new Set(models);
+    const result: NonNullable<AdminModelChannel["imageQualityCapabilities"]> = {};
+    for (const [model, capability] of Object.entries(capabilities)) {
+        if (!modelSet.has(model) || !capability) continue;
+        const values = Array.from(new Set((capability.values || []).map((value) => String(value).trim()).filter(Boolean)));
+        const map = Object.fromEntries(Object.entries(capability.map || {})
+            .map(([key, value]) => [key.trim().toLowerCase(), String(value).trim()] as const)
+            .filter(([key, value]) => key && value && values.includes(value)));
+        const defaultValue = values.includes(capability.defaultValue || "") ? capability.defaultValue : undefined;
+        result[model] = { values, ...(Object.keys(map).length ? { map } : {}), ...(defaultValue ? { defaultValue } : {}) };
+    }
+    return Object.keys(result).length ? result : undefined;
 }
 
 function normalizeModelCapabilities(capabilities: AdminModelChannel["modelCapabilities"], models: string[]) {

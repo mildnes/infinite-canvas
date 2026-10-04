@@ -43,12 +43,13 @@ type userModelConfigInput struct {
 }
 
 type userLocalModelChannelInput struct {
-	ID       string   `json:"id"`
-	Protocol string   `json:"protocol"`
-	Name     string   `json:"name"`
-	BaseURL  string   `json:"baseUrl"`
-	APIKey   string   `json:"apiKey"`
-	Models   []string `json:"models"`
+	ID                       string                                  `json:"id"`
+	Protocol                 string                                  `json:"protocol"`
+	Name                     string                                  `json:"name"`
+	BaseURL                  string                                  `json:"baseUrl"`
+	APIKey                   string                                  `json:"apiKey"`
+	Models                   []string                                `json:"models"`
+	ImageQualityCapabilities map[string]model.ImageQualityCapability `json:"imageQualityCapabilities,omitempty"`
 }
 
 func SelectUserLocalModelChannelForModel(userID string, modelName string, channelID string) (model.ModelChannel, error) {
@@ -93,15 +94,16 @@ func SelectUserLocalModelChannelForModel(userID string, modelName string, channe
 			protocol = "openai"
 		}
 		return model.ModelChannel{
-			ID:       channelID,
-			Protocol: protocol,
-			Name:     firstVideoTaskValue(strings.TrimSpace(channel.Name), "本地直连"),
-			BaseURL:  baseURL,
-			APIKey:   apiKey,
-			Models:   models,
-			Weight:   1,
-			Timeout:  600,
-			Enabled:  true,
+			ID:                       channelID,
+			Protocol:                 protocol,
+			Name:                     firstVideoTaskValue(strings.TrimSpace(channel.Name), "本地直连"),
+			BaseURL:                  baseURL,
+			APIKey:                   apiKey,
+			Models:                   models,
+			ImageQualityCapabilities: normalizeImageQualityCapabilities(channel.ImageQualityCapabilities),
+			Weight:                   1,
+			Timeout:                  600,
+			Enabled:                  true,
 		}, nil
 	}
 	return model.ModelChannel{}, errors.New("本地渠道不存在")

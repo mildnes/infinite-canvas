@@ -65,6 +65,11 @@ func CreateCanvasImageTask(w http.ResponseWriter, r *http.Request) {
 		Fail(w, "图片输出格式参数无效")
 		return
 	}
+	body, contentType, imageQuality, err := normalizeImageQualityRequest(body, contentType, channel, modelName, endpoint)
+	if err != nil {
+		Fail(w, "图片质量参数无效")
+		return
+	}
 	credits := 0
 	if resolvedUserChannelID == "" {
 		credits, err = service.ModelCost(channel.ID, modelName)
@@ -91,7 +96,7 @@ func CreateCanvasImageTask(w http.ResponseWriter, r *http.Request) {
 		GenerationType:  strings.TrimPrefix(endpoint, "/images/"),
 		Endpoint:        endpoint,
 		ContentType:     contentType,
-		RequestBody:     appendImageOutputLogMetadata(summarizeAIRequest(body, contentType), outputFormat.Format, outputFormat.Notice),
+		RequestBody:     appendImageQualityLogMetadata(appendImageOutputLogMetadata(summarizeAIRequest(body, contentType), outputFormat.Format, outputFormat.Notice), imageQuality.Quality, imageQuality.Notice),
 	})
 	if err != nil {
 		log.Printf("create canvas image task failed: user=%s err=%v", user.ID, err)
@@ -103,6 +108,12 @@ func CreateCanvasImageTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if outputFormat.Notice != "" {
 		w.Header().Set("X-Image-Output-Notice", "fallback-default")
+	}
+	if imageQuality.Quality != "" {
+		w.Header().Set("X-Image-Quality", imageQuality.Quality)
+	}
+	if imageQuality.Notice != "" {
+		w.Header().Set("X-Image-Quality-Notice", "fallback-default")
 	}
 	OK(w, service.CanvasImageTaskResponse(task))
 	go runCanvasImageTask(task, user, body, contentType, task.ChannelID, task.UserChannelID)

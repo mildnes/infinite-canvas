@@ -9,6 +9,14 @@ export const IMAGE_QUALITY_OPTIONS = [
 
 export type ImageQuality = (typeof IMAGE_QUALITY_OPTIONS)[number]["value"];
 
+export type ImageQualityCapability = {
+    values: string[];
+    map?: Record<string, string>;
+    defaultValue?: string;
+};
+
+export type ImageQualityCapabilities = Record<string, ImageQualityCapability>;
+
 const IMAGE_QUALITY_VALUES = IMAGE_QUALITY_OPTIONS.map((item) => item.value);
 const IMAGE_QUALITY_ALIASES: Record<string, ImageQuality> = {
     "1k": "low",
@@ -27,4 +35,22 @@ export function normalizeImageQuality(quality: string | undefined | null): Image
 
 export function imageQualityLabel(value: string) {
     return IMAGE_QUALITY_OPTIONS.find((item) => item.value === value)?.label || value;
+}
+
+export function resolveImageQuality(quality: string | undefined, capability?: ImageQualityCapability) {
+    if (!quality || !capability) return { quality, fellBack: false };
+    if (capability.values.includes(quality)) return { quality, fellBack: false };
+    const mapped = capability.map?.[quality.trim().toLowerCase()];
+    const actual = mapped && capability.values.includes(mapped) ? mapped : capability.defaultValue;
+    return { quality: actual && capability.values.includes(actual) ? actual : undefined, fellBack: true };
+}
+
+export function applyImageQualityToObject(target: Record<string, unknown>, quality: string | undefined) {
+    if (quality) target.quality = quality;
+    return target;
+}
+
+export function applyImageQualityToFormData(target: FormData, quality: string | undefined) {
+    if (quality) target.set("quality", quality);
+    return target;
 }

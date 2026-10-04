@@ -86,6 +86,24 @@ description: settings 表中 public 和 private 配置结构说明
 
 值只能包含 `image`、`video`、`text`、`audio`。对某个模型存在声明时，前端完全按声明筛选；空数组表示该模型没有可用能力。删除该模型的声明后才回到旧版本的名称兼容推导，因此模型更名或自定义模型不再需要把 `image`、`video` 等关键词写进模型名。声明保存在 `private.channels[].modelCapabilities`，公开响应位于 `modelChannel.channels[].modelCapabilities`；两者都按所属渠道隔离，同名模型可以在不同渠道声明不同能力。
 
+### 图片质量能力
+
+渠道还可以按模型声明 `imageQualityCapabilities`，用于把前端的 `low`、`medium`、`high`、`xhigh`、`max`、`auto` 档位映射为上游实际接受的值：
+
+```json
+{
+  "imageQualityCapabilities": {
+    "custom-renderer": {
+      "values": ["low", "medium", "high", "auto"],
+      "map": { "xhigh": "high", "max": "high" },
+      "defaultValue": "high"
+    }
+  }
+}
+```
+
+`values` 是上游允许的原始值，`map` 是 UI 档位到原始值的显式映射，`defaultValue` 是无法匹配时的回退值。映射和默认值必须在 `values` 中；无法匹配且没有合法默认值时省略 `quality` 并提示，`values: []` 明确表示不接受该参数。通过后台私有配置的 JSON 编辑器设置，渠道可视化编辑不会丢失已有声明；公开配置返回 `modelChannel.channels[].imageQualityCapabilities`。当前没有自动识别 Rolldek 等域名的规则，未声明渠道继续原样透传。登录请求由服务端按实际渠道校验，未登录本地直连从本地渠道声明解析；仅处理已带 `quality` 的图片请求，不主动注入参数。改写通过 `X-Image-Quality` 与 `X-Image-Quality-Notice` 响应头及界面提示可追踪，移除参数时只有 Notice；本地参数转译结果还返回 `imageQuality` 和 `imageQualityNotice`。`codexCli` 兼容模式只负责提示词保护和并发策略，不再静默删除 `quality`。
+
 用户侧请求模式：
 
 | 模式 | 说明 |
@@ -227,6 +245,7 @@ docker compose exec app /app/image-log-summaries -apply -limit 10
 | `apiKey` | string | 渠道密钥 |
 | `models` | string[] | 该渠道可用模型 |
 | `modelCapabilities` | object | 可选的模型能力声明，键为模型名，值为 `image`、`video`、`text`、`audio` 数组；未声明时沿用旧名称推导 |
+| `imageQualityCapabilities` | object | 可选的图片质量能力声明，键为模型名，值包含上游允许的 `values`、UI 档位到上游值的 `map` 及回退 `defaultValue` |
 | `workflows` | object[] | RunningHub 或 ComfyUI 工作流条目，包含用途、启停状态、字段映射及工作流 JSON/拓扑 |
 | `bridgeId` | string | ComfyUI 渠道绑定的 Bridge 设备 ID |
 | `weight` | number | 渠道权重；同一模型有多个可用渠道时按权重随机 |

@@ -449,6 +449,7 @@ Skill 的附属目录与 Markdown/TXT 引用文件。Agent 按需读取，不会
 | `baseUrl` | string | 渠道接口地址 |
 | `apiKey` | string | 渠道密钥 |
 | `models` | string[] | 渠道可用模型列表 |
+| `imageQualityCapabilities` | object | 可选的按模型声明的质量允许值、档位映射和默认值；存于渠道 JSON，无新增表或迁移 |
 | `workflows` | object[] | RunningHub 或 ComfyUI 工作流、字段映射、拓扑及 API JSON |
 | `bridgeId` | string | ComfyUI 渠道绑定的 Bridge ID |
 | `weight` | number | 渠道权重，同一模型命中多个渠道时按权重随机 |
