@@ -8,5 +8,6 @@ data/
 *.log
 *.tsbuildinfo
 web/public/InfiniteCanvas-ComfyBridge*
+web/src/lib/image-output-capability-rules.json
 .DS_Store
 .idea

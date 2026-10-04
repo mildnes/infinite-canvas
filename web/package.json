@@ -4,9 +4,10 @@
     "private": true,
     "type": "module",
     "scripts": {
-        "dev": "next dev --webpack -H 0.0.0.0 -p 3000",
-        "build": "bun run build:bridge && next build",
+        "dev": "bun run sync:shared && next dev --webpack -H 0.0.0.0 -p 3000",
+        "build": "bun run build:bridge && bun run sync:shared && next build",
         "build:bridge": "bun ../canvas-agent/scripts/build-comfy-bridge.ts",
+        "sync:shared": "cp -f ../shared/image-output-capability-rules.json src/lib/",
         "start": "next start",
         "format": "prettier --write .",
         "format:check": "prettier --check ."

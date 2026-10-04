@@ -141,6 +141,8 @@ description: settings 表中 public 和 private 配置结构说明
 
 后台“模型渠道”设置为非工作流渠道的每个模型提供可展开的“图片输出格式声明”编辑器，可启用或关闭声明、选择透明 PNG/JPEG，并从已选格式中选择可选默认值。关闭会删除该模型的声明键；JSON 手写的声明仍会被可视化保存保留，包括 `formats: []`。保存时按模型保留、过滤未知格式并去重；无效或未包含在格式列表内的默认值会被清除。声明按渠道和模型隔离，同名模型在不同渠道互不影响。
 
+共享规则的唯一维护源是 `shared/image-output-capability-rules.json`。前端 `bun run dev` 和 `bun run build` 会先通过 `sync:shared` 将其复制到 `web/src/lib/image-output-capability-rules.json`，应用和逻辑测试都读取这个应用内副本，避免 Turbopack 越根导入。副本由 Git 忽略，不应手工修改或提交；单独运行前端逻辑测试前，先执行 `cd web && bun run sync:shared`。修改规则后重新同步，Go 仍直接嵌入原始共享文件。
+
 | 能力 | 请求行为 |
 | --- | --- |
 | OpenAI 协议的 GPT Image 模型 | 透明 PNG 对应 `output_format: "png"` 与 `background: "transparent"`；JPG 对应 `output_format: "jpeg"` |

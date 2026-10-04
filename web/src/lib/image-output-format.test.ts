@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import sharedOutputCapabilityRules from "../../../shared/image-output-capability-rules.json" with { type: "json" };
+import sharedOutputCapabilityRules from "./image-output-capability-rules.json" with { type: "json" };
 
 import {
     hasImageOutputFormatContext,

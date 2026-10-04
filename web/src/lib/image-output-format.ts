@@ -1,6 +1,6 @@
 import type { ModelChannelProtocol } from "@/lib/model-channel";
 import type { WorkflowFieldMapping, WorkflowRef } from "@/lib/workflow-channel";
-import sharedOutputCapabilityRules from "../../../shared/image-output-capability-rules.json" with { type: "json" };
+import sharedOutputCapabilityRules from "./image-output-capability-rules.json" with { type: "json" };
 
 export type ImageOutputFormat = "png-transparent" | "jpeg";
 export type ImageOutputFormatSelection = ImageOutputFormat | "auto";
