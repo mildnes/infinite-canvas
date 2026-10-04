@@ -2,20 +2,22 @@
 
 import { CheckCircleOutlined, DeleteOutlined, FormatPainterOutlined, LoadingOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import { json } from "@codemirror/lang-json";
-import { App, Button, Card, Checkbox, Col, Drawer, Flex, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from "antd";
+import { App, Button, Card, Checkbox, Col, Collapse, Drawer, Flex, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from "antd";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { EditorView } from "@uiw/react-codemirror";
 
 import { ChannelModelSelectorModal } from "@/components/channel-model-selector-modal";
 import type { WorkflowChannelSettings } from "@/components/workflow/workflow-channel-pane";
+import { IMAGE_QUALITY_OPTIONS, type ImageQualityCapability } from "@/lib/image-quality";
 import { isWorkflowProtocol, modelChannelApiKeyUrls, modelChannelDefaultBaseUrls, modelChannelProtocolOptions } from "@/lib/model-channel";
 import type { ModelCapability } from "@/lib/model-capability";
 import { fetchAdminSettings, fetchChannelModels, fetchMCPServerTools, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminMCPServer, type AdminMCPTool, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider } from "@/services/api/admin";
 import { clearStorageConfigCache as clearMediaStorageConfigCache } from "@/services/file-storage";
 import { clearStorageConfigCache as clearImageStorageConfigCache } from "@/services/image-storage";
-import { notifyPublicSettingsUpdated } from "@/stores/use-config-store";
+import { modelMatchesCapability, notifyPublicSettingsUpdated } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
+import { normalizeImageQualityCapabilities } from "./image-quality-capabilities";
 
 const CodeMirror = dynamic(() => import("@uiw/react-codemirror"), { ssr: false });
 const WorkflowChannelPane = dynamic(() => import("@/components/workflow/workflow-channel-pane").then((module) => module.WorkflowChannelPane), { ssr: false });
@@ -100,7 +102,8 @@ export default function AdminSettingsPage() {
     const channelProtocol = Form.useWatch("protocol", channelForm);
     const channelBaseUrl = Form.useWatch("baseUrl", channelForm);
     const selectedChannelModels = Form.useWatch("models", channelForm) || [];
-    const channelModelCapabilities = Form.useWatch("modelCapabilities", channelForm) || {};
+    const channelModelCapabilities = Form.useWatch("modelCapabilities", { form: channelForm, preserve: true }) || {};
+    const channelImageQualityCapabilities = Form.useWatch("imageQualityCapabilities", { form: channelForm, preserve: true }) || {};
     const defaultImageModel = Form.useWatch(["public", "modelChannel", "defaultImageModel"], form) || "";
     const channelApiKeyUrl = channelProtocol ? modelChannelApiKeyUrls[channelProtocol] : undefined;
     const modelLabel = (model: string, _channel?: unknown) => model;
@@ -267,11 +270,10 @@ export default function AdminSettingsPage() {
         closeChannelModelSelector();
     };
 
-    const updateChannelModelCapabilities = (model: string, values: ModelCapability[]) => {
+    const updateChannelModelCapabilities = (model: string, values?: ModelCapability[]) => {
         const next: NonNullable<AdminModelChannel["modelCapabilities"]> = { ...(channelForm.getFieldValue("modelCapabilities") || {}) };
-        const capabilities = uniqueCapabilities(values);
-        if (capabilities.length) next[model] = capabilities;
-        else delete next[model];
+        if (values === undefined) delete next[model];
+        else next[model] = uniqueCapabilities(values);
         channelForm.setFieldValue("modelCapabilities", Object.keys(next).length ? next : undefined);
     };
 
@@ -282,6 +284,13 @@ export default function AdminSettingsPage() {
             else delete next[model];
         }
         channelForm.setFieldValue("modelCapabilities", Object.keys(next).length ? next : undefined);
+    };
+
+    const updateChannelImageQualityCapability = (model: string, capability?: ImageQualityCapability) => {
+        const next = { ...(channelForm.getFieldValue("imageQualityCapabilities") || {}) };
+        if (capability === undefined) delete next[model];
+        else next[model] = capability;
+        channelForm.setFieldValue("imageQualityCapabilities", normalizeImageQualityCapabilities(next, selectedChannelModels));
     };
 
     function rememberModels(models: string[]) {
@@ -1095,7 +1104,7 @@ export default function AdminSettingsPage() {
                             </Col>
                             {selectedChannelModels.length ? (
                                 <Col span={24}>
-                                    <Form.Item label="模型能力声明（可选）" extra="未声明的模型继续使用兼容推导；取消某模型全部勾选会移除声明。">
+                                    <Form.Item label="模型能力声明（可选）" extra="自动推导按协议和模型名估算，自定义模型请手动声明。取消全部勾选表示无可用能力；点击自动推导可移除声明。">
                                         <Flex vertical gap={10}>
                                             <Flex align="center" gap={8} wrap>
                                                 <Select
@@ -1114,19 +1123,91 @@ export default function AdminSettingsPage() {
                                                 </Button>
                                             </Flex>
                                             <div style={{ maxHeight: 240, overflowY: "auto", border: "1px solid var(--ant-color-border-secondary)", borderRadius: 6, padding: "4px 10px" }}>
-                                                {selectedChannelModels.map((model: string) => (
-                                                    <Flex key={model} justify="space-between" align="center" gap={12} wrap style={{ minHeight: 38, borderBottom: "1px solid var(--ant-color-border-secondary)" }}>
-                                                        <Typography.Text ellipsis title={model} style={{ flex: "1 1 150px", minWidth: 120 }}>{model}</Typography.Text>
-                                                        {!channelModelCapabilities[model]?.length ? <Tag>自动推导</Tag> : null}
-                                                        <Checkbox.Group
-                                                            options={modelCapabilityOptions}
-                                                            value={channelModelCapabilities[model] || []}
-                                                            onChange={(values) => updateChannelModelCapabilities(model, values as ModelCapability[])}
-                                                        />
-                                                    </Flex>
-                                                ))}
+                                                {selectedChannelModels.map((model: string) => {
+                                                    const declared = channelModelCapabilities[model];
+                                                    const automatic = !Array.isArray(declared);
+                                                    const capabilities = automatic
+                                                        ? modelCapabilityOptions.filter(({ value }) => modelMatchesCapability(model, value, channelProtocol)).map(({ value }) => value)
+                                                        : declared;
+                                                    return (
+                                                        <Flex key={model} justify="space-between" align="center" gap={12} wrap style={{ minHeight: 38, borderBottom: "1px solid var(--ant-color-border-secondary)" }}>
+                                                            <Typography.Text ellipsis title={model} style={{ flex: "1 1 150px", minWidth: 120 }}>{model}</Typography.Text>
+                                                            <Button size="small" type="text" title="移除手动声明，恢复按协议和模型名推导" aria-label={`${model} 恢复自动推导`} onClick={() => updateChannelModelCapabilities(model)}>
+                                                                {automatic ? "自动推导" : "恢复自动推导"}
+                                                            </Button>
+                                                            <Checkbox.Group
+                                                                options={modelCapabilityOptions}
+                                                                value={capabilities}
+                                                                onChange={(values) => updateChannelModelCapabilities(model, values as ModelCapability[])}
+                                                            />
+                                                        </Flex>
+                                                    );
+                                                })}
                                             </div>
                                         </Flex>
+                                    </Form.Item>
+                                </Col>
+                            ) : null}
+                            {selectedChannelModels.length ? (
+                                <Col span={24}>
+                                    <Form.Item label="图片质量能力声明（可选）" extra="不声明时保持原样透传；启用后填写上游允许值，留空表示不支持 quality。映射与默认值只能选择允许值。">
+                                        <Collapse size="small" items={selectedChannelModels.map((model: string) => {
+                                            const capability: ImageQualityCapability | undefined = channelImageQualityCapabilities[model];
+                                            const options = (capability?.values || []).map((value) => ({ label: value, value }));
+                                            return {
+                                                key: model,
+                                                label: model,
+                                                extra: <Tag>{capability ? "已声明" : "原样透传"}</Tag>,
+                                                children: (
+                                                    <Flex vertical gap={10}>
+                                                        <Flex align="center" gap={8}>
+                                                            <Switch aria-label={`${model} 启用质量声明`} checked={Boolean(capability)} onChange={(enabled) => updateChannelImageQualityCapability(model, enabled ? { values: [] } : undefined)} />
+                                                            <Typography.Text>启用质量声明</Typography.Text>
+                                                        </Flex>
+                                                        {capability ? <>
+                                                            <Typography.Text>上游允许的质量值</Typography.Text>
+                                                            <Select
+                                                                mode="tags"
+                                                                aria-label={`${model} 上游质量允许值`}
+                                                                placeholder="输入允许值，例如 low、high、auto"
+                                                                tokenSeparators={[",", "\n"]}
+                                                                value={capability.values}
+                                                                options={IMAGE_QUALITY_OPTIONS.map(({ value, label }) => ({ value, label: `${label}（${value}）` }))}
+                                                                onChange={(values) => updateChannelImageQualityCapability(model, { ...capability, values })}
+                                                            />
+                                                            <Typography.Text>六档质量映射</Typography.Text>
+                                                            <Typography.Text type="secondary">允许值直接透传；其余档位先使用映射，再使用默认值。</Typography.Text>
+                                                            <Row gutter={[12, 8]}>
+                                                                {IMAGE_QUALITY_OPTIONS.map(({ value, label }) => (
+                                                                    <Col span={12} key={value}>
+                                                                        <Flex vertical gap={4}>
+                                                                            <Typography.Text type="secondary">{label}（{value}）</Typography.Text>
+                                                                            <Select
+                                                                                aria-label={`${model} ${value} 映射`}
+                                                                                allowClear
+                                                                                placeholder="未映射"
+                                                                                options={options}
+                                                                                value={capability.map?.[value]}
+                                                                                onChange={(target) => updateChannelImageQualityCapability(model, { ...capability, map: { ...capability.map, [value]: target || "" } })}
+                                                                            />
+                                                                        </Flex>
+                                                                    </Col>
+                                                                ))}
+                                                            </Row>
+                                                            <Typography.Text>无法匹配时的默认值</Typography.Text>
+                                                            <Select
+                                                                aria-label={`${model} 质量默认值`}
+                                                                allowClear
+                                                                placeholder="未设置时省略质量参数"
+                                                                options={options}
+                                                                value={capability.defaultValue}
+                                                                onChange={(defaultValue) => updateChannelImageQualityCapability(model, { ...capability, defaultValue })}
+                                                            />
+                                                        </> : null}
+                                                    </Flex>
+                                                ),
+                                            };
+                                        })} />
                                     </Form.Item>
                                 </Col>
                             ) : null}
@@ -1429,29 +1510,12 @@ function normalizeChannel(item: Partial<AdminModelChannel> = {}): AdminModelChan
     };
 }
 
-function normalizeImageQualityCapabilities(capabilities: AdminModelChannel["imageQualityCapabilities"], models: string[]) {
-    if (!capabilities) return undefined;
-    const modelSet = new Set(models);
-    const result: NonNullable<AdminModelChannel["imageQualityCapabilities"]> = {};
-    for (const [model, capability] of Object.entries(capabilities)) {
-        if (!modelSet.has(model) || !capability) continue;
-        const values = Array.from(new Set((capability.values || []).map((value) => String(value).trim()).filter(Boolean)));
-        const map = Object.fromEntries(Object.entries(capability.map || {})
-            .map(([key, value]) => [key.trim().toLowerCase(), String(value).trim()] as const)
-            .filter(([key, value]) => key && value && values.includes(value)));
-        const defaultValue = values.includes(capability.defaultValue || "") ? capability.defaultValue : undefined;
-        result[model] = { values, ...(Object.keys(map).length ? { map } : {}), ...(defaultValue ? { defaultValue } : {}) };
-    }
-    return Object.keys(result).length ? result : undefined;
-}
-
 function normalizeModelCapabilities(capabilities: AdminModelChannel["modelCapabilities"], models: string[]) {
     if (!capabilities) return undefined;
     const modelSet = new Set(models);
     const result: NonNullable<AdminModelChannel["modelCapabilities"]> = {};
     for (const [model, values] of Object.entries(capabilities)) {
-        const normalized = uniqueCapabilities(values);
-        if (modelSet.has(model) && normalized.length) result[model] = normalized;
+        if (modelSet.has(model) && Array.isArray(values)) result[model] = uniqueCapabilities(values);
     }
     return Object.keys(result).length ? result : undefined;
 }

@@ -86,6 +86,8 @@ description: settings 表中 public 和 private 配置结构说明
 
 值只能包含 `image`、`video`、`text`、`audio`。对某个模型存在声明时，前端完全按声明筛选；空数组表示该模型没有可用能力。删除该模型的声明后才回到旧版本的名称兼容推导，因此模型更名或自定义模型不再需要把 `image`、`video` 等关键词写进模型名。声明保存在 `private.channels[].modelCapabilities`，公开响应位于 `modelChannel.channels[].modelCapabilities`；两者都按所属渠道隔离，同名模型可以在不同渠道声明不同能力。
 
+渠道编辑器在自动状态下显示按协议和模型名推导的能力；自定义命名无法准确推导时，请手动勾选能力或批量应用。点击“恢复自动推导”会移除该模型的手动声明，批量清除也会恢复自动状态；手动取消全部勾选则保存为空数组。勾选和批量应用立即更新表单，保存渠道后生效。
+
 ### 图片质量能力
 
 渠道还可以按模型声明 `imageQualityCapabilities`，用于把前端的 `low`、`medium`、`high`、`xhigh`、`max`、`auto` 档位映射为上游实际接受的值：
@@ -102,7 +104,9 @@ description: settings 表中 public 和 private 配置结构说明
 }
 ```
 
-`values` 是上游允许的原始值，`map` 是 UI 档位到原始值的显式映射，`defaultValue` 是无法匹配时的回退值。映射和默认值必须在 `values` 中；无法匹配且没有合法默认值时省略 `quality` 并提示，`values: []` 明确表示不接受该参数。通过后台私有配置的 JSON 编辑器设置，渠道可视化编辑不会丢失已有声明；公开配置返回 `modelChannel.channels[].imageQualityCapabilities`。当前没有自动识别 Rolldek 等域名的规则，未声明渠道继续原样透传。登录请求由服务端按实际渠道校验，未登录本地直连从本地渠道声明解析；仅处理已带 `quality` 的图片请求，不主动注入参数。改写通过 `X-Image-Quality` 与 `X-Image-Quality-Notice` 响应头及界面提示可追踪，移除参数时只有 Notice；本地参数转译结果还返回 `imageQuality` 和 `imageQualityNotice`。`codexCli` 兼容模式只负责提示词保护和并发策略，不再静默删除 `quality`。
+在后台“模型渠道”设置中，非工作流渠道会为每个已选模型提供可展开的图片质量编辑器。可启用或关闭该模型的声明；关闭会删除该模型规则，使请求恢复原样透传。允许值可用标签录入上游支持的字符串，再为 `low`、`medium`、`high`、`xhigh`、`max`、`auto` 六档选择映射，并选择默认回退值；映射目标和默认值只能从允许值中选择。删除允许值会立即清理引用该值的映射和默认值，清空允许值（`values: []`）表示不发送 `quality`。保存并重新打开渠道后配置仍保留。也可继续通过后台私有配置 JSON 编辑器维护声明；配置按渠道和模型隔离，同名模型在不同渠道互不影响。公开配置返回 `modelChannel.channels[].imageQualityCapabilities`。
+
+`values` 是上游允许的原始值，`map` 是 UI 档位到原始值的显式映射，`defaultValue` 是无法匹配时的回退值。映射和默认值必须在 `values` 中；无法匹配且没有合法默认值时省略 `quality` 并提示。当前没有自动识别 Rolldek 等域名的规则，未声明渠道继续原样透传。登录请求由服务端按实际渠道校验，未登录本地直连从本地渠道声明解析；仅处理已带 `quality` 的图片请求，不主动注入参数。改写通过 `X-Image-Quality` 与 `X-Image-Quality-Notice` 响应头及界面提示可追踪，移除参数时只有 Notice；本地参数转译结果还返回 `imageQuality` 和 `imageQualityNotice`。`codexCli` 兼容模式只负责提示词保护和并发策略，不再静默删除 `quality`。
 
 用户侧请求模式：
 
