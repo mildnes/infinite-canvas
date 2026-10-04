@@ -106,6 +106,20 @@ export type AiConfig = {
 };
 
 export const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
+export const PUBLIC_SETTINGS_REVISION_KEY = "infinite-canvas:public-settings-revision";
+export const PUBLIC_SETTINGS_UPDATED_EVENT = "infinite-canvas:public-settings-updated";
+
+/** Notify already-open user pages that the admin public model configuration changed. */
+export function notifyPublicSettingsUpdated() {
+    if (typeof window === "undefined") return;
+    window.dispatchEvent(new Event(PUBLIC_SETTINGS_UPDATED_EVENT));
+    try {
+        window.localStorage.setItem(PUBLIC_SETTINGS_REVISION_KEY, String(Date.now()));
+    } catch {
+        // Some privacy modes disable localStorage; the same-tab event above still works.
+    }
+}
+
 export type ModelCapability = "image" | "video" | "text" | "audio";
 
 export const defaultConfig: AiConfig = {
@@ -299,6 +313,13 @@ function isImageModelName(model: string) {
         value.includes("nano-banana") ||
         value.includes("seedream") ||
         value.includes("gpt-image") ||
+        // APIMart/OpenAI-compatible image channels may expose the GPT 2.5
+        // families without the historical `gpt-image` prefix (for example
+        // `gpt-2.5-flare-2k` and `gpt-2.5-sunburst-4k`). Keep these model
+        // families on the image side of the capability fallback so a newly
+        // configured image model is not silently removed from every picker.
+        value.includes("gpt-2.5-flare") ||
+        value.includes("gpt-2.5-sunburst") ||
         value.includes("cogview") ||
         value.includes("dall-e") ||
         value.includes("dalle") ||

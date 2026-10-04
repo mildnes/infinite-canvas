@@ -13,6 +13,7 @@ import { isWorkflowProtocol, modelChannelApiKeyUrls, modelChannelDefaultBaseUrls
 import { fetchAdminSettings, fetchChannelModels, fetchMCPServerTools, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminMCPServer, type AdminMCPTool, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider } from "@/services/api/admin";
 import { clearStorageConfigCache as clearMediaStorageConfigCache } from "@/services/file-storage";
 import { clearStorageConfigCache as clearImageStorageConfigCache } from "@/services/image-storage";
+import { notifyPublicSettingsUpdated } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
 const CodeMirror = dynamic(() => import("@uiw/react-codemirror"), { ssr: false });
@@ -147,6 +148,7 @@ export default function AdminSettingsPage() {
                 public: JSON.stringify(merged.public, null, 2),
                 private: JSON.stringify(merged.private, null, 2),
             });
+            notifyPublicSettingsUpdated();
             message.success("已保存");
         } catch (error) {
             message.error(error instanceof Error ? error.message : "保存失败");
@@ -319,6 +321,7 @@ export default function AdminSettingsPage() {
             public: JSON.stringify(merged.public, null, 2),
             private: JSON.stringify(merged.private, null, 2),
         });
+        notifyPublicSettingsUpdated();
         message.success("已保存");
     }
 

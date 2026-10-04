@@ -9,7 +9,7 @@ import { fetchUserConfig } from "@/services/api/user-config";
 import { normalizeImageOutputFormat } from "@/lib/image-output-format";
 import { clearStorageConfigCache as clearImageStorageConfigCache, defaultUserStorageProvider, defaultUserWebDAVStorageProvider, saveUserStorageProvider, saveUserWebDAVStorageProvider, STORAGE_SYNC_COMPLETED_EVENT, STORAGE_SYNC_FAILED_EVENT } from "@/services/image-storage";
 import { clearStorageConfigCache as clearFileStorageConfigCache } from "@/services/file-storage";
-import { defaultConfig, useConfigStore, type AiConfig } from "@/stores/use-config-store";
+import { defaultConfig, PUBLIC_SETTINGS_REVISION_KEY, PUBLIC_SETTINGS_UPDATED_EVENT, useConfigStore, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
 export function ClientRootInit({ children }: { children: ReactNode }) {
@@ -29,6 +29,19 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         void loadPublicSettings();
+    }, [loadPublicSettings]);
+
+    useEffect(() => {
+        const refresh = () => void loadPublicSettings();
+        const handleStorage = (event: StorageEvent) => {
+            if (event.key === PUBLIC_SETTINGS_REVISION_KEY) refresh();
+        };
+        window.addEventListener(PUBLIC_SETTINGS_UPDATED_EVENT, refresh);
+        window.addEventListener("storage", handleStorage);
+        return () => {
+            window.removeEventListener(PUBLIC_SETTINGS_UPDATED_EVENT, refresh);
+            window.removeEventListener("storage", handleStorage);
+        };
     }, [loadPublicSettings]);
 
     useEffect(() => {
