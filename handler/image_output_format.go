@@ -160,7 +160,7 @@ func normalizeMultipartImageOutputFormat(body []byte, contentType string, capabi
 			}
 		}
 	}
-	for key, headers := range form.File {
+	for _, headers := range form.File {
 		for _, header := range headers {
 			file, err := header.Open()
 			if err != nil {
