@@ -145,6 +145,105 @@ func TestValidateUniqueModelChannelIDs(t *testing.T) {
 	}
 }
 
+func TestModelCapabilitiesNormalizeAndRemainChannelScoped(t *testing.T) {
+	settings := normalizeSettings(model.Settings{
+		Private: model.PrivateSetting{Channels: []model.ModelChannel{{
+			ID:      "image-channel",
+			Enabled: true,
+			BaseURL: "https://example.com",
+			APIKey:  "key",
+			Models:  []string{"image-model", "text-model"},
+			ModelCapabilities: map[string][]model.ModelCapability{
+				" image-model ": {" IMAGE ", "image", "unknown"},
+				"text-model":    {"text", "audio"},
+				"empty-model":   {},
+				"unknown-model": {"unknown"},
+				"":              {"video"},
+			},
+		}}},
+		Public: model.PublicSetting{ModelChannel: model.PublicModelChannelSetting{
+			AvailableModels: []string{"image-model"},
+		}},
+	})
+
+	gotPrivate := settings.Private.Channels[0].ModelCapabilities
+	wantPrivate := map[string][]model.ModelCapability{
+		"image-model":   {model.ModelCapabilityImage},
+		"text-model":    {model.ModelCapabilityText, model.ModelCapabilityAudio},
+		"empty-model":   {},
+		"unknown-model": {},
+	}
+	if !reflect.DeepEqual(gotPrivate, wantPrivate) {
+		t.Fatalf("normalized private model capabilities = %#v, want %#v", gotPrivate, wantPrivate)
+	}
+
+	infos := publicChannelInfos(settings.Private.Channels, settings.Public.ModelChannel.AvailableModels)
+	if len(infos) != 1 {
+		t.Fatalf("public channels = %#v, want one channel", infos)
+	}
+	wantPublic := map[string][]model.ModelCapability{"image-model": {model.ModelCapabilityImage}}
+	if !reflect.DeepEqual(infos[0].ModelCapabilities, wantPublic) {
+		t.Fatalf("public model capabilities = %#v, want only allowed model declaration %#v", infos[0].ModelCapabilities, wantPublic)
+	}
+}
+
+func TestModelCapabilitiesRemainAbsentForLegacyChannels(t *testing.T) {
+	settings := normalizeSettings(model.Settings{Private: model.PrivateSetting{Channels: []model.ModelChannel{{
+		ID:      "legacy-channel",
+		Enabled: true,
+		BaseURL: "https://example.com",
+		APIKey:  "key",
+		Models:  []string{"legacy-model"},
+	}}}})
+	if settings.Private.Channels[0].ModelCapabilities != nil {
+		t.Fatalf("legacy channel gained inferred capabilities: %#v", settings.Private.Channels[0].ModelCapabilities)
+	}
+	infos := publicChannelInfos(settings.Private.Channels)
+	if len(infos) != 1 || infos[0].ModelCapabilities != nil {
+		t.Fatalf("legacy public channel capabilities = %#v, want omitted", infos)
+	}
+}
+
+func TestDefaultModelsPreferExplicitCapabilities(t *testing.T) {
+	channels := []model.ModelChannel{{
+		ID:      "custom-channel",
+		Enabled: true,
+		Models:  []string{"custom-renderer", "custom-chat"},
+		ModelCapabilities: map[string][]model.ModelCapability{
+			"custom-renderer": {model.ModelCapabilityImage},
+			"custom-chat":     {model.ModelCapabilityText},
+		},
+	}}
+	setting := normalizePublicSettingWithChannels(model.PublicSetting{ModelChannel: model.PublicModelChannelSetting{
+		AvailableModels: []string{"custom-renderer", "custom-chat"},
+	}}, channels)
+	if setting.ModelChannel.DefaultImageModel != "custom-renderer" {
+		t.Fatalf("default image model = %q, want explicit image model", setting.ModelChannel.DefaultImageModel)
+	}
+	if setting.ModelChannel.DefaultTextModel != "custom-chat" {
+		t.Fatalf("default text model = %q, want explicit text model", setting.ModelChannel.DefaultTextModel)
+	}
+}
+
+func TestExplicitCapabilityCanRejectLegacyDefault(t *testing.T) {
+	channels := []model.ModelChannel{{
+		ID:      "custom-channel",
+		Enabled: true,
+		Models:  []string{"gpt-image-custom", "text-custom"},
+		ModelCapabilities: map[string][]model.ModelCapability{
+			"gpt-image-custom": {},
+			"text-custom":      {model.ModelCapabilityText},
+		},
+	}}
+	setting := normalizePublicSettingWithChannels(model.PublicSetting{ModelChannel: model.PublicModelChannelSetting{
+		AvailableModels:   []string{"gpt-image-custom", "text-custom"},
+		DefaultImageModel: "gpt-image-custom",
+	}}, channels)
+	if setting.ModelChannel.DefaultImageModel == "gpt-image-custom" {
+		t.Fatal("explicit empty image capability must reject the legacy image default")
+	}
+}
+
 func TestVideoAndWorkflowPricesUseSelectedChannel(t *testing.T) {
 	costs := []model.ModelCost{
 		{ChannelID: "cheap", Model: "shared-video", Credits: 20},
@@ -178,13 +277,13 @@ func TestPublicPricingCandidatesExcludeUnusableChannels(t *testing.T) {
 func TestWorkflowPricingUsesChannelScopedBillingName(t *testing.T) {
 	channels := []model.ModelChannel{
 		{
-			ID:       "runninghub-a",
-			Protocol: "runninghub",
+			ID:        "runninghub-a",
+			Protocol:  "runninghub",
 			Workflows: []model.WorkflowEntry{{Provider: "runninghub", Kind: "workflow", WorkflowID: "wf-a", Enabled: true}},
 		},
 		{
-			ID:       "runninghub-b",
-			Protocol: "runninghub",
+			ID:        "runninghub-b",
+			Protocol:  "runninghub",
 			Workflows: []model.WorkflowEntry{{Provider: "runninghub", Kind: "workflow", WorkflowID: "wf-a", Enabled: true}},
 		},
 	}
@@ -205,16 +304,16 @@ func TestPublicChannelInfosIncludesAllowedWorkflowSummaries(t *testing.T) {
 	ref := WorkflowRef{Scope: "system", ChannelID: "comfy-a", Kind: "workflow", WorkflowID: "portrait"}
 	name := workflowBillingName(ref)
 	infos := publicChannelInfos([]model.ModelChannel{{
-		ID:       "comfy-a",
-		Protocol: "comfyui",
+		ID:        "comfy-a",
+		Protocol:  "comfyui",
 		Workflows: []model.WorkflowEntry{{Provider: "comfyui", Kind: "workflow", WorkflowID: "portrait", Title: "Portrait", Capability: "image", Enabled: true}},
 	}}, nil, []string{name})
 	if len(infos) != 1 || len(infos[0].Workflows) != 1 || infos[0].Workflows[0].WorkflowID != "portrait" {
 		t.Fatalf("workflow public config = %#v", infos)
 	}
 	if filtered := publicChannelInfos([]model.ModelChannel{{
-		ID:       "comfy-a",
-		Protocol: "comfyui",
+		ID:        "comfy-a",
+		Protocol:  "comfyui",
 		Workflows: []model.WorkflowEntry{{Provider: "comfyui", Kind: "workflow", WorkflowID: "portrait", Enabled: true}},
 	}}, nil, []string{"workflow:system:comfy-a:workflow:other"}); len(filtered) != 0 {
 		t.Fatalf("unlisted workflow should be hidden: %#v", filtered)

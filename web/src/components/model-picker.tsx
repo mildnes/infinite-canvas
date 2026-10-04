@@ -5,6 +5,7 @@ import { Cpu } from "lucide-react";
 
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { isWorkflowProtocol } from "@/lib/model-channel";
+import type { ModelCapabilities } from "@/lib/model-capability";
 import { cn } from "@/lib/utils";
 import type { WorkflowRef } from "@/lib/workflow-channel";
 import { filterModelsByCapability, normalizeLocalChannels, useConfigStore, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
@@ -25,8 +26,12 @@ type ModelPickerProps = {
     side?: "top" | "bottom";
 };
 
-type PickerBase = { key: string; channelId?: string; channelName: string; protocol?: string; baseUrl?: string };
+type PickerBase = { key: string; channelId?: string; channelName: string; protocol?: string; baseUrl?: string; modelCapabilities?: ModelCapabilities };
 type PickerOption = (PickerBase & { model: string }) | (PickerBase & { model: ""; workflowRef: WorkflowRef; label: string });
+
+function isWorkflowOption(option: PickerOption): option is PickerBase & { model: ""; workflowRef: WorkflowRef; label: string } {
+    return "workflowRef" in option;
+}
 
 export function ModelPicker({ config, value, channelId, capability, onChange, workflowRef, onWorkflowChange, className, fullWidth = false, placeholder = "选择模型", onMissingConfig, side = "bottom" }: ModelPickerProps) {
     const pickerId = useId();
@@ -38,10 +43,10 @@ export function ModelPicker({ config, value, channelId, capability, onChange, wo
     const channelOptions = useMemo<PickerOption[]>(() => {
         const channels =
             config.channelMode === "remote"
-                ? config.publicChannels.map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "云端渠道", baseUrl: channel.baseUrl, models: channel.models, workflows: channel.workflows || [] }))
-                : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "本地渠道", baseUrl: channel.baseUrl, models: channel.models, workflows: channel.workflowSummaries || [] }));
-        const models = channels.filter((channel) => !isWorkflowProtocol(channel.protocol || "")).flatMap((channel) => (channel.models ?? []).map((model) => ({ key: `${channel.id}::${model}`, channelId: channel.id, channelName: channel.name, protocol: channel.protocol, baseUrl: channel.baseUrl, model })));
-        const filtered = capability ? models.filter((item) => filterModelsByCapability([item.model], capability, item.protocol || "").length > 0) : models;
+                ? config.publicChannels.map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "云端渠道", baseUrl: channel.baseUrl, models: channel.models, modelCapabilities: channel.modelCapabilities, workflows: channel.workflows || [] }))
+                : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "本地渠道", baseUrl: channel.baseUrl, models: channel.models, modelCapabilities: channel.modelCapabilities, workflows: channel.workflowSummaries || [] }));
+        const models = channels.filter((channel) => !isWorkflowProtocol(channel.protocol || "")).flatMap((channel) => (channel.models ?? []).map((model) => ({ key: `${channel.id}::${model}`, channelId: channel.id, channelName: channel.name, protocol: channel.protocol, baseUrl: channel.baseUrl, modelCapabilities: channel.modelCapabilities, model })));
+        const filtered = capability ? models.filter((item) => filterModelsByCapability([item.model], capability, item.protocol || "", item.modelCapabilities).length > 0) : models;
         if (!workflowEnabled || !token) return filtered;
         const scope = config.channelMode === "remote" ? "system" : "personal";
         return [...filtered, ...channels.flatMap((channel) => isWorkflowProtocol(channel.protocol || "") ? channel.workflows.filter((entry) => entry.enabled && entry.capability === capability && entry.provider === channel.protocol).map((entry) => {
@@ -51,15 +56,15 @@ export function ModelPicker({ config, value, channelId, capability, onChange, wo
     }, [capability, config, token, workflowEnabled]);
     const modelLabel = (model: string, _option?: unknown) => model;
     const currentOption = useMemo(() => {
-        if (workflowRef && workflowEnabled) return channelOptions.find((item) => "workflowRef" in item && item.key === `workflow:${JSON.stringify([workflowRef.scope, workflowRef.channelId, workflowRef.kind, workflowRef.workflowId])}`);
+        if (workflowRef && workflowEnabled) return channelOptions.find((item) => isWorkflowOption(item) && item.key === `workflow:${JSON.stringify([workflowRef.scope, workflowRef.channelId, workflowRef.kind, workflowRef.workflowId])}`);
         if (!value) return undefined;
         return channelOptions.find((item) => item.model === value && item.channelId === channelId) || channelOptions.find((item) => item.model === value);
     }, [channelId, channelOptions, value, workflowEnabled, workflowRef]);
     const options = channelOptions;
     const current = workflowRef && workflowEnabled
-        ? (currentOption && "label" in currentOption ? currentOption.label : "")
+        ? (currentOption && isWorkflowOption(currentOption) ? currentOption.label : "")
         : currentOption
-            ? "workflowRef" in currentOption ? currentOption.label : currentOption.model
+            ? isWorkflowOption(currentOption) ? currentOption.label : currentOption.model
             : config.channelMode !== "remote" ? value || "" : "";
     const currentValue = current && currentOption ? currentOption.key : "";
 
@@ -129,8 +134,8 @@ export function ModelPicker({ config, value, channelId, capability, onChange, wo
             >
                 {options.length ? (
                     options.map((option) => (
-                        <SelectItem key={option.key} value={option.key} textValue={`${"workflowRef" in option ? option.label : modelLabel(option.model, option)} ${option.model} ${option.channelName}`}>
-                            <ModelLabel model={"workflowRef" in option ? option.workflowRef.workflowId : option.model} label={"workflowRef" in option ? `工作流 · ${option.label}` : modelLabel(option.model, option)} channelName={option.channelName} />
+                        <SelectItem key={option.key} value={option.key} textValue={`${isWorkflowOption(option) ? option.label : modelLabel(option.model, option)} ${option.model} ${option.channelName}`}>
+                            <ModelLabel model={isWorkflowOption(option) ? option.workflowRef.workflowId : option.model} label={isWorkflowOption(option) ? `工作流 · ${option.label}` : modelLabel(option.model, option)} channelName={option.channelName} />
                         </SelectItem>
                     ))
                 ) : (

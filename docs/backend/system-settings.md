@@ -55,9 +55,9 @@ description: settings 表中 public 和 private 配置结构说明
 | `availableWorkflows` | string[] | 对普通用户开放的系统工作流标识；仅工作流渠道使用 |
 | `modelCosts` | object[] | 按渠道 ID 和模型分别配置算力点；后端选定渠道后预扣，失败时返还实际预扣额；未配置默认不扣除 |
 | `defaultModel` | string | 默认模型，从 `availableModels` 中选择；为空或失效时优先选择文本模型 |
-| `defaultImageModel` | string | 默认图片模型，从 `availableModels` 中选择；为空或失效时优先选择 `seedream`、`image`、`gpt-image` 模型 |
-| `defaultVideoModel` | string | 默认视频模型，从 `availableModels` 中选择；为空或失效时优先选择 `seedance`、`video` 模型 |
-| `defaultTextModel` | string | 默认文本模型，从 `availableModels` 中选择；为空或失效时优先选择非图片/视频模型 |
+| `defaultImageModel` | string | 默认图片模型，从 `availableModels` 中选择；为空或失效时优先选择渠道显式声明为 `image` 的模型，再兼容旧的 `seedream`、`image`、`gpt-image` 名称推导 |
+| `defaultVideoModel` | string | 默认视频模型，从 `availableModels` 中选择；为空或失效时优先选择渠道显式声明为 `video` 的模型，再兼容旧的 `seedance`、`video` 名称推导 |
+| `defaultTextModel` | string | 默认文本模型，从 `availableModels` 中选择；为空或失效时优先选择渠道显式声明为 `text` 的模型，再兼容旧的非图片/视频名称推导 |
 | `systemPrompt` | string | 系统提示词 |
 | `allowCustomChannel` | boolean | 是否允许用户在配置弹窗中切换为本地直连渠道，默认允许 |
 
@@ -70,6 +70,21 @@ description: settings 表中 public 和 private 配置结构说明
 | `credits` | number | 每次后端模型接口调用前预扣的算力点；图片多张生成按张数乘算 |
 
 读取旧版仅含 `model` 和 `credits` 的价格时，系统将其复制到当时包含该模型的各渠道；已有渠道专属价格优先。未匹配渠道的旧价格保留在配置中，但不会参与扣费。后台按渠道（含停用渠道）列出全部模型，新模型未定价为 0 点。未指定渠道时，服务端可在可用渠道中选择；画布显示相应的预计点数范围。本地直连不扣点。流水 `extra.channelId` 记录实际调用渠道。
+
+### 模型能力声明
+
+管理员可以在私有渠道配置中为模型声明通用能力，公开配置会按渠道和已开放模型返回同样的声明：
+
+```json
+{
+  "modelCapabilities": {
+    "acme-renderer-v7": ["image"],
+    "multimodal-pro": ["image", "text"]
+  }
+}
+```
+
+值只能包含 `image`、`video`、`text`、`audio`。对某个模型存在声明时，前端完全按声明筛选；空数组表示该模型没有可用能力。删除该模型的声明后才回到旧版本的名称兼容推导，因此模型更名或自定义模型不再需要把 `image`、`video` 等关键词写进模型名。声明保存在 `private.channels[].modelCapabilities`，公开响应位于 `modelChannel.channels[].modelCapabilities`；两者都按所属渠道隔离，同名模型可以在不同渠道声明不同能力。
 
 用户侧请求模式：
 
@@ -211,6 +226,7 @@ docker compose exec app /app/image-log-summaries -apply -limit 10
 | `baseUrl` | string | 渠道接口地址 |
 | `apiKey` | string | 渠道密钥 |
 | `models` | string[] | 该渠道可用模型 |
+| `modelCapabilities` | object | 可选的模型能力声明，键为模型名，值为 `image`、`video`、`text`、`audio` 数组；未声明时沿用旧名称推导 |
 | `workflows` | object[] | RunningHub 或 ComfyUI 工作流条目，包含用途、启停状态、字段映射及工作流 JSON/拓扑 |
 | `bridgeId` | string | ComfyUI 渠道绑定的 Bridge 设备 ID |
 | `weight` | number | 渠道权重；同一模型有多个可用渠道时按权重随机 |

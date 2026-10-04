@@ -16,22 +16,32 @@ const (
 
 // ModelChannel 模型渠道配置。
 type ModelChannel struct {
-	ID           string          `json:"id"`
-	Protocol     string          `json:"protocol"`
-	Name         string          `json:"name"`
-	BaseURL      string          `json:"baseUrl"`
-	APIKey       string          `json:"apiKey"`
-	Models       []string        `json:"models"`
-	Weight       int             `json:"weight"`
-	Timeout      int             `json:"timeout"`
-	Enabled      bool            `json:"enabled"`
-	Remark       string          `json:"remark"`
-	UploadAPIKey string          `json:"uploadApiKey,omitempty"`
-	BridgeID     string          `json:"bridgeId,omitempty"`
-	ComfyURL     string          `json:"comfyUrl,omitempty"`
-	WorkflowDir  string          `json:"workflowDir,omitempty"`
-	Workflows    []WorkflowEntry `json:"workflows,omitempty"`
+	ID                string                       `json:"id"`
+	Protocol          string                       `json:"protocol"`
+	Name              string                       `json:"name"`
+	BaseURL           string                       `json:"baseUrl"`
+	APIKey            string                       `json:"apiKey"`
+	Models            []string                     `json:"models"`
+	ModelCapabilities map[string][]ModelCapability `json:"modelCapabilities,omitempty"`
+	Weight            int                          `json:"weight"`
+	Timeout           int                          `json:"timeout"`
+	Enabled           bool                         `json:"enabled"`
+	Remark            string                       `json:"remark"`
+	UploadAPIKey      string                       `json:"uploadApiKey,omitempty"`
+	BridgeID          string                       `json:"bridgeId,omitempty"`
+	ComfyURL          string                       `json:"comfyUrl,omitempty"`
+	WorkflowDir       string                       `json:"workflowDir,omitempty"`
+	Workflows         []WorkflowEntry              `json:"workflows,omitempty"`
 }
+
+type ModelCapability string
+
+const (
+	ModelCapabilityImage ModelCapability = "image"
+	ModelCapabilityVideo ModelCapability = "video"
+	ModelCapabilityText  ModelCapability = "text"
+	ModelCapabilityAudio ModelCapability = "audio"
+)
 
 type WorkflowFieldMapping struct {
 	ID                 string `json:"id,omitempty"`
@@ -133,6 +143,7 @@ type PublicModelChannelInfo struct {
 	Name                    string                           `json:"name"`
 	BaseURL                 string                           `json:"baseUrl"`
 	Models                  []string                         `json:"models"`
+	ModelCapabilities       map[string][]ModelCapability     `json:"modelCapabilities,omitempty"`
 	ImageOutputCapabilities map[string]ImageOutputCapability `json:"imageOutputCapabilities,omitempty"`
 	Weight                  int                              `json:"weight"`
 	Timeout                 int                              `json:"timeout"`

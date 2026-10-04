@@ -1,5 +1,6 @@
 import type { ModelChannelProtocol } from "@/lib/model-channel";
 import type { ImageOutputCapabilities } from "@/lib/image-output-format";
+import type { ModelCapabilities } from "@/lib/model-capability";
 import type { WorkflowEntry, WorkflowSummary } from "@/lib/workflow-channel";
 import { apiDelete, apiGet, apiPost, compactApiParams } from "@/services/api/request";
 import type { Prompt, PromptListResponse } from "@/services/api/prompts";
@@ -199,6 +200,7 @@ export type AdminModelChannel = {
     baseUrl: string;
     apiKey: string;
     models: string[];
+    modelCapabilities?: ModelCapabilities;
     weight: number;
     timeout: number;
     enabled: boolean;
@@ -243,6 +245,7 @@ export type AdminPublicModelChannelInfo = {
     name: string;
     baseUrl: string;
     models: string[];
+    modelCapabilities?: ModelCapabilities;
     imageOutputCapabilities?: ImageOutputCapabilities;
     weight: number;
     timeout: number;

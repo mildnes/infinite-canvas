@@ -210,10 +210,10 @@ func normalizePublicSettingWithChannels(setting model.PublicSetting, channels []
 		setting.Auth.AllowRegister = &enabled
 	}
 	setting.ModelChannel.AvailableModels = filterEnabledModels(setting.ModelChannel.AvailableModels, enabledChannelModels(channels))
-	setting.ModelChannel.DefaultTextModel = repairDefaultModel(setting.ModelChannel.DefaultTextModel, setting.ModelChannel.AvailableModels, isTextModelName)
-	setting.ModelChannel.DefaultImageModel = repairDefaultModel(setting.ModelChannel.DefaultImageModel, setting.ModelChannel.AvailableModels, isImageModelName)
-	setting.ModelChannel.DefaultVideoModel = repairDefaultModel(setting.ModelChannel.DefaultVideoModel, setting.ModelChannel.AvailableModels, isVideoModelName)
-	setting.ModelChannel.DefaultModel = repairDefaultModel(setting.ModelChannel.DefaultModel, setting.ModelChannel.AvailableModels, isTextModelName)
+	setting.ModelChannel.DefaultTextModel = repairDefaultModelForCapability(setting.ModelChannel.DefaultTextModel, setting.ModelChannel.AvailableModels, channels, model.ModelCapabilityText, isTextModelName)
+	setting.ModelChannel.DefaultImageModel = repairDefaultModelForCapability(setting.ModelChannel.DefaultImageModel, setting.ModelChannel.AvailableModels, channels, model.ModelCapabilityImage, isImageModelName)
+	setting.ModelChannel.DefaultVideoModel = repairDefaultModelForCapability(setting.ModelChannel.DefaultVideoModel, setting.ModelChannel.AvailableModels, channels, model.ModelCapabilityVideo, isVideoModelName)
+	setting.ModelChannel.DefaultModel = repairDefaultModelForCapability(setting.ModelChannel.DefaultModel, setting.ModelChannel.AvailableModels, channels, model.ModelCapabilityText, isTextModelName)
 	return setting
 }
 
@@ -360,6 +360,7 @@ func normalizePrivateSetting(setting model.PrivateSetting) model.PrivateSetting 
 		if setting.Channels[i].Models == nil {
 			setting.Channels[i].Models = []string{}
 		}
+		setting.Channels[i].ModelCapabilities = normalizeModelCapabilities(setting.Channels[i].ModelCapabilities)
 		if setting.Channels[i].Weight <= 0 {
 			setting.Channels[i].Weight = 1
 		}
@@ -603,22 +604,53 @@ func uniqueModelNames(models []string) []string {
 	return result
 }
 
-func repairDefaultModel(current string, models []string, preferred func(string) bool) string {
+func repairDefaultModelForCapability(current string, models []string, channels []model.ModelChannel, capability model.ModelCapability, fallback func(string) bool) string {
 	current = strings.TrimSpace(current)
 	for _, item := range models {
-		if item == current {
+		if item == current && modelMatchesCapability(channels, item, capability, fallback) {
 			return current
 		}
 	}
 	for _, item := range models {
-		if preferred(item) {
+		if modelMatchesCapability(channels, item, capability, fallback) {
 			return item
+		}
+	}
+	for _, item := range models {
+		if modelHasCapabilityDeclaration(channels, item) {
+			return ""
 		}
 	}
 	if len(models) > 0 {
 		return models[0]
 	}
 	return ""
+}
+
+func modelMatchesCapability(channels []model.ModelChannel, modelName string, capability model.ModelCapability, fallback func(string) bool) bool {
+	declared := false
+	for _, channel := range channels {
+		values, ok := channel.ModelCapabilities[modelName]
+		if !ok {
+			continue
+		}
+		declared = true
+		for _, value := range values {
+			if value == capability {
+				return true
+			}
+		}
+	}
+	return !declared && fallback(modelName)
+}
+
+func modelHasCapabilityDeclaration(channels []model.ModelChannel, modelName string) bool {
+	for _, channel := range channels {
+		if _, ok := channel.ModelCapabilities[modelName]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func isVideoModelName(modelName string) bool {
@@ -652,6 +684,38 @@ func normalizeModelChannel(channel model.ModelChannel) model.ModelChannel {
 		channel.Timeout = 600
 	}
 	return channel
+}
+
+func normalizeModelCapabilities(capabilities map[string][]model.ModelCapability) map[string][]model.ModelCapability {
+	if len(capabilities) == 0 {
+		return nil
+	}
+
+	result := make(map[string][]model.ModelCapability, len(capabilities))
+	for modelName, values := range capabilities {
+		modelName = strings.TrimSpace(modelName)
+		if modelName == "" {
+			continue
+		}
+
+		seen := map[model.ModelCapability]bool{}
+		normalized := make([]model.ModelCapability, 0, len(values))
+		for _, value := range values {
+			value = model.ModelCapability(strings.ToLower(strings.TrimSpace(string(value))))
+			switch value {
+			case model.ModelCapabilityImage, model.ModelCapabilityVideo, model.ModelCapabilityText, model.ModelCapabilityAudio:
+				if !seen[value] {
+					seen[value] = true
+					normalized = append(normalized, value)
+				}
+			}
+		}
+		result[modelName] = normalized
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 func resolveAdminChannel(index *int, channel model.ModelChannel) (model.ModelChannel, error) {
@@ -1319,13 +1383,20 @@ func publicChannelInfos(channels []model.ModelChannel, options ...[]string) []mo
 			}
 		}
 		imageOutputCapabilities := make(map[string]model.ImageOutputCapability)
+		modelCapabilities := make(map[string][]model.ModelCapability)
 		for _, modelName := range models {
 			if capability, ok := ResolveImageOutputCapability(channel, modelName); ok {
 				imageOutputCapabilities[modelName] = capability
 			}
+			if capabilities, ok := channel.ModelCapabilities[modelName]; ok {
+				modelCapabilities[modelName] = append([]model.ModelCapability{}, capabilities...)
+			}
 		}
 		if len(imageOutputCapabilities) == 0 {
 			imageOutputCapabilities = nil
+		}
+		if len(modelCapabilities) == 0 {
+			modelCapabilities = nil
 		}
 		result = append(result, model.PublicModelChannelInfo{
 			ID:                      channel.ID,
@@ -1333,6 +1404,7 @@ func publicChannelInfos(channels []model.ModelChannel, options ...[]string) []mo
 			Name:                    channel.Name,
 			BaseURL:                 channel.BaseURL,
 			Models:                  models,
+			ModelCapabilities:       modelCapabilities,
 			ImageOutputCapabilities: imageOutputCapabilities,
 			Weight:                  channel.Weight,
 			Timeout:                 channel.Timeout,

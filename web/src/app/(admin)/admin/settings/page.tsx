@@ -2,7 +2,7 @@
 
 import { CheckCircleOutlined, DeleteOutlined, FormatPainterOutlined, LoadingOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import { json } from "@codemirror/lang-json";
-import { App, Button, Card, Col, Drawer, Flex, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from "antd";
+import { App, Button, Card, Checkbox, Col, Drawer, Flex, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from "antd";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { EditorView } from "@uiw/react-codemirror";
@@ -10,6 +10,7 @@ import { EditorView } from "@uiw/react-codemirror";
 import { ChannelModelSelectorModal } from "@/components/channel-model-selector-modal";
 import type { WorkflowChannelSettings } from "@/components/workflow/workflow-channel-pane";
 import { isWorkflowProtocol, modelChannelApiKeyUrls, modelChannelDefaultBaseUrls, modelChannelProtocolOptions } from "@/lib/model-channel";
+import type { ModelCapability } from "@/lib/model-capability";
 import { fetchAdminSettings, fetchChannelModels, fetchMCPServerTools, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminMCPServer, type AdminMCPTool, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider } from "@/services/api/admin";
 import { clearStorageConfigCache as clearMediaStorageConfigCache } from "@/services/file-storage";
 import { clearStorageConfigCache as clearImageStorageConfigCache } from "@/services/image-storage";
@@ -53,6 +54,12 @@ const emptySettings: AdminSettings = {
     private: { channels: [], agent: { mcpServers: [] }, promptSync: { enabled: true, cron: "0 0 * * *" }, aiLog: { localDirectReportEnabled: false, cleanup: { enabled: false, retentionDays: 14, cron: "0 3 * * *" } }, auth: { linuxDo: { clientId: "", clientSecret: "" } }, storage: { mode: "local_indexeddb", allowUserProvider: false, allowUserGlobalProvider: true, autoSyncAllAssets: false, providers: [], roundRobinCursor: 0, capacityCheck: { enabled: false, cron: "0 */6 * * *" }, capacityLimitBytes: 9 * 1024 * 1024 * 1024 } },
 };
 const emptyChannel: AdminModelChannel = { id: "", protocol: "openai", name: "", baseUrl: modelChannelDefaultBaseUrls.openai, apiKey: "", models: [], weight: 1, timeout: 600, enabled: true, remark: "" };
+const modelCapabilityOptions: { label: string; value: ModelCapability }[] = [
+    { label: "图片", value: "image" },
+    { label: "视频", value: "video" },
+    { label: "文本", value: "text" },
+    { label: "音频", value: "audio" },
+];
 const emptyS3StorageProvider: AdminStorageProvider = { id: "", name: "", type: "s3", endpoint: "", region: "auto", bucket: "", accessKeyId: "", secretAccessKey: "", publicBaseUrl: "", pathPrefix: "canvas", username: "", password: "", weight: 1, enabled: true, ownerUserId: "", capacityBytes: 0, capacityCheckedAt: "", capacityExceeded: false };
 const emptyWebDAVStorageProvider: AdminStorageProvider = { ...emptyS3StorageProvider, name: "", type: "webdav", region: "" };
 const emptyMCPServer: AdminMCPServer = { id: "", name: "", endpoint: "", apiKey: "", transport: "streamable_http", command: "", args: [], env: {}, workingDirectory: "", description: "", tools: [], enabled: true, allowUsers: true };
@@ -69,6 +76,8 @@ export default function AdminSettingsPage() {
     const [jsonText, setJsonText] = useState<Record<SettingsTabKey, string>>({ public: "", private: "" });
     const [channels, setChannels] = useState<AdminModelChannel[]>([]);
     const [channelForm] = Form.useForm<AdminModelChannel>();
+    const [bulkTargetModels, setBulkTargetModels] = useState<string[]>([]);
+    const [bulkModelCapabilities, setBulkModelCapabilities] = useState<ModelCapability[]>([]);
     const [editingChannelIndex, setEditingChannelIndex] = useState<number | null>(null);
     const [isChannelDrawerOpen, setIsChannelDrawerOpen] = useState(false);
     const [workflowChannelDraft, setWorkflowChannelDraft] = useState<AdminModelChannel>(emptyChannel);
@@ -90,12 +99,23 @@ export default function AdminSettingsPage() {
     const agentMCPServers = Form.useWatch(["private", "agent", "mcpServers"], form) || [];
     const channelProtocol = Form.useWatch("protocol", channelForm);
     const channelBaseUrl = Form.useWatch("baseUrl", channelForm);
+    const selectedChannelModels = Form.useWatch("models", channelForm) || [];
+    const channelModelCapabilities = Form.useWatch("modelCapabilities", channelForm) || {};
+    const defaultImageModel = Form.useWatch(["public", "modelChannel", "defaultImageModel"], form) || "";
     const channelApiKeyUrl = channelProtocol ? modelChannelApiKeyUrls[channelProtocol] : undefined;
     const modelLabel = (model: string, _channel?: unknown) => model;
     const publicModelLabel = (model: string) => model;
     const channelModels = useMemo(() => collectChannelModels(channels), [channels]);
     const channelWorkflows = useMemo(() => collectChannelWorkflows(channels), [channels]);
     const channelTableData = useMemo(() => channels.map((channel, index) => ({ ...channel, _index: index, _rowKey: `${index}-${channel.name}-${channel.baseUrl}` })), [channels]);
+    const defaultImageModelExcluded = useMemo(() => {
+        if (!defaultImageModel) return false;
+        const candidates = channels.filter((channel) => channel.enabled && !isWorkflowProtocol(channel.protocol) && channel.models.includes(defaultImageModel));
+        return candidates.length > 0 && candidates.every((channel) => {
+            const capabilities = channel.modelCapabilities?.[defaultImageModel];
+            return Array.isArray(capabilities) && !capabilities.includes("image");
+        });
+    }, [channels, defaultImageModel]);
     const activeMode = editorMode[activeTab];
     const activeJsonText = jsonText[activeTab];
     const jsonError = activeMode === "json" ? getJsonError(activeJsonText) : "";
@@ -196,6 +216,8 @@ export default function AdminSettingsPage() {
         setIsChannelDrawerOpen(true);
         const channel = index === null ? emptyChannel : normalizeChannel(channels[index]);
         channelForm.setFieldsValue(channel);
+        setBulkTargetModels([]);
+        setBulkModelCapabilities([]);
         setWorkflowChannelDraft(channel);
         rememberModels(channel.models);
     };
@@ -208,7 +230,7 @@ export default function AdminSettingsPage() {
 
     const saveChannel = async () => {
         const values = await channelForm.validateFields();
-        const channel = normalizeChannel(isWorkflowProtocol(values.protocol) ? { ...workflowChannelDraft, ...channelForm.getFieldsValue(true), ...values } : values);
+        const channel = normalizeChannel({ ...(isWorkflowProtocol(values.protocol) ? workflowChannelDraft : {}), ...channelForm.getFieldsValue(true), ...values });
         if (channel.protocol === "runninghub" && (!channel.baseUrl.trim() || (!channel.apiKey.trim() && editingChannelIndex === null))) {
             message.error("请填写 RunningHub Base URL 和积分 API Key");
             return;
@@ -243,6 +265,23 @@ export default function AdminSettingsPage() {
         channelForm.setFieldValue("models", models);
         rememberModels(models);
         closeChannelModelSelector();
+    };
+
+    const updateChannelModelCapabilities = (model: string, values: ModelCapability[]) => {
+        const next: NonNullable<AdminModelChannel["modelCapabilities"]> = { ...(channelForm.getFieldValue("modelCapabilities") || {}) };
+        const capabilities = uniqueCapabilities(values);
+        if (capabilities.length) next[model] = capabilities;
+        else delete next[model];
+        channelForm.setFieldValue("modelCapabilities", Object.keys(next).length ? next : undefined);
+    };
+
+    const applyBulkModelCapabilities = () => {
+        const next: NonNullable<AdminModelChannel["modelCapabilities"]> = { ...(channelForm.getFieldValue("modelCapabilities") || {}) };
+        for (const model of bulkTargetModels.filter((item) => selectedChannelModels.includes(item))) {
+            if (bulkModelCapabilities.length) next[model] = bulkModelCapabilities;
+            else delete next[model];
+        }
+        channelForm.setFieldValue("modelCapabilities", Object.keys(next).length ? next : undefined);
     };
 
     function rememberModels(models: string[]) {
@@ -433,7 +472,11 @@ export default function AdminSettingsPage() {
                                         </Form.Item>
                                     </Col>
                                     <Col xs={24} md={6}>
-                                        <Form.Item name={["public", "modelChannel", "defaultImageModel"]} label="默认图片模型">
+                                        <Form.Item
+                                            name={["public", "modelChannel", "defaultImageModel"]}
+                                            label="默认图片模型"
+                                            extra={defaultImageModelExcluded ? <Typography.Text type="warning">当前默认模型在所有所属渠道都未声明图片能力，前端会过滤该模型。请编辑渠道能力或更换默认图片模型。</Typography.Text> : undefined}
+                                        >
                                             <Select showSearch={{ optionFilterProp: ["label", "value"] }} allowClear options={publicModels.map((item) => ({ label: publicModelLabel(item), value: item }))} />
                                         </Form.Item>
                                     </Col>
@@ -1050,6 +1093,43 @@ export default function AdminSettingsPage() {
                                     </Space.Compact>
                                 </Form.Item>
                             </Col>
+                            {selectedChannelModels.length ? (
+                                <Col span={24}>
+                                    <Form.Item label="模型能力声明（可选）" extra="未声明的模型继续使用兼容推导；取消某模型全部勾选会移除声明。">
+                                        <Flex vertical gap={10}>
+                                            <Flex align="center" gap={8} wrap>
+                                                <Select
+                                                    mode="multiple"
+                                                    allowClear
+                                                    maxTagCount="responsive"
+                                                    placeholder="选择要批量修改的模型"
+                                                    value={bulkTargetModels}
+                                                    onChange={setBulkTargetModels}
+                                                    options={selectedChannelModels.map((model: string) => ({ label: model, value: model }))}
+                                                    style={{ minWidth: 260, maxWidth: "100%" }}
+                                                />
+                                                <Checkbox.Group options={modelCapabilityOptions} value={bulkModelCapabilities} onChange={(values) => setBulkModelCapabilities(uniqueCapabilities(values as ModelCapability[]))} />
+                                                <Button size="small" disabled={!bulkTargetModels.length} onClick={applyBulkModelCapabilities}>
+                                                    {bulkModelCapabilities.length ? `应用到 ${bulkTargetModels.length} 个模型` : `清除 ${bulkTargetModels.length} 个模型声明`}
+                                                </Button>
+                                            </Flex>
+                                            <div style={{ maxHeight: 240, overflowY: "auto", border: "1px solid var(--ant-color-border-secondary)", borderRadius: 6, padding: "4px 10px" }}>
+                                                {selectedChannelModels.map((model: string) => (
+                                                    <Flex key={model} justify="space-between" align="center" gap={12} wrap style={{ minHeight: 38, borderBottom: "1px solid var(--ant-color-border-secondary)" }}>
+                                                        <Typography.Text ellipsis title={model} style={{ flex: "1 1 150px", minWidth: 120 }}>{model}</Typography.Text>
+                                                        {!channelModelCapabilities[model]?.length ? <Tag>自动推导</Tag> : null}
+                                                        <Checkbox.Group
+                                                            options={modelCapabilityOptions}
+                                                            value={channelModelCapabilities[model] || []}
+                                                            onChange={(values) => updateChannelModelCapabilities(model, values as ModelCapability[])}
+                                                        />
+                                                    </Flex>
+                                                ))}
+                                            </div>
+                                        </Flex>
+                                    </Form.Item>
+                                </Col>
+                            ) : null}
                             </> : <Col span={24} className="mb-3">
                                 <WorkflowChannelPane
                                     key={`${editingChannelIndex ?? "new"}:${workflowChannelDraft.id}:${workflowChannelDraft.protocol}`}
@@ -1327,13 +1407,15 @@ function newAdminStorageProvider(type: AdminStorageProvider["type"], providers: 
 }
 
 function normalizeChannel(item: Partial<AdminModelChannel> = {}): AdminModelChannel {
+    const models = uniqueModels(item.models || []);
     return {
         id: item.id || "",
         protocol: item.protocol || "openai",
         name: item.name || "",
         baseUrl: item.baseUrl || "",
         apiKey: item.apiKey || "",
-        models: item.models || [],
+        models,
+        modelCapabilities: normalizeModelCapabilities(item.modelCapabilities, models),
         uploadApiKey: item.uploadApiKey || "",
         bridgeId: item.bridgeId || "",
         comfyUrl: item.comfyUrl || "",
@@ -1344,6 +1426,21 @@ function normalizeChannel(item: Partial<AdminModelChannel> = {}): AdminModelChan
         enabled: item.enabled !== false,
         remark: item.remark || "",
     };
+}
+
+function normalizeModelCapabilities(capabilities: AdminModelChannel["modelCapabilities"], models: string[]) {
+    if (!capabilities) return undefined;
+    const modelSet = new Set(models);
+    const result: NonNullable<AdminModelChannel["modelCapabilities"]> = {};
+    for (const [model, values] of Object.entries(capabilities)) {
+        const normalized = uniqueCapabilities(values);
+        if (modelSet.has(model) && normalized.length) result[model] = normalized;
+    }
+    return Object.keys(result).length ? result : undefined;
+}
+
+function uniqueCapabilities(values: ModelCapability[] = []) {
+    return Array.from(new Set(values.filter((value): value is ModelCapability => modelCapabilityOptions.some((option) => option.value === value))));
 }
 
 function modelCostCredits(items: AdminSettings["public"]["modelChannel"]["modelCosts"], channelId: string, model: string) {
