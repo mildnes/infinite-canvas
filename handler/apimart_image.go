@@ -70,7 +70,11 @@ func apimartImageConfig(modelName string) apimartInputConfig {
 	}
 
 	switch {
-	case strings.Contains(model, "gpt-image-2") && strings.Contains(model, "official"):
+	case model == "gpt-image-2-5-flare" || model == "gpt-image-2-5-sunburst":
+		config.resolutionCase = "lower"
+		config.hasQuality = true
+		config.hasOutput = true
+	case model == "gpt-image-2-official":
 		config.resolutionCase = "lower"
 		config.hasQuality = true
 		config.hasOutput = true

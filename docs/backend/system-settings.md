@@ -103,13 +103,16 @@ description: settings 表中 public 和 private 配置结构说明
 | 能力 | 请求行为 |
 | --- | --- |
 | OpenAI 协议的 GPT Image 模型 | 透明 PNG 对应 `output_format: "png"` 与 `background: "transparent"`；JPG 对应 `output_format: "jpeg"` |
-| 已支持输出格式的 APIMart/KIE 模型 | 当前只声明 JPG，不把普通 PNG 支持推断为透明背景支持；KIE 使用其合法 `jpg` 枚举 |
+| APIMart 的 `gpt-image-1-official`、`gpt-image-1.5-official`、`gpt-image-2-official`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst` | 支持透明 PNG 和 JPG；透明 PNG 对应 `output_format: "png"` 与 `background: "transparent"`，JPG 对应 `output_format: "jpeg"` |
+| APIMart 的其他已声明格式模型及 KIE 模型 | 保持已有 JPG 能力；KIE 使用其合法 `jpg` 枚举。APIMart 普通 `gpt-image-2`、`gpt-image-2-ext`、`gpt-image-2.5-ext` 不自动开放格式参数 |
 | Grok2API/xAI 及其他未声明格式能力的模型 | 不新增格式或背景参数，保留原有协议转换 |
 | RunningHub/ComfyUI | 仅使用工作流已明确绑定、启用且安全的输出格式字段；透明输出还需透明背景映射 |
 
 Images 请求在根参数或编辑表单中传递格式，Responses 在 `image_generation` 工具中传递，图片 Chat 使用现有 `image_config`。普通文本请求不受影响。服务端根据实际渠道再次校验，回退信息写入调用日志；`X-Image-Output-Format` 表示生效的请求档位，不代表已验证图片包含透明 alpha。实际结果以媒体 MIME 和文件字节为准。
 
 `response_format=b64_json` 只控制返回的传输编码，不能指定 PNG/JPG。媒体保存按实际内容识别 MIME 和扩展名；不会把 JPG 改名为 PNG，也不会做事后转换。透明 PNG 依赖上游真实能力，部署验收需检查 alpha 通道。[OpenAI 图片生成参数说明](https://developers.openai.com/api/docs/guides/image-generation)
+
+APIMart 透明背景能力以其实际模型接口为准：[GPT Image 1/1.5 Official](https://docs.apimart.ai/en/api-reference/images/gpt-image-1/generation)、[GPT Image 2 Official](https://docs.apimart.ai/en/api-reference/images/gpt-image-2/official)、[GPT Image 2.5 Flare/Sunburst](https://docs.apimart.ai/en/api-reference/images/gpt-image-2.5/generation)。远程渠道使用服务端返回的能力信息；部署新代码后刷新公开配置，再打开工作台、画布节点或 Agent 的图像设置，在“质量”与“尺寸”之间选择输出格式。旧配置仍沿用渠道默认格式，选择透明 PNG 后才发送透明参数。
 
 ## private.value
 

@@ -54,7 +54,7 @@ test("OpenAI GPT Image capability accepts only supported families and dated snap
     }
 });
 
-test("local APIMart GPT Image and KIE models expose only their declared JPEG format", () => {
+test("local APIMart declared GPT Image models expose transparent PNG and JPG while KIE stays JPEG-only", () => {
     const apimart = imageOutputCapabilityForConfig({
         channelMode: "local",
         imageModel: "gpt-image-2-official",
@@ -65,30 +65,82 @@ test("local APIMart GPT Image and KIE models expose only their declared JPEG for
         imageModel: "qwen2/text-to-image",
         localChannels: [{ id: "kie", protocol: "kie", models: ["qwen2/text-to-image"] }],
     });
-    assert.deepEqual(apimart, { formats: ["jpeg"], defaultFormat: "jpeg" });
+    assert.deepEqual(apimart, { formats: ["png-transparent", "jpeg"], defaultFormat: "png-transparent" });
     assert.deepEqual(kie, { formats: ["jpeg"], defaultFormat: "jpeg" });
 });
 
-test("APIMart advertises only official GPT Image and non-Pro Seedream 5 JPEG models", () => {
-    for (const model of ["gpt-image-2-official", "gpt-image-2_official", "seedream-5-0-lite"]) {
+test("APIMart exposes transparent PNG only for its five declared normalized GPT Image models", () => {
+    const models = [
+        "gpt-image-1-official",
+        "gpt-image-1.5-official",
+        "gpt-image-2-official",
+        "gpt-image-2.5-flare",
+        "gpt-image-2.5-sunburst",
+    ];
+    for (const model of models) {
         assert.deepEqual(imageOutputCapabilityForConfig({
             channelMode: "local",
             model,
             localChannels: [{ id: "apimart", protocol: "apimart", models: [model] }],
-        }), { formats: ["jpeg"], defaultFormat: "jpeg" }, model);
+        }), { formats: ["png-transparent", "jpeg"], defaultFormat: "png-transparent" }, model);
     }
+    for (const model of ["gpt_image_1_official", "GPT-IMAGE-1.5-OFFICIAL", "gpt_image_2.5_flare", "gpt_image_2.5_sunburst"]) {
+        assert.deepEqual(imageOutputCapabilityForConfig({
+            channelMode: "local",
+            model,
+            localChannels: [{ id: "apimart", protocol: "apimart", models: [model] }],
+        }), { formats: ["png-transparent", "jpeg"], defaultFormat: "png-transparent" }, model);
+    }
+
+    assert.deepEqual(imageOutputCapabilityForConfig({
+        channelMode: "local",
+        model: "gpt-image-1",
+        localChannels: [{ id: "apimart", protocol: "apimart", models: ["gpt-image-1"] }],
+    }), { formats: ["jpeg"], defaultFormat: "jpeg" });
+    assert.deepEqual(imageOutputCapabilityForConfig({
+        channelMode: "local",
+        model: "seedream-5-0-lite",
+        localChannels: [{ id: "apimart", protocol: "apimart", models: ["seedream-5-0-lite"] }],
+    }), { formats: ["jpeg"], defaultFormat: "jpeg" });
+
     assert.equal(imageOutputCapabilityForConfig({
         channelMode: "local",
         model: "seedream-5-0-pro",
         localChannels: [{ id: "apimart", protocol: "apimart", models: ["seedream-5-0-pro"] }],
     }), null);
-    for (const model of ["gpt-image-2-preview", "gpt-image-2-unofficial"]) {
+    for (const model of [
+        "gpt-image-2",
+        "gpt-image-2-ext",
+        "gpt-image-2.5-ext",
+        "gpt-image-2-official-extra",
+        "gpt-image-2-preview",
+        "gpt-image-2-unofficial",
+        "gpt-image-2.5-flare-unofficial",
+        "gpt-image-2.5-sunburst-extra",
+        "gpt-image-1-unofficial",
+        "gpt-image-1.5-preview",
+    ]) {
         assert.equal(imageOutputCapabilityForConfig({
             channelMode: "local",
             model,
             localChannels: [{ id: "apimart", protocol: "apimart", models: [model] }],
         }), null, model);
     }
+});
+
+test("remote public capabilities take precedence over local APIMart inference", () => {
+    const config: ImageOutputConfig = {
+        channelMode: "remote",
+        imageModel: "gpt-image-2-official",
+        publicChannels: [{ id: "remote", protocol: "apimart", models: ["gpt-image-2-official"] }],
+        localChannels: [{ id: "local", protocol: "apimart", models: ["gpt-image-2-official"] }],
+    };
+    assert.equal(imageOutputCapabilityForConfig(config), null);
+
+    config.publicChannels![0].imageOutputCapabilities = {
+        "gpt-image-2-official": { formats: ["jpeg"], defaultFormat: "jpeg" },
+    };
+    assert.deepEqual(imageOutputCapabilityForConfig(config), { formats: ["jpeg"], defaultFormat: "jpeg" });
 });
 
 test("local OpenAI compatible xAI endpoints do not advertise output formats", () => {
@@ -124,6 +176,18 @@ test("automatic routing exposes only formats shared by every candidate channel",
         ],
     });
     assert.deepEqual(capability, { formats: ["jpeg"], defaultFormat: "jpeg" });
+});
+
+test("automatic routing retains transparent PNG only when every candidate supports it", () => {
+    const capability = imageOutputCapabilityForConfig({
+        channelMode: "remote",
+        imageModel: "same-model",
+        publicChannels: [
+            { id: "transparent-only", models: ["same-model"], imageOutputCapabilities: { "same-model": { formats: ["png-transparent"], defaultFormat: "png-transparent" } } },
+            { id: "both-formats", models: ["same-model"], imageOutputCapabilities: { "same-model": { formats: ["png-transparent", "jpeg"], defaultFormat: "png-transparent" } } },
+        ],
+    });
+    assert.deepEqual(capability, { formats: ["png-transparent"], defaultFormat: "png-transparent" });
 });
 
 test("disabled channels do not contribute output capabilities", () => {

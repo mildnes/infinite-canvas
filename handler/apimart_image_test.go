@@ -66,3 +66,29 @@ func TestNormalizeAPIMartGrokImage2ExtKeepsSizeProtocol(t *testing.T) {
 		t.Fatalf("ext model must not switch to official aspect_ratio protocol: %#v", payload)
 	}
 }
+
+func TestAPIMartGPTImage25FormatsAreNormalized(t *testing.T) {
+	for _, modelName := range []string{"gpt-image-2.5-flare", "gpt-image-2.5-sunburst"} {
+		t.Run(modelName, func(t *testing.T) {
+			payload := map[string]any{"quality": "HIGH", "resolution": "2K", "output_format": "PNG", "background": "transparent"}
+			normalizeAPIMartImageParams(payload, modelName, model.ModelChannel{})
+			if payload["quality"] != "high" || payload["resolution"] != "2k" || payload["output_format"] != "png" || payload["background"] != "transparent" {
+				t.Fatalf("normalized payload = %#v", payload)
+			}
+			if payload["image_resolution"] != nil {
+				t.Fatalf("unexpected resolution fields: %#v", payload)
+			}
+		})
+	}
+}
+
+func TestAPIMartGPTImage25ExtDoesNotKeepOutputFormat(t *testing.T) {
+	payload := map[string]any{"quality": "HIGH", "output_format": "png", "background": "transparent"}
+	normalizeAPIMartImageParams(payload, "gpt-image-2.5-ext", model.ModelChannel{})
+	if payload["quality"] != "high" {
+		t.Fatalf("quality = %#v, want normalized quality", payload["quality"])
+	}
+	if _, ok := payload["output_format"]; ok {
+		t.Fatalf("ext model retained output_format: %#v", payload)
+	}
+}

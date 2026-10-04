@@ -15,7 +15,8 @@ description: 当前版本已实现但仍需人工验证的变更项
 - [新增待验收] 在生图工作台、画布图片配置、首页和画布 Agent 中选择透明 PNG/JPG；支持两者的 GPT Image 渠道可切换，刷新、项目恢复、生成记录回填与重试保留原选择。旧配置、旧图片记录缺少格式字段时仍按 `auto` 发送，不新增输出参数。
 - [新增待验收] 同名模型跨渠道选择、未指定渠道和切换模型时，选项以实际渠道能力或全部候选的交集为准；不支持原选择时回退并提示一次，无明确能力时使用渠道原有格式。普通文本 Chat/Responses 请求不得添加图片格式字段。
 - [新增待验收] 分别核对 Images 文生图、Multipart 编辑、多图、Responses `image_generation` 工具与 Chat 图片配置的格式参数；透明 PNG 为 `output_format=png`、`background=transparent`，JPG 使用渠道合法的 `jpeg`/`jpg`，`response_format=b64_json` 仍仅控制传输编码。真实生成后下载检查 PNG 的 alpha 通道和 JPG 文件字节。
-- [新增待验收] APIMart/KIE 仅声明已支持的 JPG 模型；Grok2API/xAI、Gemini、方舟、MiMo、智谱等无明确能力的接口不得新增非法 `output_format`/`background`，原路径、尺寸、质量和 `resolution` 转换保持可用。
+- [新增待验收] APIMart 的 GPT Image 1/1.5/2 Official 和 2.5 Flare/Sunburst 在工作台、画布图片节点、生成配置节点及首页/画布 Agent 中显示透明 PNG/JPG；登录云端与本地直连分别验证 `output_format=png`、`background=transparent` 完整到达渠道，JPG 不携带透明背景。编辑、多参考图、刷新恢复和重试保留选定格式；真实生成需检查 alpha 通道。普通 `gpt-image-2`、`gpt-image-2-ext`、`gpt-image-2.5-ext` 不自动获得透明能力。
+- [新增待验收] KIE 保持已支持的 JPG 模型能力；Grok2API/xAI、Gemini、方舟、MiMo、智谱等无明确能力的接口不得新增非法 `output_format`/`background`，原路径、尺寸、质量和 `resolution` 转换保持可用。
 - [新增待验收] RunningHub/ComfyUI 仅在启用且安全的字段映射明确绑定输出格式、并声明合法选项时接收格式；透明 PNG 还需透明背景映射。未绑定、禁用或旧工作流保持其原有字段值。
 - [新增待验收] 请求 JPG 但上游返回 PNG（及反向）时，预览、持久化 MIME、扩展名与真实字节一致，不执行格式转换；登录生成结果继续使用同一 `server:` 短引用，云同步失败保留本地副本。
 - [新增待验收] 切换账号、退出、切换画布或重试时，输出格式配置与迟到提示不得串用；部署端运行新增纯逻辑回归用例并完成真实浏览器交互和渠道生成验收。已修复图片编辑表单中的未使用变量，并按用户要求通过开发机 `go build ./...`；前端构建、浏览器与真实渠道生成验收仍待部署端执行。

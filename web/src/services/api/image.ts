@@ -128,7 +128,7 @@ type ImageRequestOwner = { token: string; userId: string; pathname: string };
 
 export function applyImageOutputFormatFields(target: Record<string, unknown>, format: ImageOutputFormat | null | undefined, protocol: string) {
     if (!format || !(protocol === "openai" || protocol === "apimart" || protocol === "kie")) return target;
-    if (format === "png-transparent" && protocol !== "openai") return target;
+    if (format === "png-transparent" && protocol !== "openai" && protocol !== "apimart") return target;
 
     target.output_format = format === "jpeg" ? (protocol === "kie" ? "jpg" : "jpeg") : "png";
     if (format === "png-transparent") target.background = "transparent";

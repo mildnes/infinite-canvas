@@ -44,15 +44,23 @@ test("auto and ordinary text Chat requests keep their existing fields", () => {
     assert.deepEqual(applyImageOutputFormatRequestBody(textBody, "jpeg", "openai", "chat"), textBody);
 });
 
-test("APIMart and KIE emit only their legal explicit JPEG values", () => {
-    assert.deepEqual(applyImageOutputFormatFields({}, "jpeg", "apimart"), { output_format: "jpeg" });
+test("APIMart Images emit transparent PNG and clean JPEG fields while KIE remains JPEG-only", () => {
+    assert.deepEqual(applyImageOutputFormatRequestBody({ model: "gpt-image-2-official" }, "png-transparent", "apimart"), {
+        model: "gpt-image-2-official",
+        output_format: "png",
+        background: "transparent",
+    });
+    assert.deepEqual(applyImageOutputFormatFields({ background: "transparent" }, "jpeg", "apimart"), { output_format: "jpeg" });
     assert.deepEqual(applyImageOutputFormatFields({}, "jpeg", "kie"), { output_format: "jpg" });
-    assert.deepEqual(applyImageOutputFormatFields({}, "png-transparent", "apimart"), {});
     assert.deepEqual(applyImageOutputFormatFields({}, "png-transparent", "kie"), {});
-    const apimartChat = { modalities: ["image", "text"] };
-    assert.deepEqual(applyImageOutputFormatRequestBody(apimartChat, "jpeg", "apimart", "chat"), apimartChat);
+    const apimartResponses = { tools: [{ type: "image_generation" }] };
+    assert.deepEqual(applyImageOutputFormatRequestBody(apimartResponses, "png-transparent", "apimart", "responses"), apimartResponses);
+    const apimartChat = { modalities: ["image", "text"], image_config: { aspect_ratio: "1:1" } };
+    assert.deepEqual(applyImageOutputFormatRequestBody(apimartChat, "png-transparent", "apimart", "chat"), apimartChat);
     const kieResponses = { tools: [{ type: "image_generation" }] };
     assert.deepEqual(applyImageOutputFormatRequestBody(kieResponses, "jpeg", "kie", "responses"), kieResponses);
+    const autoBody = { model: "gpt-image-2-official", background: "existing" };
+    assert.deepEqual(applyImageOutputFormatRequestBody(autoBody, null, "apimart"), autoBody);
 });
 
 test("Grok2API and xAI do not receive image output format fields", () => {

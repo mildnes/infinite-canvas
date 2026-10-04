@@ -133,8 +133,17 @@ function normalizeImageOutputModelName(model: string) {
 }
 
 function isAPIMartOutputFormatModel(model: string) {
-    const normalized = normalizeImageOutputModelName(model);
-    return normalized.includes("gpt-image-1") || normalized.includes("gpt-image-2") && normalized.split("-").includes("official");
+    return normalizeImageOutputModelName(model) === "gpt-image-1";
+}
+
+function isAPIMartTransparentPNGModel(model: string) {
+    return [
+        "gpt-image-1-official",
+        "gpt-image-1-5-official",
+        "gpt-image-2-official",
+        "gpt-image-2-5-flare",
+        "gpt-image-2-5-sunburst",
+    ].includes(normalizeImageOutputModelName(model));
 }
 
 function isAPIMartSeedreamOutputFormatModel(model: string) {
@@ -178,6 +187,10 @@ function localImageOutputCapability(channel: ImageOutputChannel, model: string):
     const normalizedModel = model.toLowerCase().trim();
     const endpoint = `${channel.baseUrl || ""} ${channel.name || ""}`.toLowerCase();
     if (protocol === "openai" && !endpoint.includes("x.ai") && !endpoint.includes("grok2api") && isOpenAIGPTImageModel(normalizedModel)) {
+        return { formats: ["png-transparent", "jpeg"], defaultFormat: "png-transparent" };
+    }
+
+    if (protocol === "apimart" && isAPIMartTransparentPNGModel(normalizedModel)) {
         return { formats: ["png-transparent", "jpeg"], defaultFormat: "png-transparent" };
     }
 

@@ -24,6 +24,8 @@ func ResolveImageOutputCapability(channel model.ModelChannel, modelName string) 
 	case protocol == ModelChannelProtocolAPIMart:
 		normalizedModel := normalizeImageOutputModelName(modelName)
 		switch {
+		case isAPIMartTransparentPNGOutputFormatModel(normalizedModel):
+			return imageOutputCapability(model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG), true
 		case isAPIMartOutputFormatModel(modelName):
 			return imageOutputCapability(model.ImageOutputFormatJPEG), true
 		case isAPIMartSeedreamOutputFormatModel(normalizedModel):
@@ -68,8 +70,17 @@ func isOpenAIGPTImageModel(value string) bool {
 
 func isAPIMartOutputFormatModel(modelName string) bool {
 	modelName = normalizeImageOutputModelName(modelName)
-	return strings.Contains(modelName, "gpt-image-1") ||
-		strings.Contains(modelName, "gpt-image-2") && strings.Contains("-"+modelName+"-", "-official-")
+	return modelName == "gpt-image-1"
+}
+
+func isAPIMartTransparentPNGOutputFormatModel(modelName string) bool {
+	switch normalizeImageOutputModelName(modelName) {
+	case "gpt-image-1-official", "gpt-image-1-5-official", "gpt-image-2-official",
+		"gpt-image-2-5-flare", "gpt-image-2-5-sunburst":
+		return true
+	default:
+		return false
+	}
 }
 
 func isAPIMartSeedreamOutputFormatModel(modelName string) bool {

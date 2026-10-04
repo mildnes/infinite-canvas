@@ -56,11 +56,86 @@ func TestResolveImageOutputCapability(t *testing.T) {
 			modelName: "gpt-image-2.5-unknown",
 		},
 		{
-			name:      "APIMart GPT Image only declares JPEG",
+			name:      "APIMart GPT Image 1 legacy JPEG",
 			channel:   model.ModelChannel{Protocol: ModelChannelProtocolAPIMart},
-			modelName: "gpt-image-2-official",
+			modelName: "gpt-image-1",
 			want:      model.ImageOutputCapability{Formats: []model.ImageOutputFormat{model.ImageOutputFormatJPEG}, DefaultFormat: model.ImageOutputFormatJPEG},
 			ok:        true,
+		},
+		{
+			name:      "APIMart GPT Image official transparent PNG",
+			channel:   model.ModelChannel{Protocol: ModelChannelProtocolAPIMart},
+			modelName: "gpt-image-2-official",
+			want: model.ImageOutputCapability{
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				DefaultFormat: model.ImageOutputFormatPNGTransparent,
+			},
+			ok: true,
+		},
+		{
+			name:      "APIMart GPT Image 1 official transparent PNG",
+			channel:   model.ModelChannel{Protocol: ModelChannelProtocolAPIMart},
+			modelName: "gpt-image-1-official",
+			want: model.ImageOutputCapability{
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				DefaultFormat: model.ImageOutputFormatPNGTransparent,
+			},
+			ok: true,
+		},
+		{
+			name:      "APIMart GPT Image 1.5 official transparent PNG",
+			channel:   model.ModelChannel{Protocol: ModelChannelProtocolAPIMart},
+			modelName: "gpt-image-1.5-official",
+			want: model.ImageOutputCapability{
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				DefaultFormat: model.ImageOutputFormatPNGTransparent,
+			},
+			ok: true,
+		},
+		{
+			name:      "APIMart GPT Image 2.5 flare transparent PNG",
+			channel:   model.ModelChannel{Protocol: ModelChannelProtocolAPIMart},
+			modelName: "gpt-image-2.5-flare",
+			want: model.ImageOutputCapability{
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				DefaultFormat: model.ImageOutputFormatPNGTransparent,
+			},
+			ok: true,
+		},
+		{
+			name:      "APIMart GPT Image 2.5 sunburst transparent PNG",
+			channel:   model.ModelChannel{Protocol: ModelChannelProtocolAPIMart},
+			modelName: "gpt-image-2.5-sunburst",
+			want: model.ImageOutputCapability{
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				DefaultFormat: model.ImageOutputFormatPNGTransparent,
+			},
+			ok: true,
+		},
+		{
+			name:      "APIMart transparent model accepts normalized alias",
+			channel:   model.ModelChannel{Protocol: ModelChannelProtocolAPIMart},
+			modelName: "GPT_IMAGE_2_5_FLARE",
+			want: model.ImageOutputCapability{
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				DefaultFormat: model.ImageOutputFormatPNGTransparent,
+			},
+			ok: true,
+		},
+		{
+			name:      "APIMart GPT Image 2.5 base has no declared output capability",
+			channel:   model.ModelChannel{Protocol: ModelChannelProtocolAPIMart},
+			modelName: "gpt-image-2.5",
+		},
+		{
+			name:      "APIMart GPT Image official preview is excluded",
+			channel:   model.ModelChannel{Protocol: ModelChannelProtocolAPIMart},
+			modelName: "gpt-image-2-official-preview",
+		},
+		{
+			name:      "APIMart GPT Image 2.5 ext is excluded",
+			channel:   model.ModelChannel{Protocol: ModelChannelProtocolAPIMart},
+			modelName: "gpt-image-2.5-flare-ext",
 		},
 		{
 			name:      "APIMart unofficial lookalike is excluded",
@@ -78,6 +153,11 @@ func TestResolveImageOutputCapability(t *testing.T) {
 			modelName: "seedream-5-0-lite",
 			want:      model.ImageOutputCapability{Formats: []model.ImageOutputFormat{model.ImageOutputFormatJPEG}, DefaultFormat: model.ImageOutputFormatJPEG},
 			ok:        true,
+		},
+		{
+			name:      "APIMart other provider model lookalike is excluded",
+			channel:   model.ModelChannel{Protocol: ModelChannelProtocolAPIMart},
+			modelName: "other-provider/gpt-image-2.5-flare",
 		},
 		{
 			name:      "KIE JPEG format",
@@ -126,9 +206,17 @@ func TestPublicChannelInfosIncludesModelOutputCapabilities(t *testing.T) {
 			Models:   []string{"gpt-image-2", "gpt-4.1"},
 			Enabled:  true,
 		},
-	}, [][]string{{"gpt-image-2", "gpt-4.1"}}...)
-	if len(got) != 1 {
-		t.Fatalf("channels = %d, want 1", len(got))
+		{
+			ID:       "apimart-channel",
+			Protocol: ModelChannelProtocolAPIMart,
+			BaseURL:  "https://api.apimart.ai/v1",
+			APIKey:   "secret",
+			Models:   []string{"gpt-image-2.5-flare"},
+			Enabled:  true,
+		},
+	}, [][]string{{"gpt-image-2", "gpt-4.1", "gpt-image-2.5-flare"}}...)
+	if len(got) != 2 {
+		t.Fatalf("channels = %d, want 2", len(got))
 	}
 	if len(got[0].ImageOutputCapabilities) != 1 {
 		t.Fatalf("image output capabilities = %#v, want only image model", got[0].ImageOutputCapabilities)
@@ -138,5 +226,8 @@ func TestPublicChannelInfosIncludesModelOutputCapabilities(t *testing.T) {
 	}
 	if _, ok := got[0].ImageOutputCapabilities["gpt-4.1"]; ok {
 		t.Fatal("text model unexpectedly has image output capability")
+	}
+	if capability, ok := got[1].ImageOutputCapabilities["gpt-image-2.5-flare"]; !ok || capability.DefaultFormat != model.ImageOutputFormatPNGTransparent {
+		t.Fatalf("APIMart output capability = %#v, want transparent PNG default", got[1].ImageOutputCapabilities)
 	}
 }
