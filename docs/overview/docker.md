@@ -47,6 +47,8 @@ docker compose -f docker-compose.local.yml up -d --build
 
 Gitea 仓库需要配置 `REGISTRY_USERNAME` 和 `REGISTRY_PASSWORD` secrets；密码应使用具有容器包写入权限的个人访问令牌。不要把 `latest` 写入生产 `IMAGE_REF`。
 
+构建 Runner 使用 Docker 执行模式，标签 `ubuntu-latest` 映射到 `docker://docker.gitea.com/runner-images:ubuntu-latest`；宿主机可以是 Debian 12 x64。Runner 缓存服务与任务容器需加入同一 Docker 网络，并将 `cache.host` 设置为 Runner 容器名，供 Go、Bun 的工具缓存访问。前端 `node:test` 回归使用 Node.js 22 与固定版本的 tsx 执行，Bun 负责依赖安装和生产构建。
+
 ## 数据目录
 
 `docker-compose.yml` 会把本地 `./data` 挂载到容器内 `/app/data`，用于保存 SQLite 数据库、提示词数据和上传素材。
