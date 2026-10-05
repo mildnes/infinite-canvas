@@ -115,6 +115,7 @@ func TestStorageSyncPausedAutomaticDoesNotHideExplicitJobs(t *testing.T) {
 	object := prepareStorageSyncDB(t, false)
 	explicit := object
 	explicit.ID, explicit.CloudSyncExplicit = "z-explicit", true
+	explicit.ObjectKey = explicit.ID + ".png"
 	if err := db.Create(&explicit).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -156,6 +157,7 @@ func TestStorageSiblingsRequireProofAndExcludeDeletedObjects(t *testing.T) {
 		{ID: "different-hash", SHA256: "other-hash", Bytes: object.Bytes},
 		{ID: "deleted", SHA256: object.SHA256, Bytes: object.Bytes, DeletedAt: "deleted"},
 	} {
+		candidate.ObjectKey = candidate.ID + ".png"
 		if err := db.Create(&candidate).Error; err != nil {
 			t.Fatal(err)
 		}
