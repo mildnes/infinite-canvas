@@ -17,6 +17,7 @@
 - [本地开发](backend/local-development.md)
 - [接口响应约定](backend/api-response.md)
 - [系统配置数据结构](backend/system-settings.md)
+- [媒体巡检与同步维护](backend/media-sync-recovery.md)
 - [后端数据库说明](backend/backend-database.md)
 - [画布数据结构](backend/canvas-data-structure.md)
 - [ComfyUI 视频工作流网关计划](plans/comfyui-video-bridge.md)

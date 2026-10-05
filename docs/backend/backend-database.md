@@ -97,12 +97,27 @@ S3/R2、WebDAV 与服务端本地生成媒体共用的文件索引表，不保�
 | `bytes` | number | 文件字节数 |
 | `width` | number | 图片生成媒体的原始宽度；其他媒体无法识别时为 `0` |
 | `height` | number | 图片生成媒体的原始高度；其他媒体无法识别时为 `0` |
-| `sha256` | string | 文件内容摘要 |
+| `sha256` | string | 文件内容摘要，带查询索引；恢复时须与实际完整内容一致 |
 | `source_url` | text | 生成渠道返回的原始 URL，仅用于审计；节点和任务不依赖该地址回源 |
 | `direct` | boolean | 是否由登录用户的浏览器直接上传至 WebDAV |
 | `created_by` | string | 创建用户 ID |
 | `created_at` | string | 创建时间 |
-| `cloud_synced_at` | string | 新生成媒体通过云端内容校验并切换对象索引的 UTC 时间；空值表示尚未云同步 |
+| `cloud_synced_at` | string | 最近一次完整确认云同步成功的 UTC 时间；是历史证据，旧记录为空不代表云文件不存在 |
+| `cloud_checked_at` | string | 最近一次云端检查时间，与历史同步时间分开记录 |
+| `cloud_check_status` | string | 最近检查结果：`ok/missing/blocked/unreachable/mismatch/unverifiable/not_applicable`；空值为尚未检查，不能作为实时存在性保证 |
+| `cloud_verified_at` | string | 最近一次完整云端回读通过字节数及 SHA-256 校验的时间 |
+| `cloud_sync_status` | string | 同步状态：`pending/syncing/retry/verified/blocked`；空值为未入队，带索引 |
+| `cloud_sync_error` | string | 脱敏失败原因；不保存凭据、签名 URL 或上游响应体 |
+| `cloud_sync_attempts` | number | 当前入队周期的尝试次数；显式重试重新计数 |
+| `cloud_sync_last_attempt_at` | string | 最近一次领取同步任务的时间 |
+| `cloud_sync_next_retry_at` | string | 下次自动重试时间，带索引；空值表示没有计划时间 |
+| `cloud_sync_lease_until` | string | 同步租约到期时间；长任务续租，进程退出后可接管；不在公开 JSON 返回 |
+| `cloud_sync_lease_token` | string | 本次执行的随机标识，条件更新防止旧执行回写；不在公开 JSON 返回 |
+| `cloud_sync_explicit` | boolean | 是否来自显式补传，决定后台关闭自动同步后是否仍可执行；不在公开 JSON 返回 |
+| `cloud_target_provider_id` | string | 首次入队确定的目标 provider；不在公开 JSON 返回 |
+| `cloud_target_bucket` | string | 固定目标 bucket；不在公开 JSON 返回 |
+| `cloud_target_key` | string | 固定目标路径，跨日期重试不变；不在公开 JSON 返回 |
+| `cloud_target_config_hash` | string | 目标连接及凭据配置摘要，配置改变后要求显式重试；不保存原始密钥，不在公开 JSON 返回 |
 | `local_copy_removed_at` | string | 已校验云端且经过保留期后，冗余本地副本的清理时间；空值表示尚未清理 |
 | `deleted_at` | string | 预留字段；当前删除链路直接删除索引记录 |
 

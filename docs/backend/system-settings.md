@@ -210,25 +210,11 @@ APIMart 透明背景能力以其实际模型接口为准：[GPT Image 1/1.5 Offi
 
 ### 已生成媒体的云端补传与本地副本
 
-登录账号的渠道生成结果无论 `storage.autoSyncAllAssets` 是否开启，都会先写入 `generated-media/` 并获得稳定 `server:<id>`；该开关只控制之后是否继续同步到 WebDAV/S3。上云失败保持本地索引与文件，节点仍通过同一 `/api/files/:id/content` 地址读取。已在 `generated-media/` 的历史对象不会因开关变化而自动补传。部署镜像包含维护命令 `/app/media-cloud`，可对历史对象分页补传，并在云端回读通过 SHA-256 校验后保持原对象 ID 不变地切换对象索引。
+登录账号的渠道生成结果无论 `storage.autoSyncAllAssets` 是否开启，都会先写入 `generated-media/` 并获得稳定 `server:<id>`。开启自动同步后，上传失败会记录原因和下次重试时间，固定目标并通过租约防止重复执行；重启后接管过期任务。只有完整云端回读通过字节数和 SHA-256 校验才确认同步成功，失败保留本地副本和短链接。切换开关不会自动补传全部历史对象。
 
-先部署新镜像并确认应用启动、数据库自动迁移完成；核对数据库与媒体目录备份、云存储可达和目录挂载，再在部署容器内操作。维护命令默认不补传或删除媒体，但初次连接数据库沿用应用的 `AutoMigrate`，不能将其作为旧版本数据库上的绝对只读命令。若使用全局提供方，还要核对后台存储容量上限与实际 4 TB 配额相符（未配置时默认 9 GiB），避免容量巡检提前停用提供方：
+部署镜像包含 `/app/media-verify` 和 `/app/media-cloud`。两者默认使用已有数据库的只读连接，不执行 AutoMigrate；先部署应用完成新字段初始化，再巡检。`media-verify` 支持云端回填、本地补传和同 SHA-256 兄弟恢复；`media-cloud -mode sync` 同样覆盖已登记云端但文件缺失的对象，写入新增 `-writes-stopped` 要求，必须备份并停写后执行。分页用 `nextCursor` 和 `-after` 继续，不能反复从头扫描等待健康对象消失。
 
-```bash
-docker compose exec app /app/media-cloud -mode sync -limit 10
-docker compose exec app /app/media-cloud -mode sync -apply -limit 10
-```
-
-核对成功数和失败 ID；分批重复命令，直到只读扫描的 `inspected` 为 0。失败对象仍留本地；如前几项持续失败，可用输出的 `nextCursor` 配合 `-after <ID>` 定位后续批次，修复原因后重新从头扫描。需要让**今后的**新生成媒体也自动上云，必须在后台另行开启 `storage.autoSyncAllAssets` 并确保当前用户有可用提供方；批量补传命令的显式 `-apply` 不依赖该开关。
-
-本地冗余副本的清理不是自动定时任务。云端索引建立满 30 天后、将媒体目录备份到独立位置且验证可恢复，再先只读查看候选；显式执行时会重新读取云端与本地、核对双方 SHA-256，任何异常都保留本地文件：
-
-```bash
-docker compose exec app /app/media-cloud -mode cleanup -limit 10
-docker compose exec app /app/media-cloud -mode cleanup -apply -backup-confirmed -limit 10
-```
-
-`-min-age-days` 可调整保留期，但不得低于 7 天。此命令只清理验证后的冗余本地文件，不清理 `local-generated` 唯一副本、云端对象、任务或备份。不要直接对整个目录使用定时删除；如未来设置外部计划任务，也要保留备份验证和失败告警。提供方关闭、配置失效或远端内容不匹配时停止该对象清理。
+命令、同步状态及维护流程见 [媒体巡检与同步维护](media-sync-recovery.md)。原有本地副本清理继续要求至少七天保留期（默认三十天）、独立备份确认及双方完整校验，不建立自动删除任务。全局 provider 仍需核对后台容量上限与实际配额，避免容量巡检提前停用存储。
 
 ### 历史临时媒体地址修复
 
