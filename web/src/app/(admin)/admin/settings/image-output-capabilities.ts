@@ -1,6 +1,6 @@
 import type { ImageOutputCapabilities, ImageOutputFormat } from "@/lib/image-output-format";
 
-const supportedFormats = new Set<ImageOutputFormat>(["png-transparent", "jpeg"]);
+const supportedFormats = new Set<ImageOutputFormat>(["png-transparent", "png", "jpeg"]);
 
 export function normalizeImageOutputCapabilities(capabilities: ImageOutputCapabilities | undefined, models: string[]) {
     if (!capabilities) return undefined;

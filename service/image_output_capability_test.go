@@ -20,7 +20,7 @@ func TestResolveImageOutputCapability(t *testing.T) {
 			channel:   model.ModelChannel{Protocol: ModelChannelProtocolOpenAI},
 			modelName: "gpt-image-2",
 			want: model.ImageOutputCapability{
-				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG, model.ImageOutputFormatPNG},
 				DefaultFormat: model.ImageOutputFormatPNGTransparent,
 			},
 			ok: true,
@@ -30,7 +30,7 @@ func TestResolveImageOutputCapability(t *testing.T) {
 			channel:   model.ModelChannel{Protocol: ModelChannelProtocolOpenAI},
 			modelName: "gpt-image-2.5-flare-2026-10-01",
 			want: model.ImageOutputCapability{
-				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG, model.ImageOutputFormatPNG},
 				DefaultFormat: model.ImageOutputFormatPNGTransparent,
 			},
 			ok: true,
@@ -40,7 +40,7 @@ func TestResolveImageOutputCapability(t *testing.T) {
 			channel:   model.ModelChannel{Protocol: ModelChannelProtocolOpenAI},
 			modelName: "gpt-image-1.5",
 			want: model.ImageOutputCapability{
-				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG, model.ImageOutputFormatPNG},
 				DefaultFormat: model.ImageOutputFormatPNGTransparent,
 			},
 			ok: true,
@@ -50,7 +50,7 @@ func TestResolveImageOutputCapability(t *testing.T) {
 			channel:   model.ModelChannel{Protocol: ModelChannelProtocolOpenAI},
 			modelName: "gpt-image-9",
 			want: model.ImageOutputCapability{
-				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG, model.ImageOutputFormatPNG},
 				DefaultFormat: model.ImageOutputFormatPNGTransparent,
 			},
 			ok: true,
@@ -60,7 +60,7 @@ func TestResolveImageOutputCapability(t *testing.T) {
 			channel:   model.ModelChannel{Protocol: ModelChannelProtocolOpenAI},
 			modelName: "gpt-2.5-sunburst-2k",
 			want: model.ImageOutputCapability{
-				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG, model.ImageOutputFormatPNG},
 				DefaultFormat: model.ImageOutputFormatPNGTransparent,
 			},
 			ok: true,
@@ -70,7 +70,7 @@ func TestResolveImageOutputCapability(t *testing.T) {
 			channel:   model.ModelChannel{Protocol: ModelChannelProtocolOpenAI},
 			modelName: "gpt-2.5-sunburst-4k",
 			want: model.ImageOutputCapability{
-				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG, model.ImageOutputFormatPNG},
 				DefaultFormat: model.ImageOutputFormatPNGTransparent,
 			},
 			ok: true,
@@ -80,7 +80,7 @@ func TestResolveImageOutputCapability(t *testing.T) {
 			channel:   model.ModelChannel{Protocol: ModelChannelProtocolOpenAI},
 			modelName: "gpt-2.5-flare-2k",
 			want: model.ImageOutputCapability{
-				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG, model.ImageOutputFormatPNG},
 				DefaultFormat: model.ImageOutputFormatPNGTransparent,
 			},
 			ok: true,
@@ -90,7 +90,7 @@ func TestResolveImageOutputCapability(t *testing.T) {
 			channel:   model.ModelChannel{Protocol: ModelChannelProtocolOpenAI},
 			modelName: "gpt-image-2.5-sunburst",
 			want: model.ImageOutputCapability{
-				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG, model.ImageOutputFormatPNG},
 				DefaultFormat: model.ImageOutputFormatPNGTransparent,
 			},
 			ok: true,
@@ -132,7 +132,7 @@ func TestResolveImageOutputCapability(t *testing.T) {
 			channel:   model.ModelChannel{Protocol: ModelChannelProtocolAPIMart},
 			modelName: "gpt-image-2-official",
 			want: model.ImageOutputCapability{
-				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG, model.ImageOutputFormatPNG},
 				DefaultFormat: model.ImageOutputFormatPNGTransparent,
 			},
 			ok: true,
@@ -142,7 +142,7 @@ func TestResolveImageOutputCapability(t *testing.T) {
 			channel:   model.ModelChannel{Protocol: ModelChannelProtocolAPIMart},
 			modelName: "gpt-image-9-official",
 			want: model.ImageOutputCapability{
-				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG, model.ImageOutputFormatPNG},
 				DefaultFormat: model.ImageOutputFormatPNGTransparent,
 			},
 			ok: true,
@@ -152,7 +152,7 @@ func TestResolveImageOutputCapability(t *testing.T) {
 			channel:   model.ModelChannel{Protocol: ModelChannelProtocolAPIMart},
 			modelName: "gpt-image-1-official",
 			want: model.ImageOutputCapability{
-				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG, model.ImageOutputFormatPNG},
 				DefaultFormat: model.ImageOutputFormatPNGTransparent,
 			},
 			ok: true,
@@ -162,7 +162,7 @@ func TestResolveImageOutputCapability(t *testing.T) {
 			channel:   model.ModelChannel{Protocol: ModelChannelProtocolAPIMart},
 			modelName: "gpt-image-1.5-official",
 			want: model.ImageOutputCapability{
-				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG, model.ImageOutputFormatPNG},
 				DefaultFormat: model.ImageOutputFormatPNGTransparent,
 			},
 			ok: true,
@@ -172,7 +172,7 @@ func TestResolveImageOutputCapability(t *testing.T) {
 			channel:   model.ModelChannel{Protocol: ModelChannelProtocolAPIMart},
 			modelName: "gpt-image-2.5-flare",
 			want: model.ImageOutputCapability{
-				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG, model.ImageOutputFormatPNG},
 				DefaultFormat: model.ImageOutputFormatPNGTransparent,
 			},
 			ok: true,
@@ -182,7 +182,7 @@ func TestResolveImageOutputCapability(t *testing.T) {
 			channel:   model.ModelChannel{Protocol: ModelChannelProtocolAPIMart},
 			modelName: "gpt-image-2.5-sunburst",
 			want: model.ImageOutputCapability{
-				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG, model.ImageOutputFormatPNG},
 				DefaultFormat: model.ImageOutputFormatPNGTransparent,
 			},
 			ok: true,
@@ -192,7 +192,7 @@ func TestResolveImageOutputCapability(t *testing.T) {
 			channel:   model.ModelChannel{Protocol: ModelChannelProtocolAPIMart},
 			modelName: "GPT_IMAGE_2_5_FLARE",
 			want: model.ImageOutputCapability{
-				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+				Formats:       []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG, model.ImageOutputFormatPNG},
 				DefaultFormat: model.ImageOutputFormatPNGTransparent,
 			},
 			ok: true,
@@ -326,7 +326,7 @@ func TestNormalizeImageOutputCapabilitiesKeepsEmptyAndFiltersModels(t *testing.T
 	}, []string{"gpt-image-2", "gpt-4.1"})
 	want := map[string]model.ImageOutputCapability{
 		"gpt-image-2": {
-			Formats: []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG},
+			Formats: []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG, model.ImageOutputFormatPNG},
 		},
 		"gpt-4.1": {Formats: []model.ImageOutputFormat{}},
 	}
@@ -418,7 +418,27 @@ func TestPublicChannelInfosPrefersAndIsolatesDeclaredOutputCapabilities(t *testi
 	if _, ok := got[0].ImageOutputCapabilities["not-in-channel"]; ok {
 		t.Fatal("public channel contains a declaration for a model it does not own")
 	}
-	if heuristic := got[1].ImageOutputCapabilities["gpt-image-2"]; !reflect.DeepEqual(heuristic.Formats, []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG}) {
+	if heuristic := got[1].ImageOutputCapabilities["gpt-image-2"]; !reflect.DeepEqual(heuristic.Formats, []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG, model.ImageOutputFormatPNG}) {
 		t.Fatalf("other channel's inferred capability = %#v, want its own shared rule", heuristic)
+	}
+}
+
+func TestNormalizeImageOutputCapabilitiesAddsImplicitOpaquePNG(t *testing.T) {
+	got := normalizeImageOutputCapabilities(map[string]model.ImageOutputCapability{
+		"transparent": {Formats: []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent}},
+		"jpeg-only":   {Formats: []model.ImageOutputFormat{model.ImageOutputFormatJPEG}},
+		"explicit":    {Formats: []model.ImageOutputFormat{model.ImageOutputFormatPNG}},
+		"empty":       {Formats: []model.ImageOutputFormat{}},
+		"declared":    {Formats: []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatPNG}, DefaultFormat: model.ImageOutputFormatPNG},
+	}, []string{"transparent", "jpeg-only", "explicit", "empty", "declared"})
+	want := map[string]model.ImageOutputCapability{
+		"transparent": {Formats: []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatPNG}},
+		"jpeg-only":   {Formats: []model.ImageOutputFormat{model.ImageOutputFormatJPEG}},
+		"explicit":    {Formats: []model.ImageOutputFormat{model.ImageOutputFormatPNG}},
+		"empty":       {Formats: []model.ImageOutputFormat{}},
+		"declared":    {Formats: []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatPNG}, DefaultFormat: model.ImageOutputFormatPNG},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("normalized output declarations = %#v, want %#v", got, want)
 	}
 }

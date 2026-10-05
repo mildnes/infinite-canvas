@@ -68,20 +68,35 @@ func TestNormalizeImageOutputFormatRequestByChannel(t *testing.T) {
 	}
 }
 
-func TestNormalizeImageOutputFormatPreservesLegacyPNGAndWebP(t *testing.T) {
+func TestNormalizeImageOutputFormatTreatsPNGAsOpaqueSelectionAndPreservesWebP(t *testing.T) {
 	channel := model.ModelChannel{Protocol: "openai"}
-	for _, format := range []string{"png", "webp"} {
-		t.Run(format, func(t *testing.T) {
-			body := []byte(`{"model":"gpt-image-2","prompt":"scene","output_format":"` + format + `"}`)
-			encoded, contentType, result, err := normalizeImageOutputFormatRequest(body, "application/json", channel, "gpt-image-2", "/images/generations")
-			if err != nil || !bytes.Equal(encoded, body) {
-				t.Fatalf("legacy output format changed: body=%s err=%v", encoded, err)
-			}
-			if contentType != "application/json" || result != (imageOutputFormatResult{}) {
-				t.Fatalf("contentType=%q result=%#v", contentType, result)
-			}
-		})
-	}
+	t.Run("png", func(t *testing.T) {
+		body := []byte(`{"model":"gpt-image-2","prompt":"scene","output_format":"png"}`)
+		encoded, contentType, result, err := normalizeImageOutputFormatRequest(body, "application/json", channel, "gpt-image-2", "/images/generations")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload map[string]any
+		if json.Unmarshal(encoded, &payload) != nil {
+			t.Fatalf("encoded body = %s", encoded)
+		}
+		if contentType != "application/json" || payload["output_format"] != "png" || result.Format != string(model.ImageOutputFormatPNG) || result.Notice != "" {
+			t.Fatalf("contentType=%q payload=%#v result=%#v", contentType, payload, result)
+		}
+		if _, ok := payload["background"]; ok {
+			t.Fatalf("opaque PNG kept a background value: %#v", payload)
+		}
+	})
+	t.Run("webp", func(t *testing.T) {
+		body := []byte(`{"model":"gpt-image-2","prompt":"scene","output_format":"webp"}`)
+		encoded, contentType, result, err := normalizeImageOutputFormatRequest(body, "application/json", channel, "gpt-image-2", "/images/generations")
+		if err != nil || !bytes.Equal(encoded, body) {
+			t.Fatalf("legacy output format changed: body=%s err=%v", encoded, err)
+		}
+		if contentType != "application/json" || result != (imageOutputFormatResult{}) {
+			t.Fatalf("contentType=%q result=%#v", contentType, result)
+		}
+	})
 
 	body := []byte(`{"model":"gpt-image-2","prompt":"scene","background":"transparent"}`)
 	encoded, _, result, err := normalizeImageOutputFormatRequest(body, "application/json", channel, "gpt-image-2", "/images/generations")
@@ -423,5 +438,107 @@ func TestAppendImageOutputLogMetadata(t *testing.T) {
 	}
 	if payload["_image_output_format"] != "jpeg" || payload["_image_output_notice"] != "fell back" {
 		t.Fatalf("metadata = %#v", payload)
+	}
+}
+
+func TestNormalizeImageOutputFormatOpaquePNGPaths(t *testing.T) {
+	// 渠道声明只含透明 PNG 时，隐式获得不透明 PNG 选择。
+	declared := model.ModelChannel{Protocol: "openai", Models: []string{"custom-renderer"}, ImageOutputCapabilities: map[string]model.ImageOutputCapability{
+		"custom-renderer": {Formats: []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent}, DefaultFormat: model.ImageOutputFormatPNGTransparent},
+	}}
+	encoded, contentType, result, err := normalizeImageOutputFormatRequest([]byte(`{"model":"custom-renderer","prompt":"scene","output_format":"png","background":"opaque"}`), "application/json", declared, "custom-renderer", "/images/generations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if json.Unmarshal(encoded, &payload) != nil || contentType != "application/json" || payload["output_format"] != "png" || result.Format != string(model.ImageOutputFormatPNG) || result.Notice != "" {
+		t.Fatalf("declared payload=%#v contentType=%q result=%#v", payload, contentType, result)
+	}
+	if _, ok := payload["background"]; ok {
+		t.Fatalf("opaque PNG kept a background value: %#v", payload)
+	}
+
+	// 仅支持 JPEG 的渠道回落到默认格式并给出提示。
+	jpegOnly := model.ModelChannel{Protocol: "openai", Models: []string{"custom-renderer"}, ImageOutputCapabilities: map[string]model.ImageOutputCapability{
+		"custom-renderer": {Formats: []model.ImageOutputFormat{model.ImageOutputFormatJPEG}, DefaultFormat: model.ImageOutputFormatJPEG},
+	}}
+	encoded, _, result, err = normalizeImageOutputFormatRequest([]byte(`{"model":"custom-renderer","prompt":"scene","output_format":"png"}`), "application/json", jpegOnly, "custom-renderer", "/images/generations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload = nil
+	if json.Unmarshal(encoded, &payload) != nil || payload["output_format"] != "jpeg" || result.Format != string(model.ImageOutputFormatJPEG) || result.NoticeCode != "fallback-default" {
+		t.Fatalf("fallback payload=%#v result=%#v", payload, result)
+	}
+
+	// 未声明能力的模型保持既有语义：剥离格式字段并提示。
+	encoded, _, result, err = normalizeImageOutputFormatRequest([]byte(`{"model":"gpt-4o","prompt":"scene","output_format":"png"}`), "application/json", model.ModelChannel{Protocol: "openai"}, "gpt-4o", "/images/generations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload = nil
+	if json.Unmarshal(encoded, &payload) != nil || result.NoticeCode != "undeclared" {
+		t.Fatalf("undeclared payload=%#v result=%#v", payload, result)
+	}
+	if _, ok := payload["output_format"]; ok {
+		t.Fatalf("undeclared model retained output_format: %#v", payload)
+	}
+}
+
+func TestNormalizeImageOutputFormatOpaquePNGMultipartEdit(t *testing.T) {
+	var source bytes.Buffer
+	writer := multipart.NewWriter(&source)
+	for key, value := range map[string]string{"model": "custom-renderer", "prompt": "scene", "output_format": "png"} {
+		if err := writer.WriteField(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	part, err := writer.CreatePart(textproto.MIMEHeader{
+		"Content-Disposition": {`form-data; name="image"; filename="reference.png"`},
+		"Content-Type":        {"image/png"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte("png-bytes")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	channel := model.ModelChannel{Protocol: "openai", Models: []string{"custom-renderer"}, ImageOutputCapabilities: map[string]model.ImageOutputCapability{
+		"custom-renderer": {Formats: []model.ImageOutputFormat{model.ImageOutputFormatPNGTransparent}, DefaultFormat: model.ImageOutputFormatPNGTransparent},
+	}}
+	encoded, contentType, result, err := normalizeImageOutputFormatRequest(source.Bytes(), writer.FormDataContentType(), channel, "custom-renderer", "/images/edits")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Format != string(model.ImageOutputFormatPNG) {
+		t.Fatalf("effective format = %q", result.Format)
+	}
+	_, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form, err := multipart.NewReader(bytes.NewReader(encoded), params["boundary"]).ReadForm(1 << 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer form.RemoveAll()
+	if len(form.Value["output_format"]) != 1 || form.Value["output_format"][0] != "png" {
+		t.Fatalf("output fields = %#v", form.Value)
+	}
+	if _, ok := form.Value["background"]; ok {
+		t.Fatalf("opaque PNG multipart kept background: %#v", form.Value)
+	}
+	input, err := form.File["image"][0].Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	imageBytes, err := io.ReadAll(input)
+	if err != nil || string(imageBytes) != "png-bytes" {
+		t.Fatalf("image bytes = %q, err=%v", imageBytes, err)
 	}
 }

@@ -797,12 +797,18 @@ func normalizeImageOutputCapabilities(capabilities map[string]model.ImageOutputC
 		for _, format := range capability.Formats {
 			format = model.ImageOutputFormat(strings.ToLower(strings.TrimSpace(string(format))))
 			switch format {
-			case model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatJPEG:
+			case model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatPNG, model.ImageOutputFormatJPEG:
 				if !seen[format] {
 					seen[format] = true
 					formats = append(formats, format)
 				}
 			}
+		}
+		// 透明 PNG 能力蕴含不透明 PNG（同一编码器去掉透明背景要求），
+		// 统一在这里补齐隐式选项，避免逐条渠道声明重复维护。
+		if seen[model.ImageOutputFormatPNGTransparent] && !seen[model.ImageOutputFormatPNG] {
+			seen[model.ImageOutputFormatPNG] = true
+			formats = append(formats, model.ImageOutputFormatPNG)
 		}
 
 		defaultFormat := model.ImageOutputFormat(strings.ToLower(strings.TrimSpace(string(capability.DefaultFormat))))

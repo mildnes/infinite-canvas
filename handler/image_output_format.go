@@ -201,7 +201,9 @@ func readRequestedImageOutputFormat(format string, background string) (model.Ima
 		if strings.EqualFold(strings.TrimSpace(background), "transparent") {
 			return model.ImageOutputFormatPNGTransparent, true
 		}
-		return "", false
+		// 不带透明背景声明的 png 现在是一等选择：不透明 PNG（"PNG（不透明）"），
+		// 上游保持 output_format=png 且不携带 background。
+		return model.ImageOutputFormatPNG, true
 	case "jpg", "jpeg":
 		return model.ImageOutputFormatJPEG, true
 	default:
@@ -259,6 +261,8 @@ func imageOutputWireValues(format string, channel model.ModelChannel) (string, s
 			return "png", ""
 		}
 		return "png", "transparent"
+	case model.ImageOutputFormatPNG:
+		return "png", ""
 	case model.ImageOutputFormatJPEG:
 		return "jpeg", ""
 	default:

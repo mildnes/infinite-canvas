@@ -125,6 +125,9 @@ export function ImageSettingsPanel({ config, model, onConfigChange, theme, showT
                         <SettingTitle color={theme.node.muted}>输出格式</SettingTitle>
                         {savedOutputFormat === "auto" ? <div className="text-xs" style={{ color: theme.node.muted }}>沿用渠道默认格式</div> : null}
                         <div className="grid grid-cols-2 gap-2.5">
+                            <OptionPill selected={savedOutputFormat === "auto"} theme={theme} onClick={() => onConfigChange("imageOutputFormat", "auto")}>
+                                自动
+                            </OptionPill>
                             {imageOutputFormatOptions.filter((item) => outputCapability.formats.includes(item.value)).map((item) => (
                                 <OptionPill key={item.value} selected={selectedOutputFormat === item.value} theme={theme} onClick={() => onConfigChange("imageOutputFormat", item.value)}>
                                     {item.label}

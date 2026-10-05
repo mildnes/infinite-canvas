@@ -137,9 +137,9 @@ description: settings 表中 public 和 private 配置结构说明
 }
 ```
 
-`formats` 可包含 `png-transparent`、`jpeg`，空数组 `[]` 是显式声明，表示该模型不开放这些输出格式，不等同于未声明，也不回退到共享规则。`defaultFormat` 是可选字段；仅当其值也在 `formats` 中时有效。缺少或无效时保存为空，不自动制造支持格式。请求所选格式不受支持时，仅在存在有效默认值时切换到该值；否则保留 `auto`。`AiConfig.imageOutputFormat`、画布 Agent 配置、节点元数据和生成记录保存 `png-transparent` 或 `jpeg`；旧配置缺少格式或值为 `auto` 时不主动注入格式、背景参数。未指定渠道时，前端只提供全部候选渠道共同支持的格式。
+`formats` 可包含 `png-transparent`、`png`（不透明）、`jpeg`，其中声明 `png-transparent` 的模型会自动获得 `png`（不透明）能力；空数组 `[]` 是显式声明，表示该模型不开放这些输出格式，不等同于未声明，也不回退到共享规则。`defaultFormat` 是可选字段；仅当其值也在 `formats` 中时有效。缺少或无效时保存为空，不自动制造支持格式。请求所选格式不受支持时，仅在存在有效默认值时切换到该值；否则保留 `auto`。`AiConfig.imageOutputFormat`、画布 Agent 配置、节点元数据和生成记录保存 `png-transparent`、`png`（不透明）、`jpeg` 或 `auto`（渠道默认，图像设置面板可随时切回）；旧配置缺少格式或值为 `auto` 时不主动注入格式、背景参数。未指定渠道时，前端只提供全部候选渠道共同支持的格式。
 
-后台“模型渠道”设置为非工作流渠道的每个模型提供可展开的“图片输出格式声明”编辑器，可启用或关闭声明、选择透明 PNG/JPEG，并从已选格式中选择可选默认值。关闭会删除该模型的声明键；JSON 手写的声明仍会被可视化保存保留，包括 `formats: []`。保存时按模型保留、过滤未知格式并去重；无效或未包含在格式列表内的默认值会被清除。声明按渠道和模型隔离，同名模型在不同渠道互不影响。
+后台“模型渠道”设置为非工作流渠道的每个模型提供可展开的“图片输出格式声明”编辑器，可启用或关闭声明、选择透明 PNG/PNG（不透明）/JPEG，并从已选格式中选择可选默认值。关闭会删除该模型的声明键；JSON 手写的声明仍会被可视化保存保留，包括 `formats: []`。保存时按模型保留、过滤未知格式并去重；无效或未包含在格式列表内的默认值会被清除。声明按渠道和模型隔离，同名模型在不同渠道互不影响。
 
 共享规则的唯一维护源是 `shared/image-output-capability-rules.json`。前端 `bun run dev` 和 `bun run build` 会先通过 `sync:shared` 将其复制到 `web/src/lib/image-output-capability-rules.json`，应用和逻辑测试都读取这个应用内副本，避免 Turbopack 越根导入。副本由 Git 忽略，不应手工修改或提交；单独运行前端逻辑测试前，先执行 `cd web && bun run sync:shared`。修改规则后重新同步，Go 仍直接嵌入原始共享文件。
 

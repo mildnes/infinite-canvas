@@ -62,6 +62,9 @@ test("Images, Responses, and Chat place selected format in protocol-specific tar
     const imagesBody = applyImageOutputFormatRequestBody({ model: "gpt-image-2" }, "png-transparent", "openai");
     assert.deepEqual(imagesBody, { model: "gpt-image-2", output_format: "png", background: "transparent" });
 
+    const opaqueImagesBody = applyImageOutputFormatRequestBody({ model: "gpt-image-2" }, "png", "openai");
+    assert.deepEqual(opaqueImagesBody, { model: "gpt-image-2", output_format: "png" });
+
     const responsesBody = applyImageOutputFormatRequestBody({
         model: "gpt-image-2",
         tools: [{ type: "image_generation" }],
@@ -104,6 +107,9 @@ test("APIMart Images emit transparent PNG and clean JPEG fields while KIE remain
     assert.deepEqual(applyImageOutputFormatFields({ background: "transparent" }, "jpeg", "apimart"), { output_format: "jpeg" });
     assert.deepEqual(applyImageOutputFormatFields({}, "jpeg", "kie"), { output_format: "jpg" });
     assert.deepEqual(applyImageOutputFormatFields({}, "png-transparent", "kie"), {});
+    assert.deepEqual(applyImageOutputFormatFields({ background: "transparent" }, "png", "openai"), { output_format: "png" });
+    assert.deepEqual(applyImageOutputFormatFields({}, "png", "apimart"), { output_format: "png" });
+    assert.deepEqual(applyImageOutputFormatFields({}, "png", "kie"), { output_format: "png" });
     const apimartResponses = { tools: [{ type: "image_generation" }] };
     assert.deepEqual(applyImageOutputFormatRequestBody(apimartResponses, "png-transparent", "apimart", "responses"), apimartResponses);
     const apimartChat = { modalities: ["image", "text"], image_config: { aspect_ratio: "1:1" } };

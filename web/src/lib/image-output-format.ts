@@ -2,7 +2,7 @@ import type { ModelChannelProtocol } from "@/lib/model-channel";
 import type { WorkflowFieldMapping, WorkflowRef } from "@/lib/workflow-channel";
 import sharedOutputCapabilityRules from "./image-output-capability-rules.json" with { type: "json" };
 
-export type ImageOutputFormat = "png-transparent" | "jpeg";
+export type ImageOutputFormat = "png-transparent" | "png" | "jpeg";
 export type ImageOutputFormatSelection = ImageOutputFormat | "auto";
 
 export type ImageOutputCapability = {
@@ -65,11 +65,12 @@ const compiledImageOutputCapabilityRules = imageOutputCapabilityRules.map((rule)
 
 export const imageOutputFormatOptions: Array<{ value: ImageOutputFormat; label: string }> = [
     { value: "png-transparent", label: "透明 PNG" },
+    { value: "png", label: "PNG（不透明）" },
     { value: "jpeg", label: "JPG" },
 ];
 
 export function normalizeImageOutputFormat(value: unknown): ImageOutputFormatSelection {
-    return value === "png-transparent" || value === "jpeg" ? value : "auto";
+    return value === "png-transparent" || value === "png" || value === "jpeg" ? value : "auto";
 }
 
 export function resolveImageOutputFormat(selection: unknown, capability: ImageOutputCapability | null | undefined) {
@@ -96,9 +97,9 @@ export function imageOutputCapabilityForConfig(config: ImageOutputConfig, model 
         .map((channel) => {
             const declared = channel.imageOutputCapabilities?.[model];
             if (config.channelMode === "remote" || Object.hasOwn(channel.imageOutputCapabilities || {}, model)) {
-                return normalizeCapability(declared);
+                return withOpaquePNGFormat(normalizeCapability(declared));
             }
-            return localImageOutputCapability(channel, model);
+            return withOpaquePNGFormat(localImageOutputCapability(channel, model));
         })
         .filter((capability): capability is ImageOutputCapability => capability !== null);
 
@@ -158,9 +159,16 @@ function workflowCapabilityForConfig(config: ImageOutputConfig) {
 
 function normalizeCapability(value: ImageOutputCapability | undefined): ImageOutputCapability | null {
     if (!value || !Array.isArray(value.formats)) return null;
-    const formats = Array.from(new Set(value.formats.filter((format): format is ImageOutputFormat => format === "png-transparent" || format === "jpeg")));
+    const formats = Array.from(new Set(value.formats.filter((format): format is ImageOutputFormat => format === "png-transparent" || format === "png" || format === "jpeg")));
     const defaultFormat = formats.includes(value.defaultFormat as ImageOutputFormat) ? value.defaultFormat : undefined;
     return { formats, ...(defaultFormat ? { defaultFormat } : {}) };
+}
+
+// 声明了透明 PNG 的模型必然能输出普通不透明 PNG（同一编码器，去掉透明背景要求），
+// 在渠道能力解析处统一补齐该隐式选项；工作流按字段推导的能力不在此列。
+function withOpaquePNGFormat(capability: ImageOutputCapability | null): ImageOutputCapability | null {
+    if (!capability || !capability.formats.includes("png-transparent") || capability.formats.includes("png")) return capability;
+    return { ...capability, formats: [...capability.formats, "png"] };
 }
 
 function workflowScalarOption(option: unknown): string | null {

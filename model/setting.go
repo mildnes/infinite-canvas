@@ -107,7 +107,13 @@ type ImageOutputFormat string
 
 const (
 	ImageOutputFormatPNGTransparent ImageOutputFormat = "png-transparent"
-	ImageOutputFormatJPEG           ImageOutputFormat = "jpeg"
+
+	// ImageOutputFormatPNG is the opaque PNG selection ("PNG（不透明）"):
+	// the upstream request carries output_format=png without a transparent
+	// background, so the result keeps its normal opaque background.
+	ImageOutputFormatPNG ImageOutputFormat = "png"
+
+	ImageOutputFormatJPEG ImageOutputFormat = "jpeg"
 )
 
 type ImageOutputCapability struct {
