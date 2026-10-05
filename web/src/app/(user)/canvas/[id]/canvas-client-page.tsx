@@ -3774,7 +3774,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         }
                     }
 
-                    const layoutSourceNodes = mode === "image" ? [] : mode === "video" ? nodesRef.current.filter((node) => !node.metadata?.groupId && (node.type === CanvasNodeType.Text || isCanvasImageNodeType(node.type) || node.type === CanvasNodeType.Group)) : sourceNodes;
+                    const layoutSourceNodes = mode === "video" ? nodesRef.current.filter((node) => !node.metadata?.groupId && (node.type === CanvasNodeType.Text || isCanvasImageNodeType(node.type) || node.type === CanvasNodeType.Group)) : sourceNodes;
                     let node = createCanvasNode(targetType, nextNodeCenter(targetType, layoutSourceNodes), metadata);
                     if (mode === "video") node = applyNodeConfigPatch(node, { size: generationConfig.size });
                     node.title = stringValue("title") || prompt.slice(0, 32) || (mode === "video" ? "视频" : mode === "audio" ? "音频" : "图片");
