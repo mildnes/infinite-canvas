@@ -247,6 +247,30 @@ docker compose run --rm --no-deps app /app/canvas-media-repair -apply -writes-st
 
 单条下载失败不会阻断其他条目；apply 模式只将该引用标记为 `broken` 并保留原 URL 与原因。命令不删除媒体、不执行 `VACUUM`，也不绕过私网和 metadata 地址防护。若超过一批，使用输出最后一项的用户和画布 ID传入 `-after-user`、`-after-canvas` 继续。
 
+### 画布 originalUrl 内联副本抽离
+
+先部署节点保存清洗，再迁移存量，防止旧浏览器状态将 Base64 写回。`original-url` 模式只处理节点 `metadata.originalUrl` 以 `data:` 或 `blob:` 开头、且已有 `server:<objectId>` 的副本，不执行远程图床下载、上传、媒体删除或 `VACUUM`。现有默认 `media` 模式仍用于上节的临时 URL 修复。
+
+先在测试数据库验证；生产预览命令：
+
+```bash
+docker compose exec app /app/canvas-media-repair -mode original-url -limit 100
+```
+
+SQLite dry-run 使用只读连接，不创建表或自动迁移。每条报告包含 `canvasId`、`nodeId`、`before`（最多 64 字节前缀）、`beforeBytes`、`after`、`objectId`、`bytes`、`sha256`、状态和失败原因，不输出整段 Base64。替换前确认对象属于画布账号、未删除，并通过现有存储读取链路校验完整字节数与 SHA-256；同一画布的重复对象只读取一次。没有持久化键或对象不可读时保留原值，单条失败不影响其他可验证节点。
+
+确认 dry-run 报告、停止应用写入并完成数据库独立备份后执行：
+
+```bash
+docker compose stop app
+docker compose run --rm --no-deps --pull never app /app/canvas-media-repair -mode original-url -apply -writes-stopped -limit 100
+docker compose start app
+```
+
+必须使用包含本轮修复的已部署镜像，不拉取上游 `latest`。只将已验证节点的 `originalUrl` 写为 `/api/files/<id>/content`，同时更新项目时间；`content`、`storageKey`、连线、会话和存储对象保持原样，写入前检查项目快照，拒绝覆盖已变更或已删除画布。汇总中的 `afterUser`、`afterCanvas` 用于下一批的 `-after-user`、`-after-canvas`；任何条目或画布失败时退出码为 1，仍输出其他成功条目的报告。处理完全部分页后从头 dry-run，应无候选。
+
+部署验收需扫描节点 `originalUrl`，核对 `project_data` 总字节和最大画布字节，检查刷新、重试、局部编辑及报告中的短链接均可读取真实媒体。JSON 逻辑体积下降不等于 SQLite 文件立即变小；数据库压缩和备份清理另行安排。
+
 ### 生图历史摘要与云端原图
 
 生图工作台通过每页 40 条的轻量摘要读取历史；部署新镜像并完成数据库自动迁移后、恢复用户流量前，先分批回填旧日志摘要。分页接口不会在首屏临时读取大型旧载荷；未回填记录会暂不出现在列表中。命令默认只统计，显式 `-apply` 才写入 `summary_json`：

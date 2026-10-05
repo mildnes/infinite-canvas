@@ -109,6 +109,24 @@ func SaveUserCanvasProjects(
 	return ListUserCanvasProjects(userID)
 }
 
+// ReplaceCanvasProjectDataForMaintenance refuses to overwrite a changed or deleted project.
+func ReplaceCanvasProjectDataForMaintenance(project model.CanvasProject, data, updatedAt string) error {
+	db, err := DB()
+	if err != nil {
+		return err
+	}
+	result := db.Model(&model.CanvasProject{}).
+		Where("user_id = ? AND id = ? AND deleted_at = '' AND updated_at = ? AND project_data = ?", project.UserID, project.ID, project.UpdatedAt, project.ProjectData).
+		Updates(map[string]any{"project_data": data, "updated_at": updatedAt})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("画布已变化或被删除，请重新 dry-run")
+	}
+	return nil
+}
+
 func SoftDeleteUserCanvasProjects(
 	userID string,
 	ids []string,

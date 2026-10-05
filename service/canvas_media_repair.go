@@ -14,7 +14,10 @@ import (
 type CanvasMediaRepairReport struct {
 	CanvasID    string `json:"canvasId"`
 	NodeID      string `json:"nodeId"`
-	OriginalURL string `json:"originalUrl"`
+	OriginalURL string `json:"originalUrl,omitempty"`
+	Before      string `json:"before,omitempty"`
+	BeforeBytes int    `json:"beforeBytes,omitempty"`
+	After       string `json:"after,omitempty"`
 	ObjectID    string `json:"objectId,omitempty"`
 	Bytes       int64  `json:"bytes,omitempty"`
 	SHA256      string `json:"sha256,omitempty"`

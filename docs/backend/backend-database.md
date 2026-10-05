@@ -337,6 +337,8 @@ Bridge 工作流请求及租约表。队列由 `bridge_id` 和 `status` 索引�
 
 画布项目表。一条画布项目对应一行，完整项目 JSON 保存在 `project_data`，包含节点、连线、聊天会话、画布设置和视口；不拆节点表。
 
+前端持久化边界清洗媒体 `content` 和 `originalUrl` 中的 `data:`/`blob:`：有 `server:` 存储键时改为 `/api/files/<id>/content`，否则不保存内联副本；本地媒体仍由浏览器 IndexedDB 存储键恢复。已有的 HTTP(S)、API 或 `server:` 原始引用保留。存量 `originalUrl` 使用 [系统配置说明](system-settings.md#画布-originalurl-内联副本抽离) 中的维护命令抽离，无表结构变更。
+
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `user_id` | string | 所属用户，与 `id` 组成主键 |

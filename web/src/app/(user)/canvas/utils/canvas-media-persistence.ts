@@ -123,15 +123,18 @@ export function nodeNeedsCloudUpload(node: CanvasNodeData) {
     return false;
 }
 
-/** Sync sanitize for persistence/sync. Never keep blob: in saved JSON. */
+/** Sync sanitize for persistence/sync. Never keep inline media in saved references. */
 export function normalizeCanvasMediaRefForPersistence(ref: CanvasMediaRef): CanvasMediaRef {
     const storageKey = (ref.storageKey || "").trim();
+    const originalSource = (ref.originalUrl || "").trim();
+    const originalUrl = isBlobUrl(originalSource) || isDataUrl(originalSource) ? serverContentUrl(storageKey) : ref.originalUrl || "";
     let content = (ref.content || "").trim();
     if (isBlobUrl(content) || isDataUrl(content)) {
         content = serverContentUrl(storageKey);
         return {
             ...ref,
             content,
+            originalUrl,
             storageKey,
             mediaStatus: content || isServerKey(storageKey) ? "ok" : storageKey ? "local-only" : "broken",
             mediaError: content || isServerKey(storageKey) ? undefined : storageKey ? "未上云，换浏览器不可见" : "媒体仅存于原浏览器本地，已失效",
@@ -143,6 +146,7 @@ export function normalizeCanvasMediaRefForPersistence(ref: CanvasMediaRef): Canv
     return {
         ...ref,
         content,
+        originalUrl,
         storageKey,
         mediaStatus: ref.mediaStatus || (isStableMediaUrl(content) || isServerKey(storageKey) ? "ok" : storageKey ? "local-only" : content ? "ok" : ref.mediaStatus),
     };
@@ -164,6 +168,7 @@ export function sanitizeCanvasNodeForPersistence(node: CanvasNodeData): CanvasNo
     });
     if (
         next.content === (metadata.content || "") &&
+        next.originalUrl === (metadata.originalUrl || "") &&
         next.storageKey === (metadata.storageKey || "") &&
         next.mediaStatus === metadata.mediaStatus &&
         next.mediaError === metadata.mediaError
@@ -175,6 +180,7 @@ export function sanitizeCanvasNodeForPersistence(node: CanvasNodeData): CanvasNo
         metadata: {
             ...metadata,
             content: next.content || "",
+            originalUrl: next.originalUrl || "",
             storageKey: next.storageKey || "",
             mediaStatus: next.mediaStatus,
             mediaError: next.mediaError,
@@ -221,6 +227,8 @@ function applyRefToMetadata(metadata: CanvasNodeMetadata, ref: CanvasMediaRef): 
 }
 
 function sameRef(a: CanvasMediaRef, b: CanvasMediaRef) {
+    a = normalizeCanvasMediaRefForPersistence(a);
+    b = normalizeCanvasMediaRefForPersistence(b);
     return (
         (a.content || "") === (b.content || "") &&
         (a.storageKey || "") === (b.storageKey || "") &&
