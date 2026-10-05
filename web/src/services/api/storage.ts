@@ -15,6 +15,15 @@ export type StorageObjectInfo = {
     mimeType: string;
     bytes: number;
     direct: boolean;
+    cloudSyncedAt?: string;
+    cloudCheckedAt?: string;
+    cloudVerifiedAt?: string;
+    cloudCheckStatus?: string;
+    cloudSyncStatus?: string;
+    cloudSyncError?: string;
+    cloudSyncAttempts?: number;
+    cloudSyncLastAttemptAt?: string;
+    cloudSyncNextRetryAt?: string;
 };
 
 export function getStorageObjectInfo(id: string) {

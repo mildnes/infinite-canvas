@@ -246,6 +246,11 @@ func UploadStorageObjectWithProvider(ctx context.Context, filename string, conte
 		ID: objectID, ProviderID: provider.ID, Bucket: provider.Bucket, ObjectKey: objectKey, PublicURL: publicURL,
 		MimeType: contentType, Bytes: int64(len(data)), SHA256: hex.EncodeToString(sum[:]), CreatedBy: userID, CreatedAt: now(),
 	}
+	if err := verifyExactCloudMedia(ctx, object, provider); err != nil {
+		return UploadedStorageObject{}, mediaIssue(mediaErrorKind(err), "上传后云端完整校验失败："+mediaSafeError(err))
+	}
+	object.CloudSyncedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	object.CloudCheckedAt, object.CloudVerifiedAt, object.CloudCheckStatus, object.CloudSyncStatus = object.CloudSyncedAt, object.CloudSyncedAt, "ok", "verified"
 	if _, err := repository.SaveStorageObject(object); err != nil {
 		return UploadedStorageObject{}, safeMessageError{message: "保存上传记录失败，请检查数据库"}
 	}
@@ -286,7 +291,7 @@ func RegisterDirectStorageObject(ctx context.Context, input DirectStorageObjectI
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
-	if input.Bytes < 0 {
+	if input.Bytes <= 0 || input.Bytes == 1<<63-1 {
 		return UploadedStorageObject{}, errors.New("文件大小无效")
 	}
 	objectID := uuid.NewString()
@@ -294,6 +299,19 @@ func RegisterDirectStorageObject(ctx context.Context, input DirectStorageObjectI
 		ID: objectID, ProviderID: provider.ID, ObjectKey: objectKey, MimeType: contentType,
 		Bytes: input.Bytes, Direct: true, CreatedBy: user.ID, CreatedAt: now(),
 	}
+	stream, err := readExactCloudMedia(ctx, object, provider)
+	if err != nil {
+		return UploadedStorageObject{}, mediaIssue(mediaErrorKind(err), "直传媒体验证失败："+mediaSafeError(err))
+	}
+	hash := sha256.New()
+	count, readErr := io.Copy(hash, io.LimitReader(stream, input.Bytes+1))
+	_ = stream.Close()
+	if readErr != nil || count != input.Bytes {
+		return UploadedStorageObject{}, mediaIssue("mismatch", "直传媒体字节数验证失败")
+	}
+	object.SHA256 = hex.EncodeToString(hash.Sum(nil))
+	object.CloudSyncedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	object.CloudCheckedAt, object.CloudVerifiedAt, object.CloudCheckStatus, object.CloudSyncStatus = object.CloudSyncedAt, object.CloudSyncedAt, "ok", "verified"
 	if _, err := repository.SaveStorageObject(object); err != nil {
 		return UploadedStorageObject{}, err
 	}

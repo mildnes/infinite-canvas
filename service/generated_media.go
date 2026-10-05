@@ -14,7 +14,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -32,13 +31,12 @@ const generatedMediaProviderID = "local-generated"
 
 var (
 	generatedMediaSaveMu sync.Mutex
-	generatedMediaSyncMu sync.Mutex
 )
 
 // GeneratedMediaDir is persisted alongside the SQLite database in Docker.
 // Non-SQLite deployments must mount data/ or /app/data as persistent storage.
 func GeneratedMediaDir() string {
-	dsn := strings.TrimSpace(config.Cfg.DatabaseDSN)
+	dsn := strings.TrimPrefix(strings.TrimSpace(config.Cfg.DatabaseDSN), "file:")
 	driver := strings.ToLower(strings.TrimSpace(config.Cfg.StorageDriver))
 	if (driver == "" || driver == "sqlite") && filepath.IsAbs(dsn) && !strings.HasPrefix(dsn, "file:") {
 		return filepath.Join(filepath.Dir(strings.SplitN(dsn, "?", 2)[0]), "generated-media")
@@ -96,7 +94,7 @@ func saveGeneratedMedia(userID, contentType string, data []byte, objectID string
 		}
 		if existing.SourceURL == "" && strings.TrimSpace(sourceURL) != "" {
 			existing.SourceURL = strings.TrimSpace(sourceURL)
-			_, _ = repository.SaveStorageObject(existing)
+			_ = repository.UpdateStorageObjectSnapshot(existing, map[string]any{"source_url": existing.SourceURL})
 		}
 		return UploadedStorageObject{
 			ID: objectID, URL: "/api/files/" + objectID + "/content", StorageKey: "server:" + objectID,
@@ -196,119 +194,18 @@ func PromoteGeneratedMedia(ctx context.Context, objectID string) error {
 	return syncGeneratedMedia(ctx, objectID, true)
 }
 
-// syncGeneratedMedia keeps the public object ID stable and retains the local
-// copy as a read fallback. A failed upload never alters the local index.
-func syncGeneratedMedia(ctx context.Context, objectID string, explicit bool) error {
-	generatedMediaSyncMu.Lock()
-	defer generatedMediaSyncMu.Unlock()
-	object, err := repository.GetStorageObject(objectID)
-	if err != nil {
-		return err
-	}
-	if object.ProviderID != generatedMediaProviderID {
-		return nil // A completed prior run is safe to retry.
-	}
-	settings, err := repository.GetSettings()
-	if err != nil {
-		return err
-	}
-	storage := normalizePrivateStorageSetting(settings.Private.Storage)
-	if !explicit && !storage.AutoSyncAllAssets {
-		return nil
-	}
-	var provider model.StorageProvider
-	if storage.AllowUserProvider {
-		if saved, found, loadErr := repository.GetUserConfig(object.CreatedBy); loadErr == nil && found {
-			for _, candidate := range userStorageProvidersForOwner(saved.StorageProvider, object.CreatedBy) {
-				if candidate.Enabled && storageProviderConfigured(candidate) {
-					provider = candidate
-					break
-				}
-			}
-		}
-	}
-	if provider.ID == "" && canUseGlobalStorage(ctx, storage) {
-		provider, err = selectStorageProvider(storage)
-		if err != nil {
-			if explicit {
-				return errors.New("当前账号没有可用的云存储提供方")
-			}
-			return nil
-		}
-	}
-	if provider.ID == "" {
-		if explicit {
-			return errors.New("当前账号没有可用的云存储提供方")
-		}
-		return nil
-	}
-	data, err := os.ReadFile(generatedMediaPath(object))
-	if err != nil {
-		return err
-	}
-	key := strings.Trim(strings.Trim(provider.PathPrefix, "/")+"/"+object.CreatedBy+"/"+time.Now().Format("2006/01/02")+"/"+object.ObjectKey, "/")
-	if err := putStorageObject(provider, key, object.MimeType, data); err != nil {
-		_ = deleteStorageObjectData(provider, key) // Upload may have committed before a timeout.
-		return storageUploadError(provider, err)
-	}
-	remote := object
-	remote.ProviderID, remote.Bucket, remote.ObjectKey, remote.PublicURL = provider.ID, provider.Bucket, path.Clean(key), objectURL(provider, key)
-	err = verifyGeneratedCloudObject(remote, provider)
-	if err != nil {
-		_ = deleteStorageObjectData(provider, key)
-		return err
-	}
-	remote.CloudSyncedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := repository.SaveStorageObject(remote); err != nil {
-		_ = deleteStorageObjectData(provider, key)
-		return err
-	}
-	return nil
-}
-
+// Verification reads the indexed provider directly, without local/public fallbacks.
 func verifyGeneratedCloudObject(object model.StorageObject, provider model.StorageProvider) error {
-	if object.Bytes <= 0 || object.SHA256 == "" || provider.ID != object.ProviderID || !provider.Enabled || !storageProviderConfigured(provider) {
-		return errors.New("云端媒体或提供方信息不完整")
-	}
-	stream, err := readStorageObjectStreamFromProviders(object, []model.StorageProvider{provider}, "")
-	if err != nil {
-		return err
-	}
-	defer stream.Body.Close()
-	if stream.StatusCode < 200 || stream.StatusCode >= 300 {
-		return errors.New("云端媒体响应状态异常")
-	}
-	hash := sha256.New()
-	count, err := io.Copy(hash, io.LimitReader(stream.Body, object.Bytes+1))
-	if err != nil {
-		return err
-	}
-	if count != object.Bytes || hex.EncodeToString(hash.Sum(nil)) != object.SHA256 {
-		return errors.New("云端媒体内容或 SHA-256 不匹配")
-	}
-	return nil
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	return verifyExactCloudMedia(ctx, object, provider)
 }
 
 func generatedCloudProvider(object model.StorageObject) (model.StorageProvider, error) {
 	if object.ProviderID == generatedMediaProviderID || object.CloudSyncedAt == "" {
 		return model.StorageProvider{}, errors.New("对象尚未上云")
 	}
-	settings, err := repository.GetSettings()
-	if err != nil {
-		return model.StorageProvider{}, err
-	}
-	providers := normalizePrivateStorageSetting(settings.Private.Storage).Providers
-	if owner, found, loadErr := repository.GetUserConfig(object.CreatedBy); loadErr != nil {
-		return model.StorageProvider{}, loadErr
-	} else if found {
-		providers = append(userStorageProvidersForOwner(owner.StorageProvider, object.CreatedBy), providers...)
-	}
-	for _, provider := range providers {
-		if provider.ID == object.ProviderID && provider.Enabled && storageProviderConfigured(provider) {
-			return provider, nil
-		}
-	}
-	return model.StorageProvider{}, errors.New("原云存储提供方不可用，保留本地副本")
+	return mediaProviderForObject(object)
 }
 
 // RemoveVerifiedGeneratedCopy removes only a redundant local copy after a
@@ -349,20 +246,21 @@ func RemoveVerifiedGeneratedCopy(objectID string, minAge time.Duration) error {
 		return errors.New("本地副本 SHA-256 不匹配")
 	}
 	latest, err := repository.GetStorageObject(object.ID)
-	if err != nil || latest.ProviderID != object.ProviderID || latest.CloudSyncedAt != object.CloudSyncedAt || latest.LocalCopyRemovedAt != "" {
+	if err != nil || !generatedCopyReady(latest, time.Now(), minAge) || latest.ProviderID != object.ProviderID || latest.Bucket != object.Bucket || latest.ObjectKey != object.ObjectKey || latest.SHA256 != object.SHA256 || latest.Bytes != object.Bytes || latest.MimeType != object.MimeType || latest.CloudSyncedAt != object.CloudSyncedAt {
 		return errors.New("对象索引发生变化，未清理本地副本")
 	}
 	if err := os.Remove(filePath); err != nil {
 		return err
 	}
-	latest.LocalCopyRemovedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	_, err = repository.SaveStorageObject(latest)
-	return err
+	return repository.UpdateStorageObjectSnapshot(latest, map[string]any{"local_copy_removed_at": time.Now().UTC().Format(time.RFC3339Nano)})
 }
 
 func generatedCopyReady(object model.StorageObject, current time.Time, minAge time.Duration) bool {
 	syncedAt, err := time.Parse(time.RFC3339Nano, object.CloudSyncedAt)
-	return err == nil && object.ProviderID != generatedMediaProviderID && object.LocalCopyRemovedAt == "" &&
+	return err == nil && object.DeletedAt == "" && object.CloudSyncLeaseToken == "" &&
+		(object.CloudSyncStatus == "" || object.CloudSyncStatus == "verified") &&
+		(object.CloudCheckStatus == "" || object.CloudCheckStatus == "ok") &&
+		object.ProviderID != generatedMediaProviderID && object.LocalCopyRemovedAt == "" &&
 		minAge >= 7*24*time.Hour && !current.Before(syncedAt.Add(minAge))
 }
 
