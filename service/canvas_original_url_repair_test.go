@@ -2,6 +2,7 @@ package service
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -102,5 +103,82 @@ func TestRewriteCanvasOriginalURLsDoesNotDumpBase64InReports(t *testing.T) {
 	})
 	if err != nil || unchanged != project.ProjectData || len(reports) != 1 || reports[0].BeforeBytes != len(original) || len(reports[0].Before) > 80 {
 		t.Fatalf("unsafe report: %+v, %v", reports, err)
+	}
+}
+
+func TestRewriteCanvasOriginalURLsCrossAccountRequiresEquivalentContent(t *testing.T) {
+	content := "stored-media"
+	sum := sha256.Sum256([]byte(content))
+	object := model.StorageObject{ID: "object", CreatedBy: "other-owner", Bytes: int64(len(content)), SHA256: hex.EncodeToString(sum[:])}
+	dataURL := func(data string) string {
+		return "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte(data))
+	}
+	for _, sample := range []struct {
+		name     string
+		source   string
+		owner    string
+		deleted  bool
+		verified bool
+	}{
+		{name: "equivalent cross-account content", source: dataURL(content), owner: "other-owner", verified: true},
+		{name: "same bytes but different digest", source: dataURL("stored-Media"), owner: "other-owner"},
+		{name: "different byte count", source: dataURL("short"), owner: "other-owner"},
+		{name: "invalid base64", source: "data:image/png;base64,%%%", owner: "other-owner"},
+		{name: "invalid trailing base64", source: dataURL(content) + "!", owner: "other-owner"},
+		{name: "missing base64 declaration", source: "data:image/png,stored-media", owner: "other-owner"},
+		{name: "cross-account blob cannot prove equality", source: "blob:old", owner: "other-owner"},
+		{name: "deleted equivalent content", source: dataURL(content), owner: "other-owner", deleted: true},
+		{name: "same-owner blob keeps existing behavior", source: "blob:old", owner: "owner", verified: true},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			metadata := map[string]any{"content": "/api/files/object/content", "storageKey": "server:object", "originalUrl": sample.source, "status": "success"}
+			before, _ := json.Marshal(map[string]any{"nodes": []any{map[string]any{"id": "image", "metadata": metadata}}})
+			project := model.CanvasProject{ID: "canvas", UserID: "owner", ProjectData: string(before)}
+			data, reports, err := rewriteCanvasOriginalURLs(project, func(string) (model.StorageObject, error) {
+				target := object
+				target.CreatedBy = sample.owner
+				if sample.deleted {
+					target.DeletedAt = "yesterday"
+				}
+				return target, nil
+			})
+			if err != nil || len(reports) != 1 {
+				t.Fatalf("reports=%+v err=%v", reports, err)
+			}
+			report := reports[0]
+			if !sample.verified {
+				if report.Status != "failed" || report.Reason == "" || data != project.ProjectData || report.After != "" {
+					t.Fatalf("unsafe source was changed: %+v", report)
+				}
+				return
+			}
+			if report.Status != "verified" || report.Bytes != object.Bytes || report.SHA256 != object.SHA256 || report.After != "/api/files/object/content" {
+				t.Fatalf("equivalent source was rejected: %+v", report)
+			}
+			metadata["originalUrl"] = report.After
+			wanted, _ := json.Marshal(map[string]any{"nodes": []any{map[string]any{"id": "image", "metadata": metadata}}})
+			if data != string(wanted) {
+				t.Fatalf("fields other than originalUrl changed: %s", data)
+			}
+		})
+	}
+}
+
+func TestRewriteCanvasOriginalURLsCrossAccountChecksEachNodeDespiteObjectCache(t *testing.T) {
+	content := "stored-media"
+	sum := sha256.Sum256([]byte(content))
+	object := model.StorageObject{ID: "object", CreatedBy: "other-owner", Bytes: int64(len(content)), SHA256: hex.EncodeToString(sum[:])}
+	nodes := []any{}
+	for _, value := range []string{content, "stored-Media"} {
+		nodes = append(nodes, map[string]any{"id": value, "metadata": map[string]any{"storageKey": "server:object", "originalUrl": "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte(value))}})
+	}
+	before, _ := json.Marshal(map[string]any{"nodes": nodes})
+	reads := 0
+	_, reports, err := rewriteCanvasOriginalURLs(model.CanvasProject{UserID: "owner", ProjectData: string(before)}, func(string) (model.StorageObject, error) {
+		reads++
+		return object, nil
+	})
+	if err != nil || len(reports) != 2 || reads != 1 || reports[0].Status != "verified" || reports[1].Status != "failed" {
+		t.Fatalf("each inline source must be verified independently: %+v, reads=%d err=%v", reports, reads, err)
 	}
 }

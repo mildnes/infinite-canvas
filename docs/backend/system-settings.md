@@ -257,7 +257,7 @@ docker compose run --rm --no-deps app /app/canvas-media-repair -apply -writes-st
 docker compose exec app /app/canvas-media-repair -mode original-url -limit 100
 ```
 
-SQLite dry-run 使用只读连接，不创建表或自动迁移。每条报告包含 `canvasId`、`nodeId`、`before`（最多 64 字节前缀）、`beforeBytes`、`after`、`objectId`、`bytes`、`sha256`、状态和失败原因，不输出整段 Base64。替换前确认对象属于画布账号、未删除，并通过现有存储读取链路校验完整字节数与 SHA-256；同一画布的重复对象只读取一次。没有持久化键或对象不可读时保留原值，单条失败不影响其他可验证节点。
+SQLite dry-run 使用只读连接，不创建表或自动迁移。每条报告包含 `canvasId`、`nodeId`、`before`（最多 64 字节前缀）、`beforeBytes`、`after`、`objectId`、`bytes`、`sha256`、状态和失败原因，不输出整段 Base64。替换前确认对象 ID 匹配且未删除，并通过现有存储读取链路校验完整字节数与 SHA-256。同账号对象保持原规则；跨账号对象还必须将节点 `originalUrl` 的 Base64 解码，与对象记录的字节数及 SHA-256 完全匹配后才允许替换，无需额外开关。跨账号 Blob、无效 Base64 或内容不等价时保留原值并报告失败。同一画布的重复对象只读取一次，但每个节点的 Base64 均独立校验；没有持久化键或对象不可读时保留原值，单条失败不影响其他可验证节点。
 
 确认 dry-run 报告、停止应用写入并完成数据库独立备份后执行：
 

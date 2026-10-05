@@ -13,7 +13,8 @@ description: 当前版本已实现但仍需人工验证的变更项
 ## 本轮恢复待复验
 
 - [新增待验收] Base64/Blob 渠道图片生成后，保存到本地及账号的节点 `originalUrl` 应替换为已有 `server:` 对象的 `/api/files/<id>/content`；无服务端副本时不保存内联 `originalUrl`，本地存储键和原有恢复机制保留。验证仅 `originalUrl` 变化也能写回、HTTP/API/server 原链保持、重复保存幂等且恢复不重复上传；画布加载、图生图重试及局部编辑正常。
-- [新增待验收] 先部署前端清洗，再运行 `/app/canvas-media-repair -mode original-url -limit 100` dry-run，逐条核对 `canvasId`、`nodeId`、`before` 前缀、`beforeBytes`、`after`、对象 ID、字节和 SHA-256；确认备份且停写后加 `-apply -writes-stopped`。只改已验证的节点 `originalUrl` 和项目更新时间，不改 `content`、存储对象或媒体；无键、跨账号、丢失或哈希不符的对象保留原值并报告失败。复跑应无候选，原有默认媒体修复模式正常。
+- [新增待验收] 先部署前端清洗，再运行 `/app/canvas-media-repair -mode original-url -limit 100` dry-run，逐条核对 `canvasId`、`nodeId`、`before` 前缀、`beforeBytes`、`after`、对象 ID、字节和 SHA-256；确认备份且停写后加 `-apply -writes-stopped`。只改已验证的节点 `originalUrl` 和项目更新时间，不改 `content`、存储对象或媒体；无键、丢失、已删除或哈希不符的对象保留原值并报告失败。同账号保持原规则；跨账号须逐节点解码 Base64 并验证字节数及 SHA-256 等价，Blob 或无效/不等价 Base64 拒绝。复跑应无候选，原有默认媒体修复模式正常。
+- [部署反馈，补充待复验] 部署端报告 `55c0bab` 已上线，45 个候选中 29 项 verified、16 项因双账号历史数据的对象归属被拦；16 项 Base64 与对象字节数及 SHA-256 等价已由部署端核对，apply 尚未执行。本轮改用内容等价校验后需重新 dry-run，目标 45/45 verified，报告仍含 bytes/sha256；用户确认后再停写、备份、apply 和重扫至 0。Go 新增跨账号等价通过、同长度内容不同/字节数不同/非法 Base64/Blob/已删除拒绝、同账号兼容及缓存不跳过逐节点校验的回归用例，当前开发环境缺少 Go 编译器，尚未执行。
 - [部署数据待核验] 部署端报告的 45 个内联 `originalUrl` / 210.1 MiB 应在迁移后降至 0；核对 `project_data` 全库体积及最大画布体积，并逐条读取迁移后的媒体。217 MiB→小于 5 MiB、87 MiB→小于 1 MiB 是当前数据的验收目标，尚非开发机实测结果；不执行 `VACUUM` 或媒体/备份清理。
 - [开发环境验证] 本轮 `originalUrl` 清洗、恢复比较及已有生成媒体账号隔离共 7 项前端回归通过，`git diff --check` 通过。已补充 Go 的 SHA-256/字节校验、迁移幂等与失败隔离、只读连接和并发快照保护回归；当前环境无可用 Go 编译器，Go 测试、构建和生产数据迁移均未执行，部署端仍需验证。
 - [新增待验收] 画布图片、视频和音频节点点击工具栏“重试”时，每次都生成新的客户端任务 ID；失败图片任务使用旧 ID 再提交时也会创建新的任务行，进行中或成功任务仍保持幂等短路。连续重试同一失败节点应分别进入新的轮询，且不会改变提示词面板的生成路径。

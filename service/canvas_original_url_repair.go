@@ -2,6 +2,7 @@ package service
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -22,8 +23,8 @@ func RepairCanvasProjectOriginalURLs(project model.CanvasProject, apply bool) ([
 		if err != nil {
 			return object, err
 		}
-		if object.CreatedBy != project.UserID || object.DeletedAt != "" {
-			return object, fmt.Errorf("存储对象不属于当前账号或已删除")
+		if object.DeletedAt != "" {
+			return object, fmt.Errorf("存储对象已删除")
 		}
 		result, err := DownloadStorageObject(id, "")
 		if err != nil {
@@ -73,6 +74,21 @@ func verifyCanvasOriginalURLContent(object model.StorageObject, content io.Reade
 	}
 	if count != object.Bytes || !strings.EqualFold(hex.EncodeToString(hash.Sum(nil)), object.SHA256) {
 		return fmt.Errorf("存储对象字节数或 SHA-256 校验失败")
+	}
+	return nil
+}
+
+func verifyCanvasOriginalURLOwner(userID string, object model.StorageObject, source string) error {
+	if object.CreatedBy == userID {
+		return nil
+	}
+	comma := strings.IndexByte(source, ',')
+	if !strings.HasPrefix(source, "data:") || comma < 0 || !strings.HasSuffix(strings.ToLower(source[:comma]), ";base64") {
+		return fmt.Errorf("跨账号引用必须提供可校验的 Base64 originalUrl")
+	}
+	decoded := base64.NewDecoder(base64.StdEncoding, strings.NewReader(source[comma+1:]))
+	if err := verifyCanvasOriginalURLContent(object, decoded); err != nil {
+		return fmt.Errorf("跨账号 originalUrl 内容不等价或 Base64 无效：%w", err)
 	}
 	return nil
 }
@@ -127,8 +143,10 @@ func rewriteCanvasOriginalURLs(project model.CanvasProject, resolve func(string)
 			report.Reason = "无 server: 持久化副本，保留 originalUrl"
 		} else if object, err := resolveOnce(objectID); err != nil {
 			report.ObjectID, report.Reason = objectID, err.Error()
-		} else if object.ID != objectID || object.CreatedBy != project.UserID || object.DeletedAt != "" {
-			report.ObjectID, report.Reason = objectID, "存储对象不属于当前账号或已删除"
+		} else if object.ID != objectID || object.DeletedAt != "" {
+			report.ObjectID, report.Reason = objectID, "存储对象 ID 不匹配或已删除"
+		} else if err := verifyCanvasOriginalURLOwner(project.UserID, object, source); err != nil {
+			report.ObjectID, report.Reason = objectID, err.Error()
 		} else {
 			report.ObjectID, report.Bytes, report.SHA256 = object.ID, object.Bytes, object.SHA256
 			report.After = "/api/files/" + url.PathEscape(object.ID) + "/content"
