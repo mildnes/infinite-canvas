@@ -41,7 +41,7 @@ COPY router ./router
 COPY service ./service
 COPY shared ./shared
 COPY main.go ./
-RUN go build -o /server . && go build -o /media-cloud ./cmd/media-cloud && go build -o /media-gc ./cmd/media-gc && go build -o /image-log-summaries ./cmd/image-log-summaries && go build -o /canvas-media-repair ./cmd/canvas-media-repair
+RUN go build -o /server . && go build -o /media-cloud ./cmd/media-cloud && go build -o /media-verify ./cmd/media-verify && go build -o /media-gc ./cmd/media-gc && go build -o /image-log-summaries ./cmd/image-log-summaries && go build -o /canvas-media-repair ./cmd/canvas-media-repair
 
 # 运行镜像：Next.js 对外监听 3000，Go 只在容器内部监听 8080。
 FROM node:22-bookworm-slim
@@ -51,6 +51,7 @@ COPY VERSION /app/VERSION
 COPY CHANGELOG.md /app/CHANGELOG.md
 COPY --from=api-build /server /app/server
 COPY --from=api-build /media-cloud /app/media-cloud
+COPY --from=api-build /media-verify /app/media-verify
 COPY --from=api-build /media-gc /app/media-gc
 COPY --from=api-build /image-log-summaries /app/image-log-summaries
 COPY --from=api-build /canvas-media-repair /app/canvas-media-repair

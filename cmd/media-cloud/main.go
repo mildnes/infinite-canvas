@@ -21,6 +21,7 @@ func main() {
 	after := flag.String("after", "", "continue after this object ID")
 	minAge := flag.Int("min-age-days", 30, "minimum days after successful cloud synchronization before cleanup (at least 7)")
 	backupConfirmed := flag.Bool("backup-confirmed", false, "confirm media directory has an independently verified backup before cleanup")
+	writesStopped := flag.Bool("writes-stopped", false, "confirm application writes stopped before sync apply")
 	flag.Parse()
 	if (*mode != "sync" && *mode != "cleanup") || *limit < 1 || *limit > 500 || *minAge < 7 {
 		fmt.Fprintln(os.Stderr, "invalid mode, limit or retention period")
@@ -30,14 +31,22 @@ func main() {
 		fmt.Fprintln(os.Stderr, "cleanup requires -backup-confirmed; no file was removed")
 		os.Exit(2)
 	}
+	if *mode == "sync" && *apply && !*writesStopped {
+		fmt.Fprintln(os.Stderr, "sync apply requires -writes-stopped; no media was changed")
+		os.Exit(2)
+	}
 	if err := config.Load(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := repository.OpenExistingDatabase(!*apply); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 	var objects []model.StorageObject
 	var err error
 	if *mode == "sync" {
-		objects, err = repository.ListLocalGeneratedObjects(*after, *limit)
+		objects, err = repository.ListStorageObjectsForVerification(repository.StorageObjectFilter{After: *after, Limit: *limit})
 	} else {
 		cutoff := time.Now().UTC().Add(-time.Duration(*minAge) * 24 * time.Hour).Format(time.RFC3339Nano)
 		objects, err = repository.ListGeneratedCloudCopies(*after, cutoff, *limit)
@@ -59,22 +68,25 @@ func main() {
 		summary.Inspected++
 		summary.Bytes += object.Bytes
 		summary.NextCursor = object.ID
+		if *mode == "sync" {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+			report := service.VerifyStorageMedia(ctx, object, service.MediaVerifyOptions{Apply: *apply, WritesStopped: *writesStopped, SyncLocal: true})
+			cancel()
+			if err := json.NewEncoder(os.Stdout).Encode(report); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			if report.Status == "failed" {
+				summary.Failed++
+			} else {
+				summary.Succeeded++
+			}
+			continue
+		}
 		if !*apply {
 			continue
 		}
-		if *mode == "sync" {
-			var user model.User
-			var found bool
-			user, found, err = repository.GetUserByID(object.CreatedBy)
-			if err == nil && !found {
-				err = fmt.Errorf("对象所属账号不存在")
-			}
-			if err == nil {
-				err = service.PromoteGeneratedMedia(service.WithUser(context.Background(), model.PublicUser(user)), object.ID)
-			}
-		} else {
-			err = service.RemoveVerifiedGeneratedCopy(object.ID, time.Duration(*minAge)*24*time.Hour)
-		}
+		err = service.RemoveVerifiedGeneratedCopy(object.ID, time.Duration(*minAge)*24*time.Hour)
 		if err != nil {
 			summary.Failed++
 			fmt.Fprintf(os.Stderr, "object %s: %v\n", object.ID, err)
