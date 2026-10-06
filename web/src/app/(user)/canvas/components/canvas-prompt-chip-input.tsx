@@ -10,6 +10,7 @@ import { useThemeStore } from "@/stores/use-theme-store";
 import type { CanvasAgentSkillReference } from "../types";
 import type { CanvasResourceReference } from "../utils/canvas-resource-references";
 import { parsePromptTokens } from "./canvas-prompt-chip-tokens";
+import { canvasPromptFragment, copyCanvasPromptSelection, insertCanvasPromptFragment, serializeCanvasPromptNodes } from "../utils/canvas-prompt-clipboard";
 
 type CanvasPromptChipInputProps = {
     value: string;
@@ -177,18 +178,9 @@ export function CanvasPromptChipInput({ value, references = [], pendingReference
         onSelectSkill?.(skill);
     };
 
-    // 浏览器默认会把图片 chip 复制成其 alt 文本（引用标题），导致“图片1/图片2”等标签被标题串替换。
-    // 改为按编辑器自身的序列化规则输出（chip → data-ref-label），保证复制内容与显示一致、可原样回贴还原。
-    const handleCopy = (event: ClipboardEvent<HTMLDivElement>) => {
-        const editor = editorRef.current;
-        const selection = window.getSelection();
-        if (!editor || !selection?.rangeCount || selection.isCollapsed) return;
-        const range = selection.getRangeAt(0);
-        if (!editor.contains(range.commonAncestorContainer)) return;
-        const text = serializePromptNodes(range.cloneContents().childNodes).replace(/\uFEFF/g, "");
-        if (!text) return;
-        event.clipboardData.setData("text/plain", text);
-        event.preventDefault();
+    const handleCopy = (event: ClipboardEvent<HTMLDivElement>) => copyCanvasPromptSelection(editorRef.current, event, "label");
+    const handleCut = (event: ClipboardEvent<HTMLDivElement>) => {
+        if (copyCanvasPromptSelection(editorRef.current, event, "label", true)) syncFromEditor();
     };
 
     const showPlaceholder = !value.trim() && !pendingReferences?.length;
@@ -232,22 +224,14 @@ export function CanvasPromptChipInput({ value, references = [], pendingReference
 
                     event.preventDefault();
 
-                    const selection = window.getSelection();
-                    const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
-                    if (!range) return;
-
-                    range.deleteContents();
-
-                    const textNode = document.createTextNode(text);
-                    range.insertNode(textNode);
-                    range.setStartAfter(textNode);
-                    range.collapse(true);
-                    selection?.removeAllRanges();
-                    selection?.addRange(range);
-
-                    syncFromEditor();
+                    const fragment = canvasPromptFragment(document, text, "label", (label) => {
+                        const reference = referenceByLabel.get(label);
+                        return reference ? createReferenceChip(reference, theme, setImagePreview) : undefined;
+                    }, activeLabels);
+                    if (insertCanvasPromptFragment(editorRef.current, fragment)) syncFromEditor();
                 }}
                 onCopy={handleCopy}
+                onCut={handleCut}
                 onCompositionStart={() => {
                     composingRef.current = true;
                 }}
@@ -550,44 +534,7 @@ function referenceIdsFromEditor(editor: HTMLElement) {
 }
 
 function serializePromptEditor(editor: HTMLElement) {
-    return serializePromptNodes(editor.childNodes).replace(/\uFEFF/g, "");
-}
-
-function serializePromptNodes(nodes: NodeListOf<ChildNode>, state = { text: "", emptyLine: true, pendingBr: false }, group = { hasContent: false, afterBlock: false }) {
-    // BR 延后到下一段行内内容再输出，块边界负责换行并丢弃行末占位 BR。
-    nodes.forEach((node) => {
-        const element = node instanceof HTMLElement ? node : null;
-        const text = node.nodeType === Node.TEXT_NODE ? node.textContent || "" : element?.dataset.refLabel;
-        const block = element?.tagName === "DIV" || element?.tagName === "P";
-        const br = element?.tagName === "BR";
-        if (!text && !block && !br) {
-            if (element) serializePromptNodes(element.childNodes, state, group);
-            return;
-        }
-        if (block || group.afterBlock) {
-            if (group.hasContent && (state.emptyLine || !state.text.endsWith("\n"))) state.text += "\n";
-            state.pendingBr = false;
-            state.emptyLine = true;
-            group.afterBlock = false;
-        }
-        if (block) {
-            serializePromptNodes(element!.childNodes, state);
-            state.pendingBr = false;
-            group.afterBlock = true;
-        } else {
-            if (state.pendingBr) {
-                state.text += "\n";
-                state.emptyLine = true;
-            }
-            state.pendingBr = br;
-            if (text) {
-                state.text += text;
-                state.emptyLine = false;
-            }
-        }
-        group.hasContent = true;
-    });
-    return state.text;
+    return serializeCanvasPromptNodes(editor.childNodes, "label");
 }
 
 function removeActiveMention() {

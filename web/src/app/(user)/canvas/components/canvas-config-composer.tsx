@@ -8,6 +8,7 @@ import { FileText, Image as ImageIcon, Music2, Video, X } from "lucide-react";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { NodeGenerationInput } from "./canvas-node-generation";
+import { canvasPromptFragment, copyCanvasPromptSelection, insertCanvasPromptFragment, serializeCanvasPromptNodes } from "../utils/canvas-prompt-clipboard";
 
 type CanvasConfigComposerProps = {
     value: string;
@@ -54,6 +55,7 @@ export function CanvasConfigComposer({ value, inputs, onChange, onClose }: Canva
             }
             const input = referenceById.get(token.nodeId);
             if (input) editor.append(createReferenceChip(input, inputs, theme, setImagePreview));
+            else editor.append(document.createTextNode(`@[node:${token.nodeId}]`));
         });
     }, [inputs, referenceById, theme, tokens]);
 
@@ -144,21 +146,19 @@ export function CanvasConfigComposer({ value, inputs, onChange, onClose }: Canva
                     onInput={() => {
                         if (!composingRef.current) syncFromEditor();
                     }}
+                    onCopy={(event) => { copyCanvasPromptSelection(editorRef.current, event, "node"); }}
+                    onCut={(event) => {
+                        if (copyCanvasPromptSelection(editorRef.current, event, "node", true)) syncFromEditor();
+                    }}
                     onPaste={(event) => {
                         const text = event.clipboardData.getData("text/plain");
                         if (!text) return;
                         event.preventDefault();
-                        const selection = window.getSelection();
-                        const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
-                        if (!range) return;
-                        range.deleteContents();
-                        const textNode = document.createTextNode(text);
-                        range.insertNode(textNode);
-                        range.setStartAfter(textNode);
-                        range.collapse(true);
-                        selection?.removeAllRanges();
-                        selection?.addRange(range);
-                        syncFromEditor();
+                        const fragment = canvasPromptFragment(document, text, "node", (nodeId) => {
+                            const input = referenceById.get(nodeId);
+                            return input ? createReferenceChip(input, inputs, theme, setImagePreview) : undefined;
+                        });
+                        if (insertCanvasPromptFragment(editorRef.current, fragment)) syncFromEditor();
                     }}
                     onCompositionStart={() => {
                         composingRef.current = true;
@@ -256,12 +256,13 @@ function createReferenceChip(input: NodeGenerationInput, inputs: NodeGenerationI
     const wrapper = document.createElement("span");
     wrapper.contentEditable = "false";
     wrapper.dataset.referenceNodeId = input.nodeId;
+    wrapper.title = input.title;
     wrapper.className = "mx-px inline-flex h-7 max-w-40 items-center justify-center overflow-hidden rounded-md border px-1 text-xs leading-none align-middle";
     Object.assign(wrapper.style, chipStyle(theme));
     if (input.type === "image" && input.image) {
         const image = document.createElement("img");
         image.src = input.image.dataUrl;
-        image.alt = input.title;
+        image.alt = `@[node:${input.nodeId}]`;
         image.className = "size-6 rounded object-cover";
         wrapper.className = "mx-px inline-flex size-6 items-center justify-center overflow-hidden rounded align-middle";
         wrapper.appendChild(image);
@@ -281,33 +282,7 @@ function createReferenceChip(input: NodeGenerationInput, inputs: NodeGenerationI
 }
 
 function serializeEditor(editor: HTMLElement) {
-    return serializeNodes(editor.childNodes).replace(/\uFEFF/g, "");
-}
-
-function serializeNodes(nodes: NodeListOf<ChildNode>) {
-    let result = "";
-    nodes.forEach((node) => {
-        if (node.nodeType === Node.TEXT_NODE) {
-            result += node.textContent || "";
-            return;
-        }
-        if (!(node instanceof HTMLElement)) return;
-        if (node.tagName === "BR") {
-            result += "\n";
-            return;
-        }
-        const nodeId = node.dataset.referenceNodeId;
-        if (nodeId) {
-            result += `@[node:${nodeId}]`;
-            return;
-        }
-        const content = serializeNodes(node.childNodes);
-        const isBlock = node.tagName === "DIV" || node.tagName === "P";
-        if (isBlock && result && !result.endsWith("\n")) result += "\n";
-        result += content;
-        if (isBlock && !content) result += "\n";
-    });
-    return result;
+    return serializeCanvasPromptNodes(editor.childNodes, "node");
 }
 
 function removeActiveMention() {
