@@ -439,6 +439,18 @@ func TestAppendImageOutputLogMetadata(t *testing.T) {
 	if payload["_image_output_format"] != "jpeg" || payload["_image_output_notice"] != "fell back" {
 		t.Fatalf("metadata = %#v", payload)
 	}
+
+	opaque := appendImageOutputLogMetadata(`{"model":"gpt-image-2"}`, string(model.ImageOutputFormatPNG), "")
+	payload = nil
+	if err := json.Unmarshal([]byte(opaque), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["_image_output_format"] != "png" {
+		t.Fatalf("opaque PNG metadata = %#v", payload)
+	}
+	if _, ok := payload["_image_output_notice"]; ok {
+		t.Fatalf("opaque PNG metadata kept a notice: %#v", payload)
+	}
 }
 
 func TestNormalizeImageOutputFormatOpaquePNGPaths(t *testing.T) {

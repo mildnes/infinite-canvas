@@ -113,3 +113,24 @@ func TestDeclaredFormatsDoNotBypassGrokProtocolGuard(t *testing.T) {
 		}
 	}
 }
+
+func TestOpaquePNGResponseCarriesFormatHeader(t *testing.T) {
+	payload, _ := json.Marshal(map[string]any{"data": []any{map[string]any{"b64_json": base64.StdEncoding.EncodeToString([]byte("opaque-bytes"))}}})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(payload)
+	}))
+	defer upstream.Close()
+	request, _ := http.NewRequest(http.MethodPost, upstream.URL, nil)
+	result := httptest.NewRecorder()
+	copyAIResponse(result, request, model.ModelChannel{Protocol: "openai"}, aiLogContext{Model: "gpt-image-2", ImageOutputFormat: string(model.ImageOutputFormatPNG), SkipLog: true}, nil)
+	if result.Code != 200 {
+		t.Fatalf("status = %d body=%s", result.Code, result.Body.String())
+	}
+	if got := result.Header().Get("X-Image-Output-Format"); got != "png" {
+		t.Fatalf("format header = %q, want png", got)
+	}
+	if got := result.Header().Get("X-Image-Output-Notice"); got != "" {
+		t.Fatalf("unexpected notice header: %q", got)
+	}
+}
