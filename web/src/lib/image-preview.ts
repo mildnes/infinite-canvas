@@ -1,4 +1,5 @@
 export const IMAGE_PREVIEW_SIDE = 1024;
+export type ImagePreviewSourceSize = { width: number; height: number };
 const prepared = new WeakMap<Blob, Promise<Blob | null>>();
 let active = 0;
 const waiting: (() => void)[] = [];
@@ -8,14 +9,25 @@ export function previewDimensions(width: number, height: number) {
     return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
 }
 
-async function encodePreview(blob: Blob): Promise<Blob> {
+async function encodePreview(blob: Blob, sourceSize?: ImagePreviewSourceSize): Promise<Blob> {
     let bitmap: ImageBitmap | undefined;
     let element: HTMLImageElement | undefined;
     let url: string | undefined;
     try {
         if (typeof createImageBitmap === "function") {
-            try { bitmap = await createImageBitmap(blob); } catch { /* Safari/format fallback. */ }
+            try {
+                const resize = sourceSize ? previewDimensions(sourceSize.width, sourceSize.height) : undefined;
+                bitmap = await createImageBitmap(blob, resize ? {
+                    resizeWidth: resize.width,
+                    resizeHeight: resize.height,
+                    resizeQuality: "high",
+                } : undefined);
+            } catch {
+                // A known giant source must not fall back to a full-size HTMLImageElement decode.
+                if (sourceSize) throw new Error("图片预览解码失败");
+            }
         }
+        if (!bitmap && sourceSize) throw new Error("图片预览解码不可用");
         if (!bitmap) {
             url = URL.createObjectURL(blob);
             element = new Image();
@@ -42,15 +54,16 @@ async function encodePreview(blob: Blob): Promise<Blob> {
 }
 
 // Use bytes already held by an upload; never fetch another original to make a preview.
-export function prepareImagePreview(blob: Blob): Promise<Blob | null> {
+export function prepareImagePreview(blob: Blob, sourceSize?: ImagePreviewSourceSize): Promise<Blob | null> {
     if (!blob.type.startsWith("image/") || typeof document === "undefined") return Promise.resolve(null);
+    if (sourceSize && (!Number.isFinite(sourceSize.width) || !Number.isFinite(sourceSize.height) || sourceSize.width <= 0 || sourceSize.height <= 0)) return Promise.resolve(null);
     const existing = prepared.get(blob);
     if (existing) return existing;
     if (waiting.length >= 64) return Promise.resolve(null);
     const promise = (async () => {
         if (active >= 2) await new Promise<void>(resolve => waiting.push(resolve));
         else active++;
-        try { return await encodePreview(blob); } catch { return null; } finally {
+        try { return await encodePreview(blob, sourceSize); } catch { return null; } finally {
             const next = waiting.shift();
             if (next) next(); else active--;
         }

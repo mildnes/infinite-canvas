@@ -1,6 +1,7 @@
 "use client";
 
 import { previewSrcFor, loadOriginalImage } from "../utils/canvas-image-preview";
+import { backfillStoragePreviewFromOriginal } from "@/services/storage-preview-client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent as ReactChangeEvent, DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
@@ -4746,6 +4747,7 @@ function FullscreenPreview({ src, storageKey, alt, isVideo, isPanorama, proxyGen
     const [original, setOriginal] = useState({ src, status: "loading" as "loading" | "ready" | "failed" });
     const [retry, setRetry] = useState(0);
     const [previewFailed, setPreviewFailed] = useState<string | null>(null);
+    const previewMiss = useRef<{ src: string; storageKey?: string; token: string } | null>(null);
     const previewSrc = previewSrcFor(src, storageKey);
     const progressive = !isVideo && !isPanorama && previewSrc !== src;
     const originalStatus = original.src === src ? original.status : "loading";
@@ -4935,7 +4937,18 @@ function FullscreenPreview({ src, storageKey, alt, isVideo, isPanorama, proxyGen
                 <img
                     ref={imgRef}
                     src={progressive && originalStatus !== "ready" && previewFailed !== src ? previewSrc : src}
-                    onError={() => { if (progressive && originalStatus !== "ready") setPreviewFailed(src); }}
+                    onError={(event) => {
+                        const token = useUserStore.getState().token;
+                        if (token && /^server:[A-Za-z0-9_-]+$/.test(storageKey || "") && progressive && event.currentTarget.getAttribute("src") === previewSrc) previewMiss.current = { src, storageKey, token };
+                        if (progressive && originalStatus !== "ready") setPreviewFailed(src);
+                    }}
+                    onLoad={(event) => {
+                        const miss = previewMiss.current;
+                        const image = event.currentTarget;
+                        if (!miss || miss.src !== src || miss.storageKey !== storageKey || image.getAttribute("src") !== src) return;
+                        previewMiss.current = null;
+                        backfillStoragePreviewFromOriginal(src, storageKey, miss.token, { width: image.naturalWidth, height: image.naturalHeight });
+                    }}
                     decoding="async"
                     alt={alt}
                     draggable={false}

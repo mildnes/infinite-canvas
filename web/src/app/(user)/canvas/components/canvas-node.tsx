@@ -1,6 +1,7 @@
 "use client";
 
 import { previewSrcFor, fallbackCanvasPreview } from "../utils/canvas-image-preview";
+import { backfillStoragePreviewFromOriginal } from "@/services/storage-preview-client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -10,6 +11,7 @@ import { ChevronRight, Image as ImageIcon, Maximize2, Music2, Pause, Play, Refre
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
 import { useThemeStore } from "@/stores/use-theme-store";
+import { useUserStore } from "@/stores/use-user-store";
 import { CanvasResourceMentionTextarea } from "./canvas-resource-mention-textarea";
 import { CanvasNodeType, type CanvasNodeData, type Position } from "../types";
 import { isCanvasImageNodeType } from "../utils/canvas-panorama";
@@ -846,6 +848,7 @@ function ImageContent({
 }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const isBatchChild = Boolean(node.metadata?.batchRootId);
+    const previewMiss = useRef<{ src: string; storageKey?: string; token: string } | null>(null);
 
     return (
         <BatchFrame batchCount={isBatchRoot ? batchCount : 0} batchExpanded={batchExpanded} batchOpening={batchOpening} batchRecovering={batchRecovering} onToggleBatch={onToggleBatch}>
@@ -853,7 +856,19 @@ function ImageContent({
                 {media ?? (
                     <img
                         src={previewSrcFor(node.metadata!.content!, node.metadata?.storageKey)}
-                        onError={(event) => fallbackCanvasPreview(event.currentTarget, node.metadata!.content!)}
+                        onError={(event) => {
+                            const original = node.metadata!.content!;
+                            const token = useUserStore.getState().token;
+                            if (token && /^server:[A-Za-z0-9_-]+$/.test(node.metadata?.storageKey || "") && event.currentTarget.getAttribute("src") !== original) previewMiss.current = { src: original, storageKey: node.metadata?.storageKey, token };
+                            fallbackCanvasPreview(event.currentTarget, original);
+                        }}
+                        onLoad={(event) => {
+                            const miss = previewMiss.current;
+                            const image = event.currentTarget;
+                            if (!miss || miss.src !== node.metadata?.content || miss.storageKey !== node.metadata?.storageKey || image.getAttribute("src") !== miss.src) return;
+                            previewMiss.current = null;
+                            backfillStoragePreviewFromOriginal(miss.src, miss.storageKey, miss.token, { width: image.naturalWidth, height: image.naturalHeight });
+                        }}
                         loading="lazy"
                         decoding="async"
                         alt={node.title}
