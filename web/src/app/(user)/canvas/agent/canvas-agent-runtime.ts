@@ -347,9 +347,10 @@ function buildUserContent(text: string, references: CanvasAssistantReference[], 
     const referenceText = references.length ? "\n\n本次输入中的节点占位与真实节点一一对应，请按占位分别理解和操作：" + references.map((item) => `${item.label || item.title} → 节点 ${item.id}（${item.title}）`).join("；") : "";
     const imageReferences = references.filter((item) => item.dataUrl && (/^data:image\//.test(item.dataUrl) || /^https?:\/\//.test(item.dataUrl)));
     const imageOrderText = imageReferences.length ? "\n随消息附带的图片顺序：" + imageReferences.map((item, index) => `第 ${index + 1} 张 = ${item.label || item.title}`).join("；") : "";
+    const referenceRuleText = references.length ? "\n提示词正文只使用「图片N、视频N、音频N」编号标识参考，禁止把文件名、用户图片编号或节点 id 写进提示词；这些溯源信息只写进你的回复。" : "";
     const images = supportsCanvasAgentImageInput(modelName) ? imageReferences.map((item) => ({ type: "image_url" as const, image_url: { url: item.dataUrl as string } })) : [];
-    if (!images.length) return text + referenceText;
-    return [{ type: "text", text: text + referenceText + imageOrderText }, ...images];
+    if (!images.length) return text + referenceText + referenceRuleText;
+    return [{ type: "text", text: text + referenceText + imageOrderText + referenceRuleText }, ...images];
 }
 
 function supportsCanvasAgentImageInput(modelName: string) {

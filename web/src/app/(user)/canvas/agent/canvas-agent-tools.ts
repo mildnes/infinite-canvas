@@ -1,6 +1,7 @@
 import { nanoid } from "nanoid";
 
 import type { CanvasAgentPhase } from "../types";
+import { stripReferenceMetadata } from "../utils/prompt-reference-metadata";
 
 export const CANVAS_AGENT_ACTION_NAMES = [
     "get_canvas_summary",
@@ -250,7 +251,7 @@ export function normalizeCanvasAgentAction(name: unknown, args: unknown, id = na
         case "edit_image": {
             const sourceNodeIds = optionalStringArray(input.sourceNodeIds, "sourceNodeIds");
             normalized = {
-                prompt: requiredString(input.prompt, "prompt"),
+                prompt: stripReferenceMetadata(requiredString(input.prompt, "prompt")),
                 ...(sourceNodeIds ? { sourceNodeIds } : {}),
                 ...(input.title !== undefined ? { title: optionalString(input.title) } : {}),
                 ...(input.size !== undefined ? { size: optionalString(input.size) } : {}),
@@ -262,7 +263,7 @@ export function normalizeCanvasAgentAction(name: unknown, args: unknown, id = na
         case "generate_video": {
             const sourceNodeIds = optionalStringArray(input.sourceNodeIds, "sourceNodeIds");
             normalized = {
-                prompt: requiredString(input.prompt, "prompt"),
+                prompt: stripReferenceMetadata(requiredString(input.prompt, "prompt")),
                 ...(sourceNodeIds ? { sourceNodeIds } : {}),
                 ...(input.title !== undefined ? { title: optionalString(input.title) } : {}),
                 ...(input.size !== undefined ? { size: optionalString(input.size) } : {}),
