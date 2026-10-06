@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent } from "react";
+import type { ClipboardEvent, CSSProperties, KeyboardEvent, MouseEvent, PointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { Image } from "antd";
 import { FileText, Image as ImageIcon, Music2, Sparkles, Video } from "lucide-react";
@@ -9,6 +9,7 @@ import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { CanvasAgentSkillReference } from "../types";
 import type { CanvasResourceReference } from "../utils/canvas-resource-references";
+import { parsePromptTokens } from "./canvas-prompt-chip-tokens";
 
 type CanvasPromptChipInputProps = {
     value: string;
@@ -29,8 +30,6 @@ type MentionState = {
     query: string;
     rect: DOMRect | null;
 };
-
-type PromptToken = { type: "text"; value: string } | { type: "reference"; label: string };
 
 export function CanvasPromptChipInput({ value, references = [], pendingReferences = [], onReferenceIdsChange, skills = [], onSelectSkill, onChange, onSubmit, onPasteImage, className, style, placeholder }: CanvasPromptChipInputProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
@@ -178,6 +177,20 @@ export function CanvasPromptChipInput({ value, references = [], pendingReference
         onSelectSkill?.(skill);
     };
 
+    // 浏览器默认会把图片 chip 复制成其 alt 文本（引用标题），导致“图片1/图片2”等标签被标题串替换。
+    // 改为按编辑器自身的序列化规则输出（chip → data-ref-label），保证复制内容与显示一致、可原样回贴还原。
+    const handleCopy = (event: ClipboardEvent<HTMLDivElement>) => {
+        const editor = editorRef.current;
+        const selection = window.getSelection();
+        if (!editor || !selection?.rangeCount || selection.isCollapsed) return;
+        const range = selection.getRangeAt(0);
+        if (!editor.contains(range.commonAncestorContainer)) return;
+        const text = serializePromptNodes(range.cloneContents().childNodes).replace(/\uFEFF/g, "");
+        if (!text) return;
+        event.clipboardData.setData("text/plain", text);
+        event.preventDefault();
+    };
+
     const showPlaceholder = !value.trim() && !pendingReferences?.length;
 
     return (
@@ -234,6 +247,7 @@ export function CanvasPromptChipInput({ value, references = [], pendingReference
 
                     syncFromEditor();
                 }}
+                onCopy={handleCopy}
                 onCompositionStart={() => {
                     composingRef.current = true;
                 }}
@@ -462,7 +476,7 @@ function createReferenceChip(reference: CanvasResourceReference, theme: (typeof 
     if (reference.kind === "image" && reference.previewUrl) {
         const image = document.createElement("img");
         image.src = reference.previewUrl;
-        image.alt = reference.title;
+        image.alt = reference.label;
         image.className = "size-6 rounded object-cover";
         wrapper.className = "mx-px inline-flex size-6 items-center justify-center overflow-hidden rounded align-middle";
         wrapper.appendChild(image);
@@ -734,38 +748,6 @@ function placeCaretAtEnd(element: HTMLElement) {
     const selection = window.getSelection();
     selection?.removeAllRanges();
     selection?.addRange(range);
-}
-
-function parsePromptTokens(value: string, labels: string[]): PromptToken[] {
-    if (!labels.length) return value ? [{ type: "text", value }] : [];
-    const pattern = new RegExp(`@?(${labels.map(escapeRegExp).join("|")})`, "g");
-    const tokens: PromptToken[] = [];
-    let lastIndex = 0;
-    for (const match of value.matchAll(pattern)) {
-        if (match.index === undefined) continue;
-        if (match.index > lastIndex) {
-            tokens.push({
-                type: "text",
-                value: value.slice(lastIndex, match.index),
-            });
-        }
-        tokens.push({
-            type: "reference",
-            label: match[0],
-        });
-        lastIndex = match.index + match[0].length;
-    }
-    if (lastIndex < value.length) {
-        tokens.push({
-            type: "text",
-            value: value.slice(lastIndex),
-        });
-    }
-    return tokens;
-}
-
-function escapeRegExp(value: string) {
-    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function clamp(value: number, min: number, max: number) {
