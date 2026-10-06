@@ -1,5 +1,7 @@
 "use client";
 
+import { previewSrcFor, fallbackCanvasPreview } from "../utils/canvas-image-preview";
+
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import dynamic from "next/dynamic";
@@ -850,7 +852,10 @@ function ImageContent({
             <div className="h-full w-full overflow-hidden rounded-3xl">
                 {media ?? (
                     <img
-                        src={node.metadata!.content!}
+                        src={previewSrcFor(node.metadata!.content!, node.metadata?.storageKey)}
+                        onError={(event) => fallbackCanvasPreview(event.currentTarget, node.metadata!.content!)}
+                        loading="lazy"
+                        decoding="async"
                         alt={node.title}
                         draggable={false}
                         onDragStart={(event) => event.preventDefault()}

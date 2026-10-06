@@ -1,5 +1,7 @@
 "use client";
 
+import { previewSrcFor, fallbackCanvasPreview } from "../utils/canvas-image-preview";
+
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { FileText, Image as ImageIcon, Music2, Plus, Settings2, Trash2, Video as VideoIcon, X } from "lucide-react";
@@ -12,8 +14,8 @@ import { useThemeStore } from "@/stores/use-theme-store";
 import { channelProtocolForConfig, type AiConfig } from "@/stores/use-config-store";
 import type { CanvasNodeMetadata } from "../types";
 
-export type CanvasVideoFrameOption = { nodeId: string; label: string; previewUrl?: string };
-export type CanvasVideoResourceOption = { nodeId: string; kind: "text" | "image" | "video" | "audio"; label: string; previewUrl?: string; text?: string };
+export type CanvasVideoFrameOption = { nodeId: string; label: string; previewUrl?: string; storageKey?: string };
+export type CanvasVideoResourceOption = { nodeId: string; kind: "text" | "image" | "video" | "audio"; label: string; previewUrl?: string; storageKey?: string; text?: string };
 
 type CanvasVideoSettingsPopoverProps = {
     config: AiConfig;
@@ -247,13 +249,13 @@ function PickerMenu<T extends { nodeId: string }>({ items, value, theme, renderP
 }
 
 function FramePreview({ option }: { option?: CanvasVideoFrameOption }) {
-    if (option?.previewUrl) return <img src={option.previewUrl} alt="" className="size-9 shrink-0 rounded-md object-cover" />;
+    if (option?.previewUrl) return <img src={previewSrcFor(option.previewUrl, option.storageKey)} onError={(event) => fallbackCanvasPreview(event.currentTarget, option.previewUrl!)} loading="lazy" decoding="async" alt="" className="size-9 shrink-0 rounded-md object-cover" />;
     return <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-white/10"><ImageIcon className="size-4 opacity-55" /></span>;
 }
 
 function ResourcePreview({ option, theme, small = false }: { option?: CanvasVideoResourceOption; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; small?: boolean }) {
     const size = small ? "size-5" : "size-9";
-    if (option?.kind === "image" && option.previewUrl) return <img src={option.previewUrl} alt="" className={[size, "shrink-0 rounded-md object-cover"].join(" ")} />;
+    if (option?.kind === "image" && option.previewUrl) return <img src={previewSrcFor(option.previewUrl, option.storageKey)} onError={(event) => fallbackCanvasPreview(event.currentTarget, option.previewUrl!)} loading="lazy" decoding="async" alt="" className={[size, "shrink-0 rounded-md object-cover"].join(" ")} />;
     if (option?.kind === "video" && option.previewUrl) return <video src={option.previewUrl} className={[size, "shrink-0 rounded-md bg-black object-cover"].join(" ")} muted preload="metadata" />;
     const Icon = option?.kind === "audio" ? Music2 : option?.kind === "video" ? VideoIcon : option?.kind === "text" ? FileText : ImageIcon;
     return <span className={["flex shrink-0 items-center justify-center rounded-md", size].join(" ")} style={{ background: theme.node.fill }}><Icon className="size-4 opacity-55" /></span>;

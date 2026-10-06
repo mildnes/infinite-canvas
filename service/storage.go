@@ -254,6 +254,9 @@ func UploadStorageObjectWithProvider(ctx context.Context, filename string, conte
 	if _, err := repository.SaveStorageObject(object); err != nil {
 		return UploadedStorageObject{}, safeMessageError{message: "保存上传记录失败，请检查数据库"}
 	}
+	if strings.HasPrefix(contentType, "image/") {
+		QueueStoragePreview(objectID, 10*time.Second)
+	}
 	url := "/api/files/" + objectID + "/content"
 	if publicURL != "" {
 		url = publicURL
@@ -314,6 +317,9 @@ func RegisterDirectStorageObject(ctx context.Context, input DirectStorageObjectI
 	object.CloudCheckedAt, object.CloudVerifiedAt, object.CloudCheckStatus, object.CloudSyncStatus = object.CloudSyncedAt, object.CloudSyncedAt, "ok", "verified"
 	if _, err := repository.SaveStorageObject(object); err != nil {
 		return UploadedStorageObject{}, err
+	}
+	if strings.HasPrefix(contentType, "image/") {
+		QueueStoragePreview(objectID, 10*time.Second)
 	}
 	return UploadedStorageObject{
 		ID: objectID, URL: "/api/files/" + objectID + "/content?direct=1", StorageKey: "server:" + objectID,

@@ -1,5 +1,7 @@
 "use client";
 
+import { prepareImagePreview, publishStoragePreview } from "@/services/storage-preview-client";
+
 import localforage from "localforage";
 
 import { nanoid } from "nanoid";
@@ -289,6 +291,7 @@ export async function uploadRemoteImageToServer(url: string, filename: string): 
 }
 
 async function persistGeneratedImageBlob(blob: Blob, filename: string, sourceUrl: string, ownerToken: string): Promise<UploadedImage> {
+    const preview = prepareImagePreview(blob);
     const formData = new FormData();
     formData.append("file", blob, filename || "generated-image");
     if (sourceUrl) formData.append("sourceUrl", sourceUrl);
@@ -297,6 +300,7 @@ async function persistGeneratedImageBlob(blob: Blob, filename: string, sourceUrl
     if (!response.ok || payload?.code !== 0 || !payload.data) throw new Error(payload?.msg || "生成图片持久化失败");
     assertGeneratedMediaOwner(useUserStore.getState().token, ownerToken);
     serverUrls.set(payload.data.storageKey.slice("server:".length), payload.data.url);
+    publishStoragePreview(payload.data.storageKey, preview, ownerToken);
     return payload.data;
 }
 
@@ -354,6 +358,7 @@ async function resolveLocalImageUrl(storageKey: string) {
 }
 
 async function maybeUploadImageToServer(blob: Blob, tokenOverride?: string): Promise<UploadedImage | null> {
+    const preview = prepareImagePreview(blob);
     const config = await loadStorageConfig().catch(() => null);
     if (tokenOverride !== undefined && useUserStore.getState().token !== tokenOverride) {
         throw new Error("登录状态已变化");
@@ -394,6 +399,7 @@ async function maybeUploadImageToServer(blob: Blob, tokenOverride?: string): Pro
             }
             return null;
         }
+        publishStoragePreview(payload.data.storageKey, preview, token);
         return cacheAnonymousImage(payload.data, blob);
     } catch (error) {
         const detail = error instanceof Error ? error.message : "服务端图片上传失败";

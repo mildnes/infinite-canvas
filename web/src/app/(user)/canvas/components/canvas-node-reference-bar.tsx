@@ -1,5 +1,7 @@
 "use client";
 
+import { previewSrcFor, fallbackCanvasPreview } from "../utils/canvas-image-preview";
+
 import { FileText, Image as ImageIcon, Music2, Plus, Video, X } from "lucide-react";
 import { Popover } from "antd";
 
@@ -63,7 +65,7 @@ function ReferenceItem({ reference, onRemove }: { reference: CanvasResourceRefer
             <div className="group relative grid size-12 shrink-0 place-items-center rounded-xl border" style={{ background: theme.toolbar.activeBg, borderColor: theme.toolbar.border }}>
                 <span className="grid size-full place-items-center overflow-hidden rounded-[inherit]">
                     {reference.kind === "image" && reference.previewUrl ? (
-                        <img src={reference.previewUrl} alt="" className="size-full object-cover" />
+                        <img src={previewSrcFor(reference.previewUrl, reference.storageKey)} onError={(event) => fallbackCanvasPreview(event.currentTarget, reference.previewUrl!)} loading="lazy" decoding="async" alt="" className="size-full object-cover" />
                     ) : reference.kind === "video" && reference.previewUrl ? (
                         <video src={reference.previewUrl} className="size-full object-cover" muted />
                     ) : (
@@ -90,7 +92,7 @@ function ReferenceItem({ reference, onRemove }: { reference: CanvasResourceRefer
 }
 
 function ReferencePreview({ reference }: { reference: CanvasResourceReference }) {
-    if (reference.kind === "image" && reference.previewUrl) return <img src={reference.previewUrl} alt={reference.title} className="block max-h-52 max-w-72 rounded-lg object-contain" />;
+    if (reference.kind === "image" && reference.previewUrl) return <img src={previewSrcFor(reference.previewUrl, reference.storageKey)} onError={(event) => fallbackCanvasPreview(event.currentTarget, reference.previewUrl!)} loading="lazy" decoding="async" alt={reference.title} className="block max-h-52 max-w-72 rounded-lg object-contain" />;
     if (reference.kind === "video" && reference.previewUrl) return <video src={reference.previewUrl} className="block max-h-52 max-w-72 rounded-lg" autoPlay muted playsInline preload="metadata" />;
     if (reference.kind === "audio" && reference.previewUrl) return <audio src={reference.previewUrl} className="w-72" controls />;
     return <div className="max-h-52 w-72 overflow-auto whitespace-pre-wrap text-sm">{reference.text || reference.title || "暂无内容"}</div>;
@@ -103,7 +105,7 @@ function buildReferences(nodes: CanvasNodeData[]) {
         if (!kind) return [];
         const index = ++counts[kind];
         const label = kind === "image" ? imageReferenceLabel(index - 1) : kind === "video" ? seedanceReferenceLabel("video", index - 1) : kind === "audio" ? seedanceReferenceLabel("audio", index - 1) : `文本${index}`;
-        return [{ id: node.id, nodeId: node.id, kind, label, title: node.title || label, previewUrl: node.metadata?.content, text: node.type === CanvasNodeType.Text ? node.metadata?.content || node.metadata?.prompt : undefined, active: true }];
+        return [{ id: node.id, nodeId: node.id, kind, label, title: node.title || label, previewUrl: node.metadata?.content, storageKey: node.metadata?.storageKey, text: node.type === CanvasNodeType.Text ? node.metadata?.content || node.metadata?.prompt : undefined, active: true }];
     });
 }
 

@@ -1,5 +1,7 @@
 "use client";
 
+import { previewSrcFor, fallbackCanvasPreview } from "../utils/canvas-image-preview";
+
 import { forwardRef, useMemo, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent, PointerEvent, TextareaHTMLAttributes } from "react";
 import { createPortal } from "react-dom";
@@ -255,7 +257,7 @@ function MentionMenu({ textarea, references, activeIndex, theme, onSelect }: { t
 }
 
 function ReferencePreview({ reference }: { reference: CanvasResourceReference }) {
-    if (reference.kind === "image" && reference.previewUrl) return <img src={reference.previewUrl} alt="" className="size-9 rounded-md object-cover" />;
+    if (reference.kind === "image" && reference.previewUrl) return <img src={previewSrcFor(reference.previewUrl, reference.storageKey)} onError={(event) => fallbackCanvasPreview(event.currentTarget, reference.previewUrl!)} loading="lazy" decoding="async" alt="" className="size-9 rounded-md object-cover" />;
     if (reference.kind === "video" && reference.previewUrl) return <video src={reference.previewUrl} className="size-9 rounded-md bg-black object-cover" muted preload="metadata" />;
     const Icon = reference.kind === "audio" ? Music2 : reference.kind === "video" ? Video : reference.kind === "image" ? ImageIcon : FileText;
     return (

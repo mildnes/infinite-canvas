@@ -1,5 +1,7 @@
 "use client";
 
+import { previewSrcFor, fallbackCanvasPreview } from "../utils/canvas-image-preview";
+
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ClipboardEvent, CSSProperties, KeyboardEvent, MouseEvent, PointerEvent } from "react";
 import { createPortal } from "react-dom";
@@ -439,7 +441,7 @@ function MentionMenu({
 
 function ReferencePreview({ reference }: { reference: CanvasResourceReference }) {
     if (reference.kind === "image" && reference.previewUrl) {
-        return <img src={reference.previewUrl} alt="" className="size-9 shrink-0 rounded-md object-cover" />;
+        return <img src={previewSrcFor(reference.previewUrl, reference.storageKey)} onError={(event) => fallbackCanvasPreview(event.currentTarget, reference.previewUrl!)} loading="lazy" decoding="async" alt="" className="size-9 shrink-0 rounded-md object-cover" />;
     }
     if (reference.kind === "video" && reference.previewUrl) {
         return <video src={reference.previewUrl} className="size-9 shrink-0 rounded-md bg-black object-cover" muted preload="metadata" />;
@@ -459,7 +461,10 @@ function createReferenceChip(reference: CanvasResourceReference, theme: (typeof 
     wrapper.dataset.refNodeId = reference.nodeId;
     if (reference.kind === "image" && reference.previewUrl) {
         const image = document.createElement("img");
-        image.src = reference.previewUrl;
+        image.src = previewSrcFor(reference.previewUrl, reference.storageKey);
+        image.onerror = () => fallbackCanvasPreview(image, reference.previewUrl!);
+        image.loading = "lazy";
+        image.decoding = "async";
         image.alt = reference.label;
         image.className = "size-6 rounded object-cover";
         wrapper.className = "mx-px inline-flex size-6 items-center justify-center overflow-hidden rounded align-middle";

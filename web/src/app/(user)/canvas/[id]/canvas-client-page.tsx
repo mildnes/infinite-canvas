@@ -1,5 +1,7 @@
 "use client";
 
+import { previewSrcFor, loadOriginalImage } from "../utils/canvas-image-preview";
+
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent as ReactChangeEvent, DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import dynamic from "next/dynamic";
@@ -1102,7 +1104,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             const options = connections.flatMap((connection) => {
                 if (connection.toNodeId !== node.id) return [];
                 const imageNode = nodeById.get(connection.fromNodeId);
-                return isCanvasImageNodeType(imageNode?.type) && imageNode?.metadata?.content ? [{ nodeId: imageNode.id, label: imageNode.title || "图片节点", previewUrl: imageNode.metadata.content }] : [];
+                return isCanvasImageNodeType(imageNode?.type) && imageNode?.metadata?.content ? [{ nodeId: imageNode.id, label: imageNode.title || "图片节点", previewUrl: imageNode.metadata.content, storageKey: imageNode.metadata.storageKey }] : [];
             });
             map.set(node.id, options);
         });
@@ -1121,7 +1123,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     const text = source.metadata?.content || source.metadata?.prompt || "";
                     return text.trim() ? [{ nodeId: source.id, kind: "text" as const, label, text }] : [];
                 }
-                if (isCanvasImageNodeType(source.type) && source.metadata?.content) return [{ nodeId: source.id, kind: "image" as const, label, previewUrl: source.metadata.content }];
+                if (isCanvasImageNodeType(source.type) && source.metadata?.content) return [{ nodeId: source.id, kind: "image" as const, label, previewUrl: source.metadata.content, storageKey: source.metadata.storageKey }];
                 if (source.type === CanvasNodeType.Video && source.metadata?.content) return [{ nodeId: source.id, kind: "video" as const, label, previewUrl: source.metadata.content }];
                 if (source.type === CanvasNodeType.Audio && source.metadata?.content) return [{ nodeId: source.id, kind: "audio" as const, label }];
                 return [];
@@ -4668,7 +4670,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     const currentIndex = group.findIndex((n) => n.id === activeItemNode.id);
                     return (
                         <FullscreenPreview
+                            key={activeItemNode.id}
                             src={activeItemNode.metadata?.content || ""}
+                            storageKey={activeItemNode.metadata?.storageKey}
                             alt={activeItemNode.title || "图片"}
                             isVideo={activeItemNode.type === CanvasNodeType.Video}
                             isPanorama={activeItemNode.type === CanvasNodeType.Panorama}
@@ -4737,10 +4741,24 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     );
 }
 
-function FullscreenPreview({ src, alt, isVideo, isPanorama, proxyGeneratedPanorama = false, onDownload, onClose, hasPrev, hasNext, onPrev, onNext }: { src: string; alt: string; isVideo?: boolean; isPanorama?: boolean; proxyGeneratedPanorama?: boolean; onDownload: () => void; onClose: () => void; hasPrev?: boolean; hasNext?: boolean; onPrev?: () => void; onNext?: () => void }) {
+function FullscreenPreview({ src, storageKey, alt, isVideo, isPanorama, proxyGeneratedPanorama = false, onDownload, onClose, hasPrev, hasNext, onPrev, onNext }: { src: string; storageKey?: string; alt: string; isVideo?: boolean; isPanorama?: boolean; proxyGeneratedPanorama?: boolean; onDownload: () => void; onClose: () => void; hasPrev?: boolean; hasNext?: boolean; onPrev?: () => void; onNext?: () => void }) {
+    const theme = canvasThemes[useThemeStore((state) => state.theme)];
+    const [original, setOriginal] = useState({ src, status: "loading" as "loading" | "ready" | "failed" });
+    const [retry, setRetry] = useState(0);
+    const [previewFailed, setPreviewFailed] = useState<string | null>(null);
+    const previewSrc = previewSrcFor(src, storageKey);
+    const progressive = !isVideo && !isPanorama && previewSrc !== src;
+    const originalStatus = original.src === src ? original.status : "loading";
+    useEffect(() => {
+        if (!progressive) return;
+        setOriginal({ src, status: "loading" });
+        setPreviewFailed(null);
+        return loadOriginalImage(src, status => setOriginal({ src, status }));
+    }, [src, progressive, retry]);
     const [zoom, setZoom] = useState<number>(1);
     const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
     const [isDragging, setIsDragging] = useState<boolean>(false);
+    useEffect(() => { setZoom(1); setPanOffset({ x: 0, y: 0 }); setIsDragging(false); }, [src]);
     const [videoDuration, setVideoDuration] = useState(0);
     const [videoTime, setVideoTime] = useState(0);
     const [isVideoPlaying, setIsVideoPlaying] = useState(false);
@@ -4805,6 +4823,12 @@ function FullscreenPreview({ src, alt, isVideo, isPanorama, proxyGeneratedPanora
 
     return (
         <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/80 backdrop-blur-sm" data-canvas-no-zoom={isPanorama ? "" : undefined} onClick={onClose}>
+            {progressive && originalStatus !== "ready" ? (
+                <div className="absolute bottom-6 z-[2010] flex items-center gap-3 rounded-lg px-3 py-2 text-sm" style={{ background: theme.toolbar.panel, color: theme.node.text }} onClick={(event) => event.stopPropagation()}>
+                    <span>{originalStatus === "failed" ? previewFailed === src ? "原图加载失败，请重试" : "原图加载失败，已保留预览" : "正在加载原图…"}</span>
+                    {originalStatus === "failed" ? <button type="button" onClick={() => setRetry(value => value + 1)}>重试原图</button> : null}
+                </div>
+            ) : null}
             {hasPrev || hasNext ? (
                 <>
                     <button
@@ -4910,13 +4934,15 @@ function FullscreenPreview({ src, alt, isVideo, isPanorama, proxyGeneratedPanora
             ) : (
                 <img
                     ref={imgRef}
-                    src={src}
+                    src={progressive && originalStatus !== "ready" && previewFailed !== src ? previewSrc : src}
+                    onError={() => { if (progressive && originalStatus !== "ready") setPreviewFailed(src); }}
+                    decoding="async"
                     alt={alt}
                     draggable={false}
                     onPointerDown={handlePointerDown}
                     onPointerMove={handlePointerMove}
                     onPointerUp={handlePointerUp}
-                    className={`max-h-[85vh] max-w-[85vw] object-contain rounded-2xl shadow-[0_24px_72px_rgba(0,0,0,0.4)] ${zoom > 1 ? "cursor-grab active:cursor-grabbing" : "cursor-default"}`}
+                    className={`${progressive ? "h-[85vh] w-[85vw]" : "max-h-[85vh] max-w-[85vw]"} object-contain rounded-2xl shadow-[0_24px_72px_rgba(0,0,0,0.4)] ${zoom > 1 ? "cursor-grab active:cursor-grabbing" : "cursor-default"}`}
                     onClick={(e) => e.stopPropagation()}
                     onDragStart={(e) => e.preventDefault()}
                     style={{

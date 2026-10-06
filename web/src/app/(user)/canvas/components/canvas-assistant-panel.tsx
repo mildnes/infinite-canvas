@@ -1,5 +1,7 @@
 "use client";
 
+import { previewSrcFor, fallbackCanvasPreview } from "../utils/canvas-image-preview";
+
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bot, Clapperboard, Copy, Group, History, Image as ImageIcon, Music2, PanelRightClose, Plus, RotateCcw, Settings2, Sparkles, Trash2, Type, Video, X } from "lucide-react";
 import { App, Button, Modal, Segmented, Switch, Tooltip } from "antd";
@@ -779,7 +781,7 @@ function AssistantMessages({ messages, nodeById, onFocusNode, onRetry }: { messa
                     <span className="my-1 flex w-full min-w-0 items-center rounded-lg transition-opacity hover:opacity-80" style={{ background: theme.toolbar.itemHover }}>
                         <button type="button" onClick={() => onFocusNode(canvasNode.id)} className="flex min-w-0 flex-1 items-center gap-3 px-2 py-2 text-left outline-none" title={`定位到画布节点：${canvasNode.title || typeLabel}`}>
                             <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-md">
-                                {hasImage ? <img src={canvasNode.metadata?.content} alt={canvasNode.title || typeLabel} className="size-full object-cover" /> : <Icon className="size-5 opacity-60" />}
+                                {hasImage ? <img src={previewSrcFor(canvasNode.metadata?.content || "", canvasNode.metadata?.storageKey)} onError={(event) => fallbackCanvasPreview(event.currentTarget, canvasNode.metadata?.content || "")} loading="lazy" decoding="async" alt={canvasNode.title || typeLabel} className="size-full object-cover" /> : <Icon className="size-5 opacity-60" />}
                             </span>
                             <span className="min-w-0 flex-1 space-y-0.5">
                                 <span className="block truncate text-sm font-medium leading-snug">{canvasNode.title || `${typeLabel}节点`}</span>

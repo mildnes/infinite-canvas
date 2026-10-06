@@ -1,5 +1,7 @@
 "use client";
 
+import { prepareImagePreview, publishStoragePreview } from "@/services/storage-preview-client";
+
 import { nanoid } from "nanoid";
 
 import type { UserWebDAVStorageProvider } from "@/services/image-storage";
@@ -53,6 +55,7 @@ export function createDirectWebDAVObjectKey(provider: UserWebDAVStorageProvider,
 
 export async function persistDirectWebDAV(provider: UserWebDAVStorageProvider, blob: Blob, filename: string) {
     const { token, user } = useUserStore.getState();
+    const preview = prepareImagePreview(blob);
     if (blob.type === "video/mp4" && !filename.endsWith(".mp4")) filename += ".mp4";
     const objectKey = createDirectWebDAVObjectKey(provider, filename, token && user ? user.id : "anonymous");
     try {
@@ -62,7 +65,9 @@ export async function persistDirectWebDAV(provider: UserWebDAVStorageProvider, b
         }
         try {
             const { registerDirectStorageObject } = await import("@/services/api/storage");
-            return await registerDirectStorageObject(token, { provider, objectKey, mimeType: blob.type || "application/octet-stream", bytes: blob.size });
+            const registered = await registerDirectStorageObject(token, { provider, objectKey, mimeType: blob.type || "application/octet-stream", bytes: blob.size });
+            publishStoragePreview(registered.storageKey, preview, token);
+            return registered;
         } catch (error) {
             await deleteDirectWebDAV(provider, objectKey).catch(() => undefined);
             throw error;

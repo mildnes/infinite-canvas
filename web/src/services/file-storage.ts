@@ -1,5 +1,7 @@
 "use client";
 
+import { prepareImagePreview, publishStoragePreview } from "@/services/storage-preview-client";
+
 import localforage from "localforage";
 import { nanoid } from "nanoid";
 
@@ -71,6 +73,7 @@ export async function uploadRemoteMediaToServer(url: string, filename: string): 
 
 export async function persistGeneratedMediaBlob(blob: Blob, filename: string, sourceUrl = "", ownerToken = useUserStore.getState().token): Promise<UploadedFile> {
     if (!ownerToken) throw new Error("请先登录后再持久化生成媒体");
+    const preview = prepareImagePreview(blob);
     const formData = new FormData();
     formData.append("file", blob, filename || "generated-media");
     if (sourceUrl) formData.append("sourceUrl", sourceUrl);
@@ -78,10 +81,12 @@ export async function persistGeneratedMediaBlob(blob: Blob, filename: string, so
     const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string; data?: UploadedFile } | null;
     if (!response.ok || payload?.code !== 0 || !payload.data) throw new Error(payload?.msg || "生成媒体持久化失败");
     assertGeneratedMediaOwner(useUserStore.getState().token, ownerToken);
+    publishStoragePreview(payload.data.storageKey, preview, ownerToken);
     return payload.data;
 }
 
 async function uploadMediaBlobToServer(blob: Blob, filename: string, metadataUrl?: string): Promise<UploadedFile> {
+    const preview = prepareImagePreview(blob);
     const config = await loadStorageConfig().catch(() => null);
     const userProvider = config?.allowUserProvider ? loadUserStorageProvider() : null;
     if (!config || (!canUseGlobalStorage(config) && !userProvider)) throw new Error("服务端对象存储未启用");
@@ -101,6 +106,7 @@ async function uploadMediaBlobToServer(blob: Blob, filename: string, metadataUrl
     const response = await fetch("/api/v1/files", { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: formData });
     const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string; data?: UploadedFile } | null;
     if (!response.ok || payload?.code !== 0 || !payload.data) throw new Error(payload?.msg || "媒体同步失败");
+    publishStoragePreview(payload.data.storageKey, preview, token);
     const meta = metadataUrl || payload.data.mimeType?.startsWith("video/") ? await readVideoMeta(metadataUrl || payload.data.url) : {};
     return { ...payload.data, bytes: payload.data.bytes || blob.size, mimeType: payload.data.mimeType || blob.type || "application/octet-stream", ...meta };
 }

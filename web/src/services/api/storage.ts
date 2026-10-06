@@ -40,3 +40,8 @@ export function registerDirectStorageObject(
 export function deleteDirectStorageObjectRecord(token: string, id: string) {
     return apiDelete<boolean>(`/api/v1/files/${encodeURIComponent(id)}/record`, token);
 }
+
+export async function uploadStoragePreview(token: string, id: string, blob: Blob, signal?: AbortSignal) {
+    const response = await fetch(`/api/v1/files/${encodeURIComponent(id)}/preview`, { method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": "image/jpeg" }, body: blob, signal });
+    if (!response.ok) throw new Error("图片预览缓存提交失败");
+}

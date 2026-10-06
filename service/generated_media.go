@@ -151,6 +151,9 @@ func saveGeneratedMedia(userID, contentType string, data []byte, objectID string
 		_ = os.Remove(filepath.Join(dir, name))
 		return UploadedStorageObject{}, err
 	}
+	if strings.HasPrefix(contentType, "image/") {
+		QueueStoragePreview(objectID, 10*time.Second)
+	}
 	return UploadedStorageObject{
 		ID: objectID, URL: "/api/files/" + objectID + "/content", StorageKey: "server:" + objectID,
 		Bytes: object.Bytes, MimeType: contentType, Width: width, Height: height,
@@ -177,6 +180,8 @@ func DiscardGeneratedMedia(objectID string) {
 }
 
 func generatedMediaPath(object model.StorageObject) string {
+	// Only object-specific original files belong to the media-copy contract.
+	// Disposable previews/ files must never satisfy recovery or GC checks.
 	if object.ObjectKey == "" || filepath.Base(object.ObjectKey) != object.ObjectKey || !strings.HasPrefix(object.ObjectKey, object.ID+".") {
 		return ""
 	}

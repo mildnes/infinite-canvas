@@ -41,6 +41,8 @@ func New() *gin.Engine {
 		handler.FileContent(c.Writer, c.Request, c.Param("id"))
 	})
 	api.POST("/ai/direct-request", gin.WrapF(handler.PrepareDirectAIRequest))
+	api.GET("/files/:id/preview", func(c *gin.Context) { handler.FilePreview(c.Writer, c.Request, c.Param("id")) })
+	api.HEAD("/files/:id/preview", func(c *gin.Context) { handler.FilePreview(c.Writer, c.Request, c.Param("id")) })
 	anonymousFiles := api.Group("/anonymous/files", middleware.AnonymousStorage)
 	anonymousFiles.POST("/session", func(c *gin.Context) { c.Status(http.StatusNoContent) })
 	anonymousFiles.POST("", gin.WrapF(handler.UploadFile))
@@ -98,6 +100,7 @@ func New() *gin.Engine {
 	v1.POST("/files", gin.WrapF(handler.UploadFile))
 	v1.POST("/generated-media", gin.WrapF(handler.PersistGeneratedMedia))
 	v1.POST("/files/direct", gin.WrapF(handler.RegisterDirectFile))
+	v1.PUT("/files/:id/preview", func(c *gin.Context) { handler.PutFilePreview(c.Writer, c.Request, c.Param("id")) })
 	v1.DELETE("/files/:id", func(c *gin.Context) {
 		handler.DeleteFile(c.Writer, c.Request, c.Param("id"))
 	})

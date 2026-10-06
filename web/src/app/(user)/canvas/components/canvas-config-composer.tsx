@@ -1,5 +1,7 @@
 "use client";
 
+import { previewSrcFor, fallbackCanvasPreview } from "../utils/canvas-image-preview";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent } from "react";
 import { Button, Image } from "antd";
@@ -242,7 +244,7 @@ function MentionMenu({ inputs, allInputs, activeIndex, theme, onSelect }: { inpu
 }
 
 function ResourcePreview({ input }: { input: NodeGenerationInput }) {
-    if (input.type === "image" && input.image) return <img src={input.image.dataUrl} alt="" className="size-9 rounded-md object-cover" />;
+    if (input.type === "image" && input.image) return <img src={previewSrcFor(input.image.dataUrl, input.image.storageKey)} onError={(event) => fallbackCanvasPreview(event.currentTarget, input.image!.dataUrl)} loading="lazy" decoding="async" alt="" className="size-9 rounded-md object-cover" />;
     if (input.type === "video" && input.video) return <video src={input.video.url} className="size-9 rounded-md bg-black object-cover" muted preload="metadata" />;
     const Icon = input.type === "audio" ? Music2 : input.type === "video" ? Video : input.type === "image" ? ImageIcon : FileText;
     return (
@@ -261,7 +263,10 @@ function createReferenceChip(input: NodeGenerationInput, inputs: NodeGenerationI
     Object.assign(wrapper.style, chipStyle(theme));
     if (input.type === "image" && input.image) {
         const image = document.createElement("img");
-        image.src = input.image.dataUrl;
+        image.src = previewSrcFor(input.image.dataUrl, input.image.storageKey);
+        image.onerror = () => fallbackCanvasPreview(image, input.image!.dataUrl);
+        image.loading = "lazy";
+        image.decoding = "async";
         image.alt = `@[node:${input.nodeId}]`;
         image.className = "size-6 rounded object-cover";
         wrapper.className = "mx-px inline-flex size-6 items-center justify-center overflow-hidden rounded align-middle";

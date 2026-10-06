@@ -110,13 +110,14 @@ for (const syntax of ["label", "node"]) {
     });
 }
 
-test("组装编辑器真实 chip 工厂：alt 为引用标记，标题仅作提示", (t) => {
+test("组装编辑器真实 chip 工厂：alt 为引用标记，标题仅作提示", async (t) => {
     const f = fixture(t, "node");
     const source = readFileSync(new URL("../components/canvas-config-composer.tsx", import.meta.url), "utf8");
     const ast = ts.createSourceFile("composer.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
     const declaration = ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "createReferenceChip");
     const code = ts.transpileModule(`(${declaration.getText(ast)})`, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText;
-    const create = vm.runInNewContext(code, { document: f.document, chipStyle: () => ({}) });
+    const { previewSrcFor, fallbackCanvasPreview } = await import("./canvas-image-preview.ts");
+    const create = vm.runInNewContext(code, { document: f.document, chipStyle: () => ({}), previewSrcFor, fallbackCanvasPreview });
     const chip = create({ nodeId: "known", title: "标题", type: "image", image: { dataUrl: "https://example.com/a.png" } }, [], {}, () => {});
     assert.equal(chip.querySelector("img").alt, "@[node:known]");
     assert.equal(chip.title, "标题");
