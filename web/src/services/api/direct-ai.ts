@@ -1,7 +1,7 @@
 import { apiPost } from "@/services/api/request";
 import { message } from "antd";
 import { readFileAsDataUrl } from "@/lib/image-utils";
-import { imageOutputNoticeText } from "@/lib/image-output-notice";
+import { imageOutputNoticeText, shouldNotifyImageOutputNotice } from "@/lib/image-output-notice";
 import { useUserStore } from "@/stores/use-user-store";
 import { buildApiUrl, localChannelForActiveModel, type AiConfig, type DirectAIProvider } from "@/stores/use-config-store";
 import { directProtocolAdapters } from "./protocols/direct-registry";
@@ -73,7 +73,8 @@ async function prepareDirectRequest(config: AiConfig, provider: DirectAIProvider
     });
     if (plan.provider !== provider) throw new Error("前后端渠道识别结果不一致");
     const current = useUserStore.getState();
-    const notice = imageOutputNoticeText(plan.imageOutputNoticeCode || "") || plan.imageOutputNotice;
+    const noticeCode = plan.imageOutputNoticeCode || "";
+    const notice = shouldNotifyImageOutputNotice(noticeCode) ? imageOutputNoticeText(noticeCode) || plan.imageOutputNotice : "";
     if (notice && current.token === owner.token && current.user?.id === owner.user?.id && typeof window !== "undefined" && window.location.pathname === pathname) {
         message.info({ content: notice, key: `direct-image-output:${channel.id}:${plan.imageOutputNoticeCode || notice}` });
     }

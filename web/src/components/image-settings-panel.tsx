@@ -81,6 +81,8 @@ export function ImageSettingsPanel({ config, model, onConfigChange, theme, showT
         if (notifiedFallback.current === noticeKey) return;
         notifiedFallback.current = noticeKey;
         onConfigChange("imageOutputFormat", targetFormat);
+        // 模型未声明输出格式能力时静默回退到自动：面板内联文案已说明，不再逐次弹 toast。
+        if (targetFormat === "auto" && !hasOutputDeclaration) return;
         message.open({
             key: `image-output-format-fallback-${noticeKey}`,
             type: "info",

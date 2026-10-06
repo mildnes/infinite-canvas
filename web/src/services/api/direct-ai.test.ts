@@ -34,7 +34,7 @@ test("local direct translation receives declarations and never receives the prov
     assert.equal(result.data[0].url, "https://media.example/image.png");
 });
 
-test("local output fallback notices appear once per request and stale accounts or pages suppress them", async (t) => {
+test("可操作的输出格式回退提示每次请求只提示一次，过期账号或页面抑制提示", async (t) => {
     const originalWindow = globalThis.window;
     const originalSession = { token: useUserStore.getState().token, user: useUserStore.getState().user };
     globalThis.window = { location: { pathname: "/canvas/original" }, setTimeout, clearTimeout } as unknown as Window & typeof globalThis;
@@ -50,7 +50,7 @@ test("local output fallback notices appear once per request and stale accounts o
     t.mock.method(axios, "request", async () => {
         if (change === "account") useUserStore.setState({ token: "other-account" });
         if (change === "page") window.location.pathname = "/canvas/other";
-        return { status: 200, data: { code: 0, data: { provider: "apimart", url: "https://api.apimart.ai/v1/images/generations", contentType: "application/json", body: { prompt: "test" }, imageOutputNoticeCode: "undeclared" }, msg: "" } };
+        return { status: 200, data: { code: 0, data: { provider: "apimart", url: "https://api.apimart.ai/v1/images/generations", contentType: "application/json", body: { prompt: "test" }, imageOutputNoticeCode: "fallback-default" }, msg: "" } };
     });
     const config = { ...defaultConfig, channelMode: "local" as const, model: "custom-renderer", imageModel: "custom-renderer", imageChannelId: "local", localChannels: [{ id: "local", name: "local", protocol: "apimart" as const, baseUrl: "https://api.apimart.ai", apiKey: "provider-secret", models: ["custom-renderer"] }] };
     for (const scenario of ["none", "account", "page"] as const) {
@@ -61,4 +61,25 @@ test("local output fallback notices appear once per request and stale accounts o
         await requestDirectImages(config, "apimart", "/images/generations", { prompt: "test" }, 10);
         assert.equal(messages.length - before, scenario === "none" ? 1 : 0, scenario);
     }
+});
+
+test("未声明输出格式能力的提示不再逐次弹出（纯信息性提示降噪）", async (t) => {
+    const originalWindow = globalThis.window;
+    const originalSession = { token: useUserStore.getState().token, user: useUserStore.getState().user };
+    globalThis.window = { location: { pathname: "/canvas/original" }, setTimeout, clearTimeout } as unknown as Window & typeof globalThis;
+    t.after(() => {
+        useUserStore.setState(originalSession);
+        if (originalWindow) globalThis.window = originalWindow;
+        else Reflect.deleteProperty(globalThis, "window");
+    });
+    const messages: unknown[] = [];
+    t.mock.method(message, "info", (notice: unknown) => { messages.push(notice); });
+    t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ data: [{ url: "https://media.example/image.png" }] })));
+    t.mock.method(axios, "request", async () => ({ status: 200, data: { code: 0, data: { provider: "apimart", url: "https://api.apimart.ai/v1/images/generations", contentType: "application/json", body: { prompt: "test" }, imageOutputNoticeCode: "undeclared" }, msg: "" } }));
+    const config = { ...defaultConfig, channelMode: "local" as const, model: "custom-renderer", imageModel: "custom-renderer", imageChannelId: "local", localChannels: [{ id: "local", name: "local", protocol: "apimart" as const, baseUrl: "https://api.apimart.ai", apiKey: "provi...et", models: ["custom-renderer"] }] };
+    useUserStore.setState({ token: "original-account" });
+    window.location.pathname = "/canvas/original";
+    await requestDirectImages(config, "apimart", "/images/generations", { prompt: "test" }, 10);
+    await requestDirectImages(config, "apimart", "/images/generations", { prompt: "test" }, 10);
+    assert.equal(messages.length, 0);
 });

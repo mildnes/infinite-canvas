@@ -8,7 +8,7 @@ import { isKIESeedreamLayerDecompositionModel } from "@/lib/kie-models";
 import { isMimoChannel, mimoModels } from "@/lib/mimo-tts";
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig, normalizeGeminiBaseUrl } from "@/lib/gemini";
 import { imageOutputCapabilityForConfig, resolveImageOutputFormat, type ImageOutputFormat } from "@/lib/image-output-format";
-import { imageOutputNoticeText } from "@/lib/image-output-notice";
+import { createImageOutputNoticeGate, imageOutputNoticeText, shouldNotifyImageOutputNotice } from "@/lib/image-output-notice";
 import { autoSyncImage, imageToDataUrl, resolveImageUrl, type UploadedImage } from "@/services/image-storage";
 import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
@@ -118,8 +118,7 @@ const QUALITY_BASE: Record<string, number> = {
 const IMAGE_MIME = "image/png";
 const IMAGE_REQUEST_TIMEOUT_SECONDS = 600;
 const PROMPT_REWRITE_GUARD_PREFIX = "Use the following text as the complete prompt. Do not rewrite it:";
-let lastImageOutputNotice = "";
-let lastImageOutputNoticeAt = 0;
+const shouldShowImageOutputNotice = createImageOutputNoticeGate();
 let lastImageQualityNotice = "";
 let lastImageQualityNoticeAt = 0;
 
@@ -222,13 +221,14 @@ function notifyImageOutputFallback(response: Response, config: AiConfig, owner: 
 
 function notifyImageOutputNotice(notice: string, context: string, owner: ImageRequestOwner) {
     const text = imageOutputNoticeText(notice);
-    if (!text || !isCurrentImageRequestOwner(owner)) return;
-    const key = `${context}:${notice}`;
-    const now = Date.now();
-    if (key === lastImageOutputNotice && now - lastImageOutputNoticeAt < 2000) return;
-    lastImageOutputNotice = key;
-    lastImageOutputNoticeAt = now;
+    if (!text || !shouldNotifyImageOutputNotice(notice) || !isCurrentImageRequestOwner(owner)) return;
+    if (!shouldShowImageOutputNotice(`${context}:${notice}`)) return;
     message.info(text);
+}
+
+// 画布任务的通知键必须稳定到「渠道:模型」，不能用 taskId（每个任务都不同，会逐次重复提示）。
+function canvasTaskNoticeContext(task: CanvasImageTask) {
+    return `${task.channelId || "-"}:${task.model || "-"}`;
 }
 
 function notifyImageQualityFallback(response: Response, config: AiConfig, owner: ImageRequestOwner) {
@@ -1306,7 +1306,7 @@ export async function pollCanvasImageTaskStatus(taskId: string): Promise<CanvasI
     }
     const payload = (await response.json()) as { code?: number; msg?: string; data?: CanvasImageTask };
     if (payload.code !== 0 || !payload.data) throw new ImageRequestError(payload.msg || "读取图片任务失败", payload);
-    if (payload.data.imageOutputNoticeCode) notifyImageOutputNotice(payload.data.imageOutputNoticeCode, taskId, requestOwner);
+    if (payload.data.imageOutputNoticeCode) notifyImageOutputNotice(payload.data.imageOutputNoticeCode, canvasTaskNoticeContext(payload.data), requestOwner);
     return syncCanvasImageTask(payload.data);
 }
 
@@ -1808,7 +1808,7 @@ export async function batchCanvasImageTaskStatus(config: AiConfig | undefined, i
     const payload = (await response.json()) as { code?: number; msg?: string; data?: CanvasImageTask[] };
     if (payload.code !== 0 || !Array.isArray(payload.data)) throw new ImageRequestError(payload.msg || "读取图片任务失败", payload);
     for (const task of payload.data) {
-        if (task.imageOutputNoticeCode) notifyImageOutputNotice(task.imageOutputNoticeCode, task.id, requestOwner);
+        if (task.imageOutputNoticeCode) notifyImageOutputNotice(task.imageOutputNoticeCode, canvasTaskNoticeContext(task), requestOwner);
     }
     return payload.data;
 }
