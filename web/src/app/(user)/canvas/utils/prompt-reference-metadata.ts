@@ -8,8 +8,11 @@
 //
 // 只清理带明确用户媒体编号的完整括号；职责说明、未知文件类型及不完整括号保留。
 const USER_REFERENCE = /^用户(?:本轮)?(?:图片|视频|音频)\s*\d+$/;
-const MEDIA_FILENAME = /^[^\r\n，,；;。！？!?<>:"|]+\.(?:png|apng|jpg|jpeg|jfif|webp|gif|avif|bmp|tif|tiff|heic|heif|svg|mp4|m4v|mov|webm|mkv|avi|3gp|mp3|wav|m4a|aac|flac|ogg|opus|aiff|wma|amr)$/i;
-const UNKNOWN_FILENAME = /\.[a-z0-9]+$/i;
+const MEDIA_EXTENSIONS = "png|apng|jpg|jpeg|jfif|webp|gif|avif|bmp|tif|tiff|heic|heif|svg|mp4|m4v|mov|webm|mkv|avi|3gp|mp3|wav|m4a|aac|flac|ogg|opus|aiff|wma|amr";
+// 字段内出现“另一扩展名 + 空格 + 后续文字”时不能确认是单个文件名，保留混合说明。
+const MEDIA_FILENAME = new RegExp(`^(?!.*\\.[a-z0-9]+\\s+\\S)[^\\r\\n，,；;。！？!?<>:"|]+\\.(?:${MEDIA_EXTENSIONS})$`, "i");
+// 截断标记必须存在；无点无省略号的 abc123jpg 不能当作文件名。
+const TRUNCATED_MEDIA_FILENAME = new RegExp(`^[A-Za-z0-9_-]{6,}(?:…{1,3}|\\.{2,})(?:${MEDIA_EXTENSIONS})$`, "i");
 const CLOSING_BRACKET: Record<string, string> = { "(": ")", "（": "）" };
 
 export function stripReferenceMetadata(text: string): string {
@@ -24,9 +27,11 @@ export function stripReferenceMetadata(text: string): string {
         const fields = splitMetadataFields(content);
         const values = fields.map((field) => field.value.trim());
         const hasSource = values.some((value) => USER_REFERENCE.test(value));
-        const hasUnknownFile = values.some((value) => UNKNOWN_FILENAME.test(value) && !MEDIA_FILENAME.test(value));
-        if (hasSource && !hasUnknownFile) {
-            const retained = fields.filter((field) => !USER_REFERENCE.test(field.value.trim()) && !MEDIA_FILENAME.test(field.value.trim()));
+        if (hasSource) {
+            const retained = fields.filter((field) => {
+                const value = field.value.trim();
+                return !USER_REFERENCE.test(value) && !MEDIA_FILENAME.test(value) && !TRUNCATED_MEDIA_FILENAME.test(value);
+            });
             const next = retained.map((field, position) => `${position ? field.separator : ""}${field.value}`).join("").trim();
             if (next) result += text[index] + next + text[end];
         } else {
