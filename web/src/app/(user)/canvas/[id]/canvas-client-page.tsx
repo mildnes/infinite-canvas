@@ -8,9 +8,9 @@ import { ChevronLeft, ChevronRight, Download, Globe2, Home, ImageIcon, Images, L
 import { saveAs } from "file-saver";
 
 import { deleteCanvasProjects, deleteCanvasTasks } from "@/services/api/canvas-tasks";
-import { batchCanvasImageTaskStatus, createCanvasImageTask, pollCanvasImageTaskStatus, requestImageQuestion, type CanvasImageTask } from "@/services/api/image";
+import { batchCanvasImageTaskStatus, pollCanvasImageTaskStatus, requestImageQuestion, type CanvasImageTask } from "@/services/api/image";
 import { createCanvasAudioTask, pollCanvasAudioTaskStatus, type CanvasAudioTask } from "@/services/api/audio";
-import { createVideoGenerationTask, pollVideoGenerationTaskStatus, VIDEO_POLL_INTERVAL_MS, type VideoResponse } from "@/services/api/video";
+import { pollVideoGenerationTaskStatus, VIDEO_POLL_INTERVAL_MS, type VideoResponse } from "@/services/api/video";
 import { getWorkflowTask, submitWorkflowTask, workflowMediaSource, workflowMediaStorageKey, type WorkflowGenerationTask } from "@/services/api/workflow-generation";
 import type { WorkflowRef } from "@/lib/workflow-channel";
 import { hasImageOutputFormatContext, imageOutputCapabilityForConfig, resolveImageOutputFormat } from "@/lib/image-output-format";
@@ -31,6 +31,7 @@ import { captureVideoFrame, type VideoFramePosition } from "../utils/canvas-vide
 import { PANORAMA_IMAGE_SIZE, PANORAMA_NODE_SIZE, buildPanoramaPrompt, isCanvasImageNodeType, isPanoramaNodeType } from "../utils/canvas-panorama";
 import { canUploadCanvasMediaToServer, nodeNeedsCloudUpload, repairCanvasProjectMedia, uploadCanvasNodeToCloud } from "../utils/canvas-media-persistence";
 import { applyCameraPrompt } from "../utils/canvas-camera";
+import { canvasMediaRequestPrompt, submitCanvasImageRequest, submitCanvasVideoRequest } from "../utils/canvas-media-requests";
 import { GROUP_PADDING, findContainingGroupId, findGroupDropTarget, getNodeBounds, snapNodesIntoGroup } from "../utils/canvas-group";
 import { App, Button, Dropdown, Modal, Slider } from "antd";
 import { isCogVideoX3Model, modelKey, supportsVideoAudioGeneration, supportsVideoFrameReferences } from "@/lib/video-model-capabilities";
@@ -307,6 +308,15 @@ function NodeCreateMenu({
 
 function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const { message } = App.useApp();
+    const canSubmitCanvasMediaRequest = useCallback((mode: "image" | "video", prompt: string) => {
+        try {
+            canvasMediaRequestPrompt(mode, prompt);
+            return true;
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "提示词无效，未提交生成请求");
+            return false;
+        }
+    }, [message]);
     const router = useRouter();
     const containerRef = useRef<HTMLDivElement>(null);
     const imageInputRef = useRef<HTMLInputElement>(null);
@@ -2601,6 +2611,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             }
             const userPrompt = payload.prompt.trim();
             const prompt = `参考图中蓝色高亮覆盖区域是需要修改的位置，蓝色只是编辑标记，不要保留在最终图像中。只修改蓝色高亮区域，其他区域的构图、人物、文字、光影和风格保持不变。修改要求：${userPrompt}`;
+            if (!canSubmitCanvasMediaRequest("image", prompt)) return;
             const childId = nanoid();
             const clientTaskId = `client_image_task_${childId}`;
             const markedReference = { id: `${node.id}-marked`, name: `image-${node.id}-marked.png`, type: "image/png", dataUrl: payload.markedDataUrl };
@@ -2622,7 +2633,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             setSelectedConnectionId(null);
             setDialogNodeId(childId);
             try {
-                const task = await createCanvasImageTask(generationConfig, prompt, [markedReference], { nodeId: childId, sourceId: projectId, clientTaskId });
+                const task = await submitCanvasImageRequest(generationConfig, prompt, [markedReference], { nodeId: childId, sourceId: projectId, clientTaskId });
                 setNodes((prev) => applyCanvasImageTaskUpdate(prev, childId, task, childNode.metadata?.startedAt || Date.now(), { width: node.width, height: node.height }));
                 setConnections((prev) => applyCanvasImageTaskConnections(prev, childId, task));
             } catch (error) {
@@ -2633,7 +2644,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, isAiConfigReady, message, openConfigDialog, projectId, resolveCanvasImageOutputFormat],
+        [canSubmitCanvasMediaRequest, effectiveConfig, isAiConfigReady, message, openConfigDialog, projectId, resolveCanvasImageOutputFormat],
     );
 
     const upscaleImageNode = useCallback(async (node: CanvasNodeData, params: CanvasImageUpscaleParams) => {
@@ -2680,6 +2691,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             const imageConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
             const title = buildAngleLabel(params);
             const prompt = buildAnglePrompt(params);
+            if (!canSubmitCanvasMediaRequest("image", prompt)) return;
             const referenceImages = [{ id: node.id, name: `image-${node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey }];
             const generationMetadata = buildImageGenerationMetadata("edit", generationConfig, 1, referenceImages);
             const clientTaskId = `client_image_task_${childId}`;
@@ -2702,7 +2714,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             setSelectedNodeIds(new Set([childId]));
             setDialogNodeId(childId);
             try {
-                const task = await createCanvasImageTask(generationConfig, prompt, referenceImages, { nodeId: childId, sourceId: projectId, clientTaskId });
+                const task = await submitCanvasImageRequest(generationConfig, prompt, referenceImages, { nodeId: childId, sourceId: projectId, clientTaskId });
                 setNodes((prev) => applyCanvasImageTaskUpdate(prev, childId, task, startedAt, { width: imageConfig.width, height: imageConfig.height }));
                 setConnections((prev) => applyCanvasImageTaskConnections(prev, childId, task));
             } catch (error) {
@@ -2712,7 +2724,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, message, openConfigDialog, projectId, resolveCanvasImageOutputFormat],
+        [canSubmitCanvasMediaRequest, effectiveConfig, message, openConfigDialog, projectId, resolveCanvasImageOutputFormat],
     );
 
     const handleFontSizeChange = useCallback((nodeId: string, fontSize: number) => {
@@ -2915,9 +2927,16 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             );
             const effectivePrompt = generationContext.prompt.trim();
             const requestPrompt =
-                mode === "video" || (mode === "image" && !isPanoramaNodeType(sourceNode?.type))
+                mode === "image" && isPanoramaNodeType(sourceNode?.type)
+                    ? buildPanoramaPrompt(effectivePrompt, generationContext.referenceImages.length > 0 || Boolean(sourceNode?.metadata?.content))
+                    : mode === "video" || mode === "image"
                     ? applyCameraPrompt(effectivePrompt, sourceNode?.metadata?.cameraControl)
                     : effectivePrompt;
+            // 清洗最终请求副本并在任何 loading 写入前校验；保存仍使用原提示词。
+            if (!workflowRef && (mode === "image" || mode === "video") && !canSubmitCanvasMediaRequest(mode, requestPrompt)) {
+                setRunningNodeId(null);
+                return;
+            }
             const markSourceStatus = !isCanvasImageNodeType(sourceNode?.type) && !editingTextNode;
             const statusPrompt = sourceNode?.type === CanvasNodeType.Config ? effectivePrompt : prompt;
             if (!effectivePrompt && (mode === "text" || (mode === "audio" && !workflowRef))) {
@@ -2935,7 +2954,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         ? [{ id: sourceNode.id, name: `image-${sourceNode.id}.png`, type: sourceNode.metadata.mimeType || "image/png", dataUrl: sourceNode.metadata.content, storageKey: sourceNode.metadata.storageKey }]
                         : [];
                     const referenceImages = [...generationContext.referenceImages, ...sourceReference];
-                    const panoramaPrompt = buildPanoramaPrompt(effectivePrompt, referenceImages.length > 0);
+                    const panoramaPrompt = requestPrompt;
                     const panoramaGenerationConfig = { ...generationConfig, size: PANORAMA_IMAGE_SIZE };
                     const count = getGenerationCount(panoramaGenerationConfig.count);
                     const isEmptyPanoramaNode = !sourceNode?.metadata?.content;
@@ -3031,7 +3050,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                             try {
                                 const task = workflowRef
                                     ? await workflowImageTask(await submitCanvasWorkflowTask(workflowRef, panoramaGenerationConfig, "image", panoramaPrompt, referenceImages, [], [], targetId, projectId, targetTaskIds[targetId]))
-                                    : await createCanvasImageTask({ ...panoramaGenerationConfig, count: "1", quality: panoramaGenerationConfig.quality === "auto" ? "medium" : panoramaGenerationConfig.quality }, panoramaPrompt, referenceImages, { nodeId: targetId, sourceId: projectId, clientTaskId: targetTaskIds[targetId] });
+                                    : await submitCanvasImageRequest({ ...panoramaGenerationConfig, count: "1", quality: panoramaGenerationConfig.quality === "auto" ? "medium" : panoramaGenerationConfig.quality }, panoramaPrompt, referenceImages, { nodeId: targetId, sourceId: projectId, clientTaskId: targetTaskIds[targetId] });
                                 if (task.image_url || task.url) {
                                     setNodes((prev) => {
                                         const root = prev.find((node) => node.id === rootId);
@@ -3189,7 +3208,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                             try {
                                 const task = workflowRef
                                     ? await workflowImageTask(await submitCanvasWorkflowTask(workflowRef, generationConfig, "image", requestPrompt, referenceImages, [], [], targetId, projectId, targetTaskIds[targetId]))
-                                    : await createCanvasImageTask({ ...generationConfig, count: "1" }, requestPrompt, referenceImages, { nodeId: targetId, sourceId: projectId, clientTaskId: targetTaskIds[targetId] });
+                                    : await submitCanvasImageRequest({ ...generationConfig, count: "1" }, requestPrompt, referenceImages, { nodeId: targetId, sourceId: projectId, clientTaskId: targetTaskIds[targetId] });
                                 if (task.image_url || task.url) {
                                     setNodes((prev) => {
                                         const root = prev.find((node) => node.id === rootId);
@@ -3268,7 +3287,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     if (!isEmptyVideoNode) setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: nodeId, toNodeId: videoId }]);
                     const videoTask = workflowRef
                         ? await workflowVideoTask(await submitCanvasWorkflowTask(workflowRef, videoGenerationConfig, "video", requestPrompt, [firstFrame, ...videoReferenceImages, lastFrame].filter((image): image is ReferenceImage => Boolean(image)), generationContext.referenceVideos, generationContext.referenceAudios, videoId, projectId, clientTaskId))
-                        : (await createVideoGenerationTask(videoGenerationConfig, requestPrompt, { references: videoReferenceImages, firstFrame, lastFrame, videoReferences: generationContext.referenceVideos, audioReferences: generationContext.referenceAudios }, undefined, { clientTaskId, source: "canvas", sourceId: videoId })).task;
+                        : (await submitCanvasVideoRequest(videoGenerationConfig, requestPrompt, { references: videoReferenceImages, firstFrame, lastFrame, videoReferences: generationContext.referenceVideos, audioReferences: generationContext.referenceAudios }, undefined, { clientTaskId, source: "canvas", sourceId: videoId })).task;
                     setNodes((prev) => applyCanvasVideoTaskUpdate(prev, videoId, videoTask, videoGenerationConfig, generationStartedAt, spec));
                     return;
                 }
@@ -3357,7 +3376,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, message, openConfigDialog, resolveCanvasImageOutputFormat],
+        [canSubmitCanvasMediaRequest, effectiveConfig, message, openConfigDialog, resolveCanvasImageOutputFormat],
     );
 
     const getCanvasAgentContext = useCallback(
@@ -3874,6 +3893,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             const context = hasSavedImageMetadata ? null : await hydrateNodeGenerationContext(buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || ""));
             const prompt = (isPanorama ? savedImageMetadata?.panoramaFinalPrompt || "" : savedImageMetadata?.prompt || context?.prompt || "").trim();
             const requestPrompt = isPanorama ? prompt : applyCameraPrompt(prompt, savedImageMetadata?.cameraControl || node.metadata?.cameraControl);
+            if (!retryWorkflowRef && (isCanvasImageNodeType(node.type) || node.type === CanvasNodeType.Video) && !canSubmitCanvasMediaRequest(node.type === CanvasNodeType.Video ? "video" : "image", requestPrompt)) return;
             if (!prompt && !retryWorkflowRef) {
                 message.warning("找不到提示词，无法重试");
                 return;
@@ -3922,7 +3942,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     const references = frameReferencesEnabled ? retryImages : [...retryImages, ...[context?.firstFrame, context?.lastFrame].filter((image): image is ReferenceImage => Boolean(image))];
                     const task = retryWorkflowRef
                         ? await workflowVideoTask(await submitCanvasWorkflowTask(retryWorkflowRef, videoGenerationConfig, "video", requestPrompt, [firstFrame, ...references, lastFrame].filter((image): image is ReferenceImage => Boolean(image)), context?.referenceVideos || [], context?.referenceAudios || [], node.id, projectId, retryVideoTaskId))
-                        : (await createVideoGenerationTask(videoGenerationConfig, requestPrompt, { references, firstFrame, lastFrame, videoReferences: context?.referenceVideos || [], audioReferences: context?.referenceAudios || [] }, undefined, { clientTaskId: retryVideoTaskId, source: "canvas", sourceId: node.id })).task;
+                        : (await submitCanvasVideoRequest(videoGenerationConfig, requestPrompt, { references, firstFrame, lastFrame, videoReferences: context?.referenceVideos || [], audioReferences: context?.referenceAudios || [] }, undefined, { clientTaskId: retryVideoTaskId, source: "canvas", sourceId: node.id })).task;
                     setNodes((prev) => applyCanvasVideoTaskUpdate(prev, node.id, task, videoGenerationConfig, retryStartedAt, { width: node.width, height: node.height }));
                     return;
                 }
@@ -3938,7 +3958,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
                 const task = retryWorkflowRef
                     ? await workflowImageTask(await submitCanvasWorkflowTask(retryWorkflowRef, generationConfig, "image", requestPrompt, useReferenceImages ? retryImages : [], [], [], retryTargetId, projectId, retryImageTaskId))
-                    : await createCanvasImageTask({ ...generationConfig, quality: isPanorama && generationConfig.quality === "auto" ? "medium" : generationConfig.quality }, requestPrompt, useReferenceImages ? retryImages : [], { nodeId: node.id, sourceId: projectId, clientTaskId: retryImageTaskId });
+                    : await submitCanvasImageRequest({ ...generationConfig, quality: isPanorama && generationConfig.quality === "auto" ? "medium" : generationConfig.quality }, requestPrompt, useReferenceImages ? retryImages : [], { nodeId: node.id, sourceId: projectId, clientTaskId: retryImageTaskId });
                 const generationMetadata = savedImageMetadata?.generationType
                     ? { generationType: savedImageMetadata.generationType, model: generationConfig.model, channelId: generationConfig.imageChannelId || generationConfig.activeChannelId, size: generationConfig.size, quality: generationConfig.quality, imageOutputFormat: generationConfig.imageOutputFormat || "auto", count: savedImageMetadata.count || 1, references: savedImageMetadata.references }
                     : buildImageGenerationMetadata(useReferenceImages ? "edit" : "generation", generationConfig, 1, retryImages);
@@ -3978,7 +3998,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, message, openConfigDialog, projectId, resolveCanvasImageOutputFormat],
+        [canSubmitCanvasMediaRequest, effectiveConfig, message, openConfigDialog, projectId, resolveCanvasImageOutputFormat],
     );
 
     const generateImageFromTextNode = useCallback(
@@ -5855,6 +5875,8 @@ function canvasTaskFailed(status?: string) {
 async function submitCanvasWorkflowTask(ref: WorkflowRef, config: AiConfig, mode: "image" | "video" | "audio", prompt: string, images: ReferenceImage[], videos: ReferenceVideo[], audios: ReferenceAudio[], nodeId: string, projectId: string, clientTaskId: string) {
     const token = useUserStore.getState().token;
     if (!token) throw new Error("工作流生成需要先登录");
+    // 工作流图片／视频只清洗本次提交副本，允许空提示词；音频原文不变。
+    const requestPrompt = canvasMediaRequestPrompt(mode, prompt, true);
     const [referenceImages, referenceVideos, referenceAudios] = await Promise.all([
         Promise.all(images.map((image) => workflowMediaSource(image.dataUrl, image.storageKey))),
         Promise.all(videos.map((video) => workflowMediaSource(video.url, video.storageKey))),
@@ -5868,7 +5890,7 @@ async function submitCanvasWorkflowTask(ref: WorkflowRef, config: AiConfig, mode
     const task = await submitWorkflowTask(token, {
         ref,
         expectedCapability: mode,
-        prompt,
+        prompt: requestPrompt,
         systemPrompt: config.systemPrompt,
         referenceImages,
         referenceVideos,

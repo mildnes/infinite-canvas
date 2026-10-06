@@ -128,7 +128,7 @@ export const CANVAS_AGENT_TOOLS: CanvasAgentToolDefinition[] = [
     defineTool("arrange_nodes", "整理指定节点；不传 nodeIds 时整理当前画布顶层节点。", { nodeIds: STRING_ARRAY }),
     defineTool(
         "generate_image",
-        "调用现有图片任务链路。sourceNodeIds 只放真实直接来源，独立生成必须传空数组；其中图片按数组顺序编号为图片1、图片2。",
+        "调用现有图片任务链路。sourceNodeIds 只放真实直接来源，独立生成必须传空数组；其中图片按数组顺序编号为图片1、图片2。prompt 只使用编号与职责，文件名、用户图片编号及节点 ID 放在回复或备注中。",
         {
             prompt: STRING,
             title: STRING,
@@ -138,10 +138,10 @@ export const CANVAS_AGENT_TOOLS: CanvasAgentToolDefinition[] = [
         },
         ["prompt", "sourceNodeIds"],
     ),
-    defineTool("edit_image", "调用现有图片编辑链路，必须提供至少一个真实图片来源节点；图片按 sourceNodeIds 顺序编号。", { prompt: STRING, title: STRING, sourceNodeIds: STRING_ARRAY, size: STRING, count: { type: "integer", minimum: 1, maximum: 15 } }, ["prompt", "sourceNodeIds"]),
+    defineTool("edit_image", "调用现有图片编辑链路，必须提供至少一个真实图片来源节点；图片按 sourceNodeIds 顺序编号。prompt 只使用编号与职责，文件名、用户图片编号及节点 ID 放在回复或备注中。", { prompt: STRING, title: STRING, sourceNodeIds: STRING_ARRAY, size: STRING, count: { type: "integer", minimum: 1, maximum: 15 } }, ["prompt", "sourceNodeIds"]),
     defineTool(
         "generate_video",
-        "调用现有视频任务链路。sourceNodeIds 只放真实直接来源，独立生成必须传空数组；其中图片、视频、音频分别按各自顺序编号。",
+        "调用现有视频任务链路。sourceNodeIds 只放真实直接来源，独立生成必须传空数组；其中图片、视频、音频分别按各自顺序编号。prompt 只使用编号与职责，文件名、用户媒体编号及节点 ID 放在回复或备注中。",
         {
             prompt: STRING,
             title: STRING,
@@ -251,7 +251,7 @@ export function normalizeCanvasAgentAction(name: unknown, args: unknown, id = na
         case "edit_image": {
             const sourceNodeIds = optionalStringArray(input.sourceNodeIds, "sourceNodeIds");
             normalized = {
-                prompt: stripReferenceMetadata(requiredString(input.prompt, "prompt")),
+                prompt: requiredString(stripReferenceMetadata(requiredString(input.prompt, "prompt")), "prompt"),
                 ...(sourceNodeIds ? { sourceNodeIds } : {}),
                 ...(input.title !== undefined ? { title: optionalString(input.title) } : {}),
                 ...(input.size !== undefined ? { size: optionalString(input.size) } : {}),
@@ -263,7 +263,7 @@ export function normalizeCanvasAgentAction(name: unknown, args: unknown, id = na
         case "generate_video": {
             const sourceNodeIds = optionalStringArray(input.sourceNodeIds, "sourceNodeIds");
             normalized = {
-                prompt: stripReferenceMetadata(requiredString(input.prompt, "prompt")),
+                prompt: requiredString(stripReferenceMetadata(requiredString(input.prompt, "prompt")), "prompt"),
                 ...(sourceNodeIds ? { sourceNodeIds } : {}),
                 ...(input.title !== undefined ? { title: optionalString(input.title) } : {}),
                 ...(input.size !== undefined ? { size: optionalString(input.size) } : {}),

@@ -3,6 +3,20 @@ import test from "node:test";
 
 import { CANVAS_AGENT_SKILL_FILE_TOOL, CANVAS_AGENT_TOOLS, normalizeCanvasAgentAction, parseCanvasAgentJson, userLikelyRequestedCanvasAction } from "./canvas-agent-tools.ts";
 
+test("Agent 图片、编辑、视频工具保留职责和来源顺序，并拒绝清洗后空值", () => {
+    for (const name of ["generate_image", "edit_image", "generate_video"]) {
+        const action = normalizeCanvasAgentAction(name, { prompt: "图片1（用户图片4，左侧Logo，demo(1).png）保持不变", sourceNodeIds: ["right", "left"] });
+        assert.equal(action.arguments.prompt, "图片1（左侧Logo）保持不变");
+        assert.deepEqual(action.arguments.sourceNodeIds, ["right", "left"]);
+        assert.throws(() => normalizeCanvasAgentAction(name, { prompt: "（用户图片4，demo.png）", sourceNodeIds: ["source"] }), /prompt/);
+    }
+});
+
+test("Agent 音频朗读保留溯源标注原文", () => {
+    const prompt = "请朗读 图片1（用户图片4，demo.png）";
+    assert.equal(normalizeCanvasAgentAction("generate_audio", { prompt, sourceNodeIds: [] }).arguments.prompt, prompt);
+});
+
 test("定义节点查询和系统 Skill 文件工具", () => {
     assert.ok(CANVAS_AGENT_TOOLS.some((tool) => tool.function.name === "query_canvas_nodes"));
     assert.equal(CANVAS_AGENT_SKILL_FILE_TOOL.function.name, "read_skill_file");
