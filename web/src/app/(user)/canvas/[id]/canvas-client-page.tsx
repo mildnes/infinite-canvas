@@ -1,6 +1,6 @@
 "use client";
 
-import { previewSrcFor, loadOriginalImage } from "../utils/canvas-image-preview";
+import { previewSrcFor, loadOriginalImage, previewContentHit } from "../utils/canvas-image-preview";
 import { backfillStoragePreviewFromOriginal } from "@/services/storage-preview-client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -4934,35 +4934,43 @@ function FullscreenPreview({ src, storageKey, alt, isVideo, isPanorama, proxyGen
                     </div>
                 </div>
             ) : (
-                <img
-                    ref={imgRef}
-                    src={progressive && originalStatus !== "ready" && previewFailed !== src ? previewSrc : src}
-                    onError={(event) => {
-                        const token = useUserStore.getState().token;
-                        if (token && /^server:[A-Za-z0-9_-]+$/.test(storageKey || "") && progressive && event.currentTarget.getAttribute("src") === previewSrc) previewMiss.current = { src, storageKey, token };
-                        if (progressive && originalStatus !== "ready") setPreviewFailed(src);
-                    }}
-                    onLoad={(event) => {
-                        const miss = previewMiss.current;
-                        const image = event.currentTarget;
-                        if (!miss || miss.src !== src || miss.storageKey !== storageKey || image.getAttribute("src") !== src) return;
-                        previewMiss.current = null;
-                        backfillStoragePreviewFromOriginal(src, storageKey, miss.token, { width: image.naturalWidth, height: image.naturalHeight });
-                    }}
-                    decoding="async"
-                    alt={alt}
-                    draggable={false}
-                    onPointerDown={handlePointerDown}
-                    onPointerMove={handlePointerMove}
-                    onPointerUp={handlePointerUp}
-                    className={`${progressive ? "h-[85vh] w-[85vw]" : "max-h-[85vh] max-w-[85vw]"} object-contain rounded-2xl shadow-[0_24px_72px_rgba(0,0,0,0.4)] ${zoom > 1 ? "cursor-grab active:cursor-grabbing" : "cursor-default"}`}
-                    onClick={(e) => e.stopPropagation()}
-                    onDragStart={(e) => e.preventDefault()}
-                    style={{
-                        transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom})`,
-                        transition: isDragging ? "none" : "transform 0.12s cubic-bezier(0.25, 0.46, 0.45, 0.94)",
-                    }}
-                />
+                <>
+                    <img
+                        ref={imgRef}
+                        src={progressive && originalStatus !== "ready" && previewFailed !== src ? previewSrc : src}
+                        onError={(event) => {
+                            const token = useUserStore.getState().token;
+                            if (token && /^server:[A-Za-z0-9_-]+$/.test(storageKey || "") && progressive && event.currentTarget.getAttribute("src") === previewSrc) previewMiss.current = { src, storageKey, token };
+                            if (progressive && originalStatus !== "ready") setPreviewFailed(src);
+                        }}
+                        onLoad={(event) => {
+                            const miss = previewMiss.current;
+                            const image = event.currentTarget;
+                            if (!miss || miss.src !== src || miss.storageKey !== storageKey || image.getAttribute("src") !== src) return;
+                            previewMiss.current = null;
+                            backfillStoragePreviewFromOriginal(src, storageKey, miss.token, { width: image.naturalWidth, height: image.naturalHeight });
+                        }}
+                        decoding="async"
+                        alt={alt}
+                        draggable={false}
+                        onPointerDown={handlePointerDown}
+                        onPointerMove={handlePointerMove}
+                        onPointerUp={handlePointerUp}
+                        className={`${progressive ? "h-[85vh] w-[85vw]" : "max-h-[85vh] max-w-[85vw]"} object-contain rounded-2xl shadow-[0_24px_72px_rgba(0,0,0,0.4)] ${zoom > 1 ? "cursor-grab active:cursor-grabbing" : "cursor-default"}`}
+                        onClick={(event) => {
+                            const image = event.currentTarget;
+                            if (previewContentHit(image.getBoundingClientRect(), image.naturalWidth, image.naturalHeight, event.clientX, event.clientY, zoom)) event.stopPropagation();
+                        }}
+                        onDragStart={(e) => e.preventDefault()}
+                        style={{
+                            transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom})`,
+                            transition: isDragging ? "none" : "transform 0.12s cubic-bezier(0.25, 0.46, 0.45, 0.94)",
+                        }}
+                    />
+                    <button type="button" aria-label="关闭预览" onClick={(event) => { event.stopPropagation(); onClose(); }} className="absolute right-4 top-4 z-20 flex size-9 items-center justify-center rounded-lg text-white transition-colors hover:bg-black/25">
+                        <X className="size-6" />
+                    </button>
+                </>
             )}
         </div>
     );

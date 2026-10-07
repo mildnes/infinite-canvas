@@ -14,6 +14,17 @@ export function fallbackCanvasPreview(image: HTMLImageElement, original: string)
     if (image.getAttribute("src") !== original) image.setAttribute("src", original);
 }
 
+// Use the rendered rectangle so object-contain letterbox clicks can reach the backdrop.
+export function previewContentHit(rect: Pick<DOMRect, "left" | "top" | "width" | "height">, naturalWidth: number, naturalHeight: number, clientX: number, clientY: number, zoom = 1) {
+    if (zoom > 1 || naturalWidth <= 0 || naturalHeight <= 0 || rect.width <= 0 || rect.height <= 0) return true;
+    const scale = Math.min(rect.width / naturalWidth, rect.height / naturalHeight);
+    const width = naturalWidth * scale;
+    const height = naturalHeight * scale;
+    const left = rect.left + (rect.width - width) / 2;
+    const top = rect.top + (rect.height - height) / 2;
+    return clientX >= left && clientX <= left + width && clientY >= top && clientY <= top + height;
+}
+
 type OriginalLoader = Pick<HTMLImageElement, "src" | "onload" | "onerror">;
 
 // The caller cancels on close/source change; late loads cannot affect another node.
