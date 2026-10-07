@@ -4,9 +4,9 @@ import { JSDOM } from "jsdom";
 import { previewSrcFor, fallbackCanvasPreview, loadOriginalImage } from "./canvas-image-preview.ts";
 
 test("canvas display maps stable references without changing original URLs", () => {
-    assert.equal(previewSrcFor("/api/files/abc-123/content"), "/api/files/abc-123/preview");
-    assert.equal(previewSrcFor("https://example.com/api/files/abc_123/content"), "https://example.com/api/files/abc_123/preview");
-    assert.equal(previewSrcFor("blob:local", "server:abc-123"), "/api/files/abc-123/preview");
+    assert.equal(previewSrcFor("/api/files/abc-123/content"), "/api/files/abc-123/preview?v=2");
+    assert.equal(previewSrcFor("https://example.com/api/files/abc_123/content"), "https://example.com/api/files/abc_123/preview?v=2");
+    assert.equal(previewSrcFor("blob:local", "server:abc-123"), "/api/files/abc-123/preview?v=2");
     for (const src of ["data:image/png;base64,abc", "blob:local", "https://image.example/a.png", "/api/proxy-image?url=https://example.com/a.png"]) {
         assert.equal(previewSrcFor(src), src);
     }

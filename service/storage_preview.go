@@ -10,12 +10,14 @@ import (
 	"image/color"
 	"image/draw"
 	"image/jpeg"
+	"image/png"
 	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/tigerowo/infinite-canvas/model"
@@ -28,11 +30,12 @@ import (
 )
 
 const StoragePreviewMaxBytes = 2 << 20
+const StoragePreviewPNGMaxBytes = 4 << 20
 const storagePreviewSide = 1024
 const storagePreviewSourceLimit = 128 << 20
 
 var ErrStoragePreviewForbidden = errors.New("无权提交该对象预览")
-var ErrStoragePreviewInvalid = errors.New("预览必须为不超过 2 MiB、最长边不超过 1024 的完整 JPEG")
+var ErrStoragePreviewInvalid = errors.New("预览必须为完整 JPEG（最多 2 MiB）或 PNG（最多 4 MiB），最长边不超过 1024")
 
 var previewID = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 var previewWorkers = make(chan struct{}, 2)
@@ -44,11 +47,25 @@ var previewQueue = struct {
 }{pending: make(map[string]bool), failed: make(map[string]time.Time)}
 
 // Previews are disposable display caches, never original-media copies.
-func StoragePreviewPath(id string) string {
-	if !previewID.MatchString(id) {
+func StoragePreviewPath(id string, format string) string {
+	if !previewID.MatchString(id) || (format != "jpeg" && format != "png") {
 		return ""
 	}
-	return filepath.Join(GeneratedMediaDir(), "previews", id+".jpg")
+	ext := ".jpg"
+	if format == "png" {
+		ext = ".png"
+	}
+	return filepath.Join(GeneratedMediaDir(), "previews", id+ext)
+}
+
+func ExistingStoragePreviewPath(id string) string {
+	for _, format := range []string{"png", "jpeg"} {
+		name := StoragePreviewPath(id, format)
+		if info, err := os.Stat(name); err == nil && info.Mode().IsRegular() {
+			return name
+		}
+	}
+	return ""
 }
 
 func canWriteStoragePreview(object model.StorageObject, userID string) bool {
@@ -78,11 +95,10 @@ func OpenStoragePreview(id string) (*os.File, error) {
 	if object.DeletedAt != "" || !strings.HasPrefix(object.MimeType, "image/") {
 		return nil, os.ErrNotExist
 	}
-	name := StoragePreviewPath(id)
-	if name == "" {
+	if !previewID.MatchString(id) {
 		return nil, os.ErrNotExist
 	}
-	file, err := os.Open(name)
+	file, err := os.Open(ExistingStoragePreviewPath(id))
 	if err != nil {
 		QueueStoragePreview(id, 0)
 	}
@@ -90,30 +106,48 @@ func OpenStoragePreview(id string) (*os.File, error) {
 }
 
 func validateStoragePreview(data []byte) error {
-	if len(data) == 0 || len(data) > StoragePreviewMaxBytes {
-		return errors.New("预览必须为不超过 2 MiB 的 JPEG")
+	if len(data) == 0 || len(data) > StoragePreviewPNGMaxBytes {
+		return ErrStoragePreviewInvalid
 	}
-	meta, err := jpeg.DecodeConfig(bytes.NewReader(data))
+	meta, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil || meta.Width < 1 || meta.Height < 1 || meta.Width > storagePreviewSide || meta.Height > storagePreviewSide {
-		return errors.New("预览必须为最长边不超过 1024 的 JPEG")
+		return ErrStoragePreviewInvalid
 	}
-	if _, err := jpeg.Decode(bytes.NewReader(data)); err != nil {
-		return errors.New("JPEG 预览不完整")
+	if (format != "jpeg" && format != "png") || (format == "jpeg" && len(data) > StoragePreviewMaxBytes) {
+		return ErrStoragePreviewInvalid
+	}
+	if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
+		return ErrStoragePreviewInvalid
 	}
 	return nil
 }
 
 // A hard link publishes the complete file atomically; first valid write wins.
 func writeStoragePreview(id string, data []byte) error {
-	name := StoragePreviewPath(id)
-	if name == "" {
-		return errors.New("预览对象标识无效")
-	}
 	if err := validateStoragePreview(data); err != nil {
 		return err
 	}
+	_, format, _ := image.DecodeConfig(bytes.NewReader(data))
+	name := StoragePreviewPath(id, format)
+	if name == "" {
+		return errors.New("预览对象标识无效")
+	}
 	if err := os.MkdirAll(filepath.Dir(name), 0700); err != nil {
 		return err
+	}
+	// One stable lock covers both formats, including concurrent server/CLI writers.
+	// Leave the lock inode in place so waiting writers cannot lock different files.
+	lock, err := os.OpenFile(filepath.Join(filepath.Dir(name), "."+id+".lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	if ExistingStoragePreviewPath(id) != "" {
+		return nil
 	}
 	file, err := os.CreateTemp(filepath.Dir(name), ".preview-*")
 	if err != nil {
@@ -159,20 +193,49 @@ func encodeStoragePreview(data []byte) ([]byte, error) {
 			height = storagePreviewSide
 		}
 	}
-	target := image.NewRGBA(image.Rect(0, 0, width, height))
-	draw.Draw(target, target.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
-	xdraw.ApproxBiLinear.Scale(target, target.Bounds(), source, source.Bounds(), draw.Over, nil)
+	target := image.NewNRGBA(image.Rect(0, 0, width, height))
+	xdraw.ApproxBiLinear.Scale(target, target.Bounds(), source, source.Bounds(), draw.Src, nil)
 	var output bytes.Buffer
-	if err := jpeg.Encode(&output, target, &jpeg.Options{Quality: 80}); err != nil {
+	if storagePreviewHasAlpha(target) {
+		encoder := png.Encoder{CompressionLevel: png.BestCompression}
+		if err := encoder.Encode(&output, target); err != nil {
+			return nil, err
+		}
+		return output.Bytes(), nil
+	}
+	// Keep the previous JPEG q80/white composition for opaque and near-opaque images.
+	opaque := image.NewRGBA(target.Bounds())
+	draw.Draw(opaque, opaque.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
+	draw.Draw(opaque, opaque.Bounds(), target, target.Bounds().Min, draw.Over)
+	if err := jpeg.Encode(&output, opaque, &jpeg.Options{Quality: 80}); err != nil {
 		return nil, err
 	}
 	return output.Bytes(), nil
 }
 
+func storagePreviewHasAlpha(source image.Image) bool {
+	width, height := source.Bounds().Dx(), source.Bounds().Dy()
+	if width > 64 || height > 64 {
+		if width >= height {
+			height, width = max(1, (height*64+width/2)/width), 64
+		} else {
+			width, height = max(1, (width*64+height/2)/height), 64
+		}
+	}
+	probe := image.NewNRGBA(image.Rect(0, 0, width, height))
+	xdraw.ApproxBiLinear.Scale(probe, probe.Bounds(), source, source.Bounds(), draw.Src, nil)
+	for i := 3; i < len(probe.Pix); i += 4 {
+		if probe.Pix[i] < 250 {
+			return true
+		}
+	}
+	return false
+}
+
 // Delay the fallback after save so a browser holding the original can win.
 // Pending work is bounded, and failed lazy reads cool down for one minute.
 func QueueStoragePreview(id string, delay time.Duration) {
-	if StoragePreviewPath(id) == "" {
+	if !previewID.MatchString(id) {
 		return
 	}
 	previewQueue.Lock()
@@ -229,11 +292,10 @@ func generateStoragePreview(ctx context.Context, id string) (int64, error) {
 	if object.DeletedAt != "" || !strings.HasPrefix(object.MimeType, "image/") {
 		return 0, errors.New("对象已删除或不是图片")
 	}
-	name := StoragePreviewPath(id)
-	if name == "" {
+	if !previewID.MatchString(id) {
 		return 0, errors.New("预览对象标识无效")
 	}
-	if info, err := os.Stat(name); err == nil {
+	if info, err := os.Stat(ExistingStoragePreviewPath(id)); err == nil {
 		return info.Size(), nil
 	}
 	var reader io.ReadCloser
@@ -279,7 +341,7 @@ func generateStoragePreview(ctx context.Context, id string) (int64, error) {
 	if err := writeStoragePreview(id, preview); err != nil {
 		return 0, err
 	}
-	info, err := os.Stat(name)
+	info, err := os.Stat(ExistingStoragePreviewPath(id))
 	if err != nil {
 		return 0, err
 	}

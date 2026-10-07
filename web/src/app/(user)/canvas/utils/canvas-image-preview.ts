@@ -4,9 +4,10 @@ export const CANVAS_IMAGE_PREVIEWS_ENABLED = true;
 export function previewSrcFor(original: string, storageKey?: string) {
     if (!CANVAS_IMAGE_PREVIEWS_ENABLED) return original;
     const match = original.match(/^(https?:\/\/[^/]+)?\/api\/(?:v1\/)?files\/([A-Za-z0-9_-]+)\/content(?:[?#].*)?$/);
-    if (match) return `${match[1] || ""}/api/files/${match[2]}/preview`;
+    // Bypass previously issued one-year immutable previews; node URLs stay original.
+    if (match) return `${match[1] || ""}/api/files/${match[2]}/preview?v=2`;
     const id = storageKey?.match(/^server:([A-Za-z0-9_-]+)$/)?.[1];
-    return id ? `/api/files/${id}/preview` : original;
+    return id ? `/api/files/${id}/preview?v=2` : original;
 }
 
 export function fallbackCanvasPreview(image: HTMLImageElement, original: string) {

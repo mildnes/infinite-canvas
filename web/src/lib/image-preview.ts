@@ -9,6 +9,19 @@ export function previewDimensions(width: number, height: number) {
     return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
 }
 
+// Probe decoded pixels after resizing, independent of the source MIME/format.
+function hasPreviewTransparency(canvas: OffscreenCanvas | HTMLCanvasElement) {
+    const scale = Math.min(1, 64 / Math.max(canvas.width, canvas.height));
+    const size = { width: Math.max(1, Math.round(canvas.width * scale)), height: Math.max(1, Math.round(canvas.height * scale)) };
+    const probe = typeof OffscreenCanvas === "function" ? new OffscreenCanvas(size.width, size.height) : Object.assign(document.createElement("canvas"), size);
+    const context = probe.getContext("2d") as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
+    if (!context) throw new Error("图片预览透明检测不可用");
+    context.drawImage(canvas, 0, 0, size.width, size.height);
+    const { data } = context.getImageData(0, 0, size.width, size.height);
+    for (let i = 3; i < data.length; i += 4) if (data[i] < 250) return true;
+    return false;
+}
+
 async function encodePreview(blob: Blob, sourceSize?: ImagePreviewSourceSize): Promise<Blob> {
     let bitmap: ImageBitmap | undefined;
     let element: HTMLImageElement | undefined;
@@ -42,11 +55,16 @@ async function encodePreview(blob: Blob, sourceSize?: ImagePreviewSourceSize): P
         const canvas = typeof OffscreenCanvas === "function" ? new OffscreenCanvas(size.width, size.height) : Object.assign(document.createElement("canvas"), size);
         const context = canvas.getContext("2d") as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
         if (!context) throw new Error("图片预览画布不可用");
-        context.fillStyle = "#fff";
-        context.fillRect(0, 0, size.width, size.height);
         context.drawImage(source, 0, 0, size.width, size.height);
-        if ("convertToBlob" in canvas) return await canvas.convertToBlob({ type: "image/jpeg", quality: 0.8 });
-        return await new Promise<Blob>((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error("图片预览编码失败")), "image/jpeg", 0.8));
+        const transparent = hasPreviewTransparency(canvas);
+        if (!transparent) {
+            context.globalCompositeOperation = "destination-over";
+            context.fillStyle = "#fff";
+            context.fillRect(0, 0, size.width, size.height);
+        }
+        const type = transparent ? "image/png" : "image/jpeg";
+        if ("convertToBlob" in canvas) return await canvas.convertToBlob({ type, quality: 0.8 });
+        return await new Promise<Blob>((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error("图片预览编码失败")), type, 0.8));
     } finally {
         bitmap?.close();
         if (url) URL.revokeObjectURL(url);

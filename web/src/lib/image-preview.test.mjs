@@ -13,7 +13,7 @@ test("audio/video and unavailable browser preview are best effort without downlo
     assert.equal(await prepareImagePreview(new Blob(["png"], { type: "image/png" })), null);
 });
 
-test("held PNG bytes produce an opaque JPEG preview, deduplicated without mutating original", async (t) => {
+test("opaque decoded PNG pixels retain JPEG q80, deduplicated without mutating original", async (t) => {
     const previous = { document: globalThis.document, createImageBitmap: globalThis.createImageBitmap, OffscreenCanvas: globalThis.OffscreenCanvas };
     t.after(() => Object.assign(globalThis, previous));
     const draws = [];
@@ -23,7 +23,7 @@ test("held PNG bytes produce an opaque JPEG preview, deduplicated without mutati
     globalThis.createImageBitmap = async (_blob, options) => { decoded++; bitmapOptions = options; return { width: 1024, height: 572, close() { closed++; } }; };
     globalThis.OffscreenCanvas = class {
         constructor(width, height) { this.width = width; this.height = height; }
-        getContext() { return { fillStyle: "", fillRect(...args) { draws.push(["white", this.fillStyle, ...args]); }, drawImage(...args) { draws.push(["image", ...args.slice(1)]); } }; }
+        getContext() { return { fillStyle: "", fillRect(...args) { draws.push(["white", this.fillStyle, this.globalCompositeOperation, ...args]); }, drawImage(...args) { draws.push(["image", ...args.slice(1)]); }, getImageData: () => ({ data: new Uint8ClampedArray([255, 255, 255, 255]) }) }; }
         async convertToBlob(options) { draws.push(["encoded", options, this.width, this.height]); return new Blob(["preview"], { type: options.type }); }
     };
     const original = new Blob(["original-PNG"], { type: "image/png" });
@@ -34,8 +34,50 @@ test("held PNG bytes produce an opaque JPEG preview, deduplicated without mutati
     assert.equal(closed, 1);
     assert.deepEqual(bitmapOptions, { resizeWidth: 1024, resizeHeight: 572, resizeQuality: "high" });
     assert.equal(await original.text(), "original-PNG");
-    assert.deepEqual(draws[0], ["white", "#fff", 0, 0, 1024, 572]);
+    assert.deepEqual(draws[0], ["image", 0, 0, 1024, 572]);
+    assert.deepEqual(draws.find(row => row[0] === "white"), ["white", "#fff", "destination-over", 0, 0, 1024, 572]);
     assert.deepEqual(draws.at(-1), ["encoded", { type: "image/jpeg", quality: 0.8 }, 1024, 572]);
+});
+
+test("alpha <250 selects PNG after a <=64 probe, regardless of PNG/WebP/GIF MIME", async (t) => {
+    const previous = { document: globalThis.document, createImageBitmap: globalThis.createImageBitmap, OffscreenCanvas: globalThis.OffscreenCanvas };
+    t.after(() => Object.assign(globalThis, previous));
+    globalThis.document = {};
+    globalThis.createImageBitmap = async () => ({ width: 1024, height: 576, close() {} });
+    for (const mime of ["image/png", "image/webp", "image/gif"]) {
+        for (const alpha of [0, 249, 250, 255]) {
+            const probes = [], fills = [];
+            globalThis.OffscreenCanvas = class {
+                constructor(width, height) { this.width = width; this.height = height; }
+                getContext() { return { drawImage() {}, fillRect: () => fills.push(true), getImageData: (x, y, width, height) => {
+                    probes.push([width, height]);
+                    return { data: new Uint8ClampedArray([255, 255, 255, 255, 255, 255, 255, alpha]) };
+                } }; }
+                async convertToBlob({ type }) { return new Blob(["preview"], { type }); }
+            };
+            const original = new Blob(["original"], { type: mime });
+            const preview = await prepareImagePreview(original);
+            assert.equal(preview.type, alpha < 250 ? "image/png" : "image/jpeg");
+            assert.deepEqual(probes, [[64, 36]]);
+            assert.equal(fills.length, alpha < 250 ? 0 : 1);
+            assert.equal(await original.text(), "original");
+        }
+    }
+});
+
+test("HTML canvas fallback also preserves transparent PNG without a white fill", async (t) => {
+    const previous = { document: globalThis.document, createImageBitmap: globalThis.createImageBitmap, OffscreenCanvas: globalThis.OffscreenCanvas };
+    t.after(() => Object.assign(globalThis, previous));
+    globalThis.createImageBitmap = async () => ({ width: 16, height: 8, close() {} });
+    globalThis.OffscreenCanvas = undefined;
+    const encodes = [], probes = [];
+    globalThis.document = { createElement: () => ({ getContext: () => ({
+        drawImage() {}, fillRect() { assert.fail("transparent preview was flattened"); },
+        getImageData: (x, y, w, h) => { probes.push([w, h]); return { data: new Uint8ClampedArray([255, 255, 255, 0]) }; },
+    }), toBlob(callback, type, quality) { encodes.push([type, quality]); callback(new Blob(["preview"], { type })); } }) };
+    assert.equal((await prepareImagePreview(new Blob(["png"], { type: "image/png" }))).type, "image/png");
+    assert.deepEqual(encodes, [["image/png", 0.8]]);
+    assert.deepEqual(probes, [[16, 8]]);
 });
 
 test("giant decode failure or invalid dimensions skip silently without a full DOM decode", async (t) => {

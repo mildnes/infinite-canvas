@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -24,16 +26,36 @@ func serveFilePreview(w http.ResponseWriter, r *http.Request, file *os.File, ope
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
+		w.Header().Set("Cache-Control", "no-store")
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("Content-Type", "image/jpeg")
-	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	var header [512]byte
+	n, err := file.ReadAt(header[:], 0)
+	if err != nil && err != io.EOF {
+		w.Header().Set("Cache-Control", "no-store")
+		http.NotFound(w, r)
+		return
+	}
+	digest := sha256.New()
+	if _, err := io.Copy(digest, file); err != nil {
+		w.Header().Set("Cache-Control", "no-store")
+		http.NotFound(w, r)
+		return
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		w.Header().Set("Cache-Control", "no-store")
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", http.DetectContentType(header[:n]))
+	w.Header().Set("ETag", fmt.Sprintf(`"%x"`, digest.Sum(nil)))
+	w.Header().Set("Cache-Control", "public, max-age=300, must-revalidate")
 	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 }
 
 func PutFilePreview(w http.ResponseWriter, r *http.Request, id string) {
-	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, service.StoragePreviewMaxBytes))
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, service.StoragePreviewPNGMaxBytes))
 	if err != nil {
 		FailWithStatus(w, http.StatusBadRequest, "预览超过大小限制")
 		return

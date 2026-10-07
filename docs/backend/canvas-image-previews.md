@@ -1,10 +1,12 @@
 # 画布图片预览副本
 
-画布图片节点、引用标签和节点侧栏优先读取轻量 JPEG；全屏先展示预览，再加载原图。预览失败时回退原图，下载、生成参考图、编辑、Agent、导出和上云仍使用原始媒体。生图工作台不使用这条预览链路。
+画布图片节点、引用标签和节点侧栏优先读取轻量预览；透明图片使用保留 alpha 的 PNG，不透明图片使用 JPEG。全屏先展示预览，再加载原图。预览失败时回退原图，下载、生成参考图、编辑、Agent、导出和上云仍使用原始媒体。生图工作台不使用这条预览链路。
 
 ## 存储与生成
 
-预览位于 `GeneratedMediaDir()/previews/<objectId>.jpg`，最长边 1024、JPEG quality 80；透明原图的预览铺白底，原图字节与透明通道不改变。对象 ID 对应不可变媒体，缓存首次有效写入保留，不覆盖已有预览。没有新增数据库字段或云端预览文件。
+预览最长边 1024。客户端与服务端先缩放，再按原比例降采样至最长边 64，检查是否有 `alpha < 250`：有则生成 `previews/<objectId>.png` 并保留透明背景；否则生成 `previews/<objectId>.jpg`，沿用 JPEG quality 80／0.8 与近不透明像素的白底合成。判断基于解码像素，覆盖 PNG、WebP、GIF 等格式，不能按 MIME 推断透明性。服务端 PNG 使用标准库 BestCompression，缩放目标为透明的 NRGBA。
+
+任一扩展名的预览存在时，首次有效写入保留，跨格式不能覆盖。发布沿用原子硬链接；同对象的 `.id.lock` 文件使用 Linux/macOS 文件锁串行化服务端及 CLI 写入，锁文件为空且不删除，避免等待者持有不同锁 inode。移走旧预览后可以重新生成，锁文件无需清除。没有新增依赖、数据库字段或云端预览文件，原图字节不改变。
 
 浏览器上传图片、生成媒体持久化和登录后的 WebDAV 直传注册时，使用已持有的 Blob 在后台生成预览，优先 OffscreenCanvas，兼容普通 Canvas；不会为了制作预览额外下载原图。浏览器最多两个编码任务，失败不影响媒体成功状态。提交绑定捕获的账号 token，账号变化后不提交旧任务；预览操作不回写画布节点。
 
@@ -16,7 +18,7 @@
 
 ## 预览缺失后浏览器补齐
 
-画布主图和全屏图片在预览失败、原图成功加载后，使用图片元素的实际 `naturalWidth/naturalHeight` 请求最长边不超过 1024 的 `createImageBitmap`，再沿用 JPEG 编码和预览 PUT。补齐只接受 `^server:[A-Za-z0-9_-]+$` 存储键及预览失败时捕获的登录 token；没有原图成功加载事件时不执行。已有预览的普通图不会触发补齐，引用标签和侧栏未接入这一步。
+画布主图和全屏图片在预览失败、原图成功加载后，使用图片元素的实际 `naturalWidth/naturalHeight` 请求最长边不超过 1024 的 `createImageBitmap`，再按上述像素检测选择 PNG/JPEG 并提交预览 PUT。补齐只接受 `^server:[A-Za-z0-9_-]+$` 存储键及预览失败时捕获的登录 token；没有原图成功加载事件时不执行。已有预览的普通图不会触发补齐，引用标签和侧栏未接入这一步。
 
 原图读取使用 `cache: "only-if-cached"`、`mode: "same-origin"`，只读取已有 HTTP 缓存；缓存未命中直接跳过，不补发网络下载。这两个选项遵循 [Fetch 缓存模式规范](https://fetch.spec.whatwg.org/#concept-request-cache-mode)。跨源或已被浏览器逐出的缓存可能无法补齐，原图仍按原有路径显示。
 
@@ -28,8 +30,10 @@
 
 | 接口 | 行为 |
 |---|---|
-| `GET/HEAD /api/files/:id/preview` | 对存在且未删除的图片，缓存就绪返回 200、`image/jpeg`，支持条件请求和 Range；使用一年 immutable 缓存。缺失返回真正的 404、`no-store`，异步生成不阻塞响应。 |
-| `PUT /api/v1/files/:id/preview` | Bearer 登录鉴权，只允许对象所有者提交完整 JPEG；最多 2 MiB，宽高各不超过 1024。重复有效提交不覆盖，返回标准成功信封。无权 403、对象不存在 404、格式/体积错误 400。 |
+| `GET/HEAD /api/files/:id/preview` | 对存在且未删除的图片，缓存就绪返回 200，按实际文件嗅探 `image/png` 或 `image/jpeg`；内容 SHA-256 强 ETag，`public, max-age=300, must-revalidate`，支持 304 和 Range。缺失返回真正的 404、`no-store`，异步生成不阻塞响应。 |
+| `PUT /api/v1/files/:id/preview` | Bearer 登录鉴权，只允许对象所有者提交完整 JPEG（最多 2 MiB）或 PNG（最多 4 MiB），宽高各不超过 1024。按内容 DecodeConfig 及完整解码校验，不信任请求 Content-Type；前端请求头使用 Blob 实际 MIME。重复有效提交不覆盖，返回标准成功信封。无权 403、对象不存在 404、格式/体积错误 400。 |
+
+显示 URL 使用 `/api/files/:id/preview?v=2`，绕过此前已进入浏览器的一年 immutable 缓存；仅改变派生显示地址，节点原始引用不变。新 URL 最多五分钟后重新校验，主动刷新时也可进行条件请求；重生成后的内容哈希变化会返回新内容。修改服务端缓存头不能单独使已缓存的旧 URL 立即失效。
 
 读取权限沿用现有公开 `/content` 路由，而非新增私有媒体权限。匿名对象依赖服务端兜底；未注册为对象 ID 的 `server:webdav:` 引用保持原读取。前端仅在展示位置派生 URL，不把 `/preview` 写进 `content`、Agent 原图引用或画板 JSON。
 
@@ -42,7 +46,7 @@ docker compose exec app /app/media-previews -limit 100 -workers 2
 docker compose exec app /app/media-previews -object <OBJECT_ID>
 ```
 
-dry-run 只读数据库、检查现有缓存，不下载原图、不创建目录、不更新数据。报告每个对象的 `candidate/existing/skipped`；按候选每张 300 KiB 给出容量规划估计，实际 JPEG 大小需测量。`estimatedSeconds` 为 null，避免把未知的云读取耗时当作测试结果。
+dry-run 只读数据库、检查两种扩展名的现有缓存，不下载原图、不创建目录、不更新数据。报告每个对象的 `candidate/existing/skipped` 和 `format`（`jpeg/png/unknown`），汇总已知格式数量。按候选每张 300 KiB 给出初步容量规划估计，同时 `maxPreviewBytes` 按候选每张 4 MiB 给出接收上限；不能把 JPEG 估计当作透明 PNG 的实际大小。未解码的候选格式为 unknown；`estimatedSeconds` 为 null，实际体积和耗时需测量。
 
 先显式生成一个小批次并检查实际 `durationMs` 和 `previewBytes`，再按实际吞吐规划其余批次：
 
@@ -52,6 +56,19 @@ docker compose exec app /app/media-previews -apply -limit 100 -workers 2 -after 
 ```
 
 两种模式都使用只读数据库连接，apply 仅创建缓存。按汇总 `nextCursor` 续跑，直到 `scanned=0`。单对象失败会继续处理其他对象并返回退出码 1；失败对象需用 `-object` 单独重试或重跑本批。中断时游标只推进到连续完成的行，重跑已有缓存会跳过。此工具不执行迁移、媒体删除或 VACUUM，也不调用收费 AI 接口。
+
+### 已确认白底空白预览的定点修复
+
+部署端报告全库 2560 个图片对象中有 290 个带 alpha，已确认四个白字/白 logo 空白预览。此为部署端证据，本机未重新测量。部署新代码后，仅核对并人工移走下列对象在 `generated-media/previews/` 内的旧 `.jpg`（建议保留到独立缓存备份目录）；不要移动同名原图、清空预览目录或批量重建其余 290 个对象。随后逐个生成：
+
+```bash
+docker compose exec app /app/media-previews -object e5ccac75-2fdb-41c3-8c63-39996e909ed3 -apply
+docker compose exec app /app/media-previews -object a83e15e0-6559-4bbd-849d-4be3a40c2249 -apply
+docker compose exec app /app/media-previews -object 8c048ada-c3c5-4fe5-84c8-377a55caf81b -apply
+docker compose exec app /app/media-previews -object 9b9a35e5-ea32-4fce-ac73-4b48a9a22a01 -apply
+```
+
+报告应为 `generated`、`format: png`；检查 PNG alpha 通道、近白像素占比与画板白色内容可见性。已有旧 JPG 未移走时仍为 `existing/jpeg`，不会自动替换。用同一 `?v=2` URL 和旧 ETag 强制重新校验，新文件返回 200 与新 ETag，未变化再次请求返回 304；普通刷新最多有五分钟缓存窗口。原图 SHA-256、数据库与云对象保持原状。
 
 ## 部署验收与回滚
 

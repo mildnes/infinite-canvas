@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -55,10 +56,16 @@ func main() {
 			for index := range jobs {
 				jobStarted := time.Now()
 				object := objects[index]
-				report := map[string]any{"objectId": object.ID, "sourceBytes": object.Bytes, "status": "skipped"}
+				report := map[string]any{"objectId": object.ID, "sourceBytes": object.Bytes, "status": "skipped", "format": "unknown"}
 				if len(object.MimeType) >= 6 && object.MimeType[:6] == "image/" {
-					if info, err := os.Stat(service.StoragePreviewPath(object.ID)); err == nil {
-						report["status"], report["previewBytes"] = "existing", info.Size()
+					if name := service.ExistingStoragePreviewPath(object.ID); name != "" {
+						info, err := os.Stat(name)
+						if err != nil {
+							report["status"], report["error"] = "failed", err.Error()
+						} else {
+							report["status"], report["previewBytes"] = "existing", info.Size()
+							report["format"] = previewFormat(name)
+						}
 					} else if !*apply {
 						report["status"], report["estimatedPreviewBytes"] = "candidate", 300<<10
 					} else {
@@ -69,6 +76,7 @@ func main() {
 							report["status"], report["error"] = "failed", err.Error()
 						} else {
 							report["status"], report["previewBytes"] = "generated", bytes
+							report["format"] = previewFormat(service.ExistingStoragePreviewPath(object.ID))
 						}
 					}
 				}
@@ -92,6 +100,7 @@ func main() {
 	encoder := json.NewEncoder(os.Stdout)
 	completed := make([]bool, len(objects))
 	failed, candidates := 0, 0
+	formats := map[string]int{"jpeg": 0, "png": 0}
 	for report := range reports {
 		index := report["index"].(int)
 		completed[index] = true
@@ -102,6 +111,9 @@ func main() {
 		if report["status"] == "candidate" {
 			candidates++
 		}
+		if format := report["format"].(string); format == "jpeg" || format == "png" {
+			formats[format]++
+		}
 		_ = encoder.Encode(report)
 	}
 	cursor := *after
@@ -111,8 +123,18 @@ func main() {
 		}
 		cursor = objects[index].ID
 	}
-	_ = encoder.Encode(map[string]any{"summary": true, "apply": *apply, "scanned": len(objects), "candidates": candidates, "failed": failed, "nextCursor": cursor, "estimatedPreviewBytes": candidates * (300 << 10), "estimateOnly": !*apply, "estimatedSeconds": nil, "durationMs": time.Since(started).Milliseconds(), "interrupted": ctx.Err() != nil})
+	_ = encoder.Encode(map[string]any{"summary": true, "apply": *apply, "scanned": len(objects), "candidates": candidates, "failed": failed, "formats": formats, "nextCursor": cursor, "estimatedPreviewBytes": candidates * (300 << 10), "maxPreviewBytes": candidates * service.StoragePreviewPNGMaxBytes, "estimateOnly": !*apply, "estimatedSeconds": nil, "durationMs": time.Since(started).Milliseconds(), "interrupted": ctx.Err() != nil})
 	if failed > 0 || ctx.Err() != nil {
 		os.Exit(1)
 	}
+}
+
+func previewFormat(name string) string {
+	if filepath.Ext(name) == ".png" {
+		return "png"
+	}
+	if filepath.Ext(name) == ".jpg" {
+		return "jpeg"
+	}
+	return ""
 }
