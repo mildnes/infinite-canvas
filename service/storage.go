@@ -232,19 +232,35 @@ func UploadStorageObjectWithProvider(ctx context.Context, filename string, conte
 		ext = ".mp4"
 	}
 	userID := "anonymous"
-	if user, ok := UserFromContext(ctx); ok && user.ID != "" {
+	if user, ok := UserFromContext(ctx); ok && user.ID != "" && user.Role != model.UserRoleGuest {
 		userID = user.ID
+	}
+	sum := sha256.Sum256(data)
+	checksum := hex.EncodeToString(sum[:])
+	if userID != "anonymous" {
+		candidates, lookupErr := repository.ListStorageObjectsByFingerprint(userID, checksum, int64(len(data)))
+		if lookupErr != nil {
+			// A lookup failure must not make a valid upload fail; it only loses a dedup opportunity.
+			log.Printf("storage upload dedup_lookup_failed user=%s err=%v", userID, lookupErr)
+		} else {
+			for _, candidate := range candidates {
+				if !storageObjectReadableForDedup(candidate) {
+					continue
+				}
+				log.Printf("storage upload dedup_reuse user=%s object=%s bytes=%d", userID, candidate.ID, candidate.Bytes)
+				return uploadedStorageObjectFromExisting(candidate), nil
+			}
+		}
 	}
 	nowTime := time.Now()
 	objectKey := strings.Trim(strings.Trim(provider.PathPrefix, "/")+"/"+userID+"/"+nowTime.Format("2006/01/02")+"/"+objectID+ext, "/")
-	sum := sha256.Sum256(data)
 	if err := putStorageObject(provider, objectKey, contentType, data); err != nil {
 		return UploadedStorageObject{}, storageUploadError(provider, err)
 	}
 	publicURL := objectURL(provider, objectKey)
 	object := model.StorageObject{
 		ID: objectID, ProviderID: provider.ID, Bucket: provider.Bucket, ObjectKey: objectKey, PublicURL: publicURL,
-		MimeType: contentType, Bytes: int64(len(data)), SHA256: hex.EncodeToString(sum[:]), CreatedBy: userID, CreatedAt: now(),
+		MimeType: contentType, Bytes: int64(len(data)), SHA256: checksum, CreatedBy: userID, CreatedAt: now(),
 	}
 	if err := verifyExactCloudMedia(ctx, object, provider); err != nil {
 		return UploadedStorageObject{}, mediaIssue(mediaErrorKind(err), "上传后云端完整校验失败："+mediaSafeError(err))
@@ -254,6 +270,7 @@ func UploadStorageObjectWithProvider(ctx context.Context, filename string, conte
 	if _, err := repository.SaveStorageObject(object); err != nil {
 		return UploadedStorageObject{}, safeMessageError{message: "保存上传记录失败，请检查数据库"}
 	}
+	log.Printf("storage upload dedup_new user=%s object=%s bytes=%d", userID, objectID, object.Bytes)
 	if strings.HasPrefix(contentType, "image/") {
 		QueueStoragePreview(objectID, 10*time.Second)
 	}
@@ -262,6 +279,28 @@ func UploadStorageObjectWithProvider(ctx context.Context, filename string, conte
 		url = publicURL
 	}
 	return UploadedStorageObject{ID: objectID, URL: url, StorageKey: "server:" + objectID, Bytes: int64(len(data)), MimeType: contentType}, nil
+}
+
+func storageObjectReadableForDedup(object model.StorageObject) bool {
+	if object.DeletedAt != "" {
+		return false
+	}
+	if hasGeneratedMediaCopy(object) {
+		return true
+	}
+	return dedupStorageStatusOK(object.CloudCheckStatus) || dedupStorageStatusOK(object.CloudSyncStatus)
+}
+
+func dedupStorageStatusOK(status string) bool {
+	status = strings.TrimSpace(status)
+	return strings.EqualFold(status, "ok") || strings.EqualFold(status, "verified")
+}
+
+func uploadedStorageObjectFromExisting(object model.StorageObject) UploadedStorageObject {
+	return UploadedStorageObject{
+		ID: object.ID, URL: "/api/files/" + object.ID + "/content", StorageKey: "server:" + object.ID,
+		Bytes: object.Bytes, MimeType: object.MimeType, Width: object.Width, Height: object.Height,
+	}
 }
 
 // RegisterDirectStorageObject 登记浏览器已直传至用户 WebDAV 的对象。
