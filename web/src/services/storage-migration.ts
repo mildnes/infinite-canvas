@@ -1,4 +1,5 @@
 import localforage from "localforage";
+import { localForageStorage, currentStorageOwnerId } from "@/lib/localforage-storage";
 import { uploadImage } from "./image-storage";
 import { uploadMediaBlob } from "./file-storage";
 import { useCanvasStore } from "@/app/(user)/canvas/stores/use-canvas-store";
@@ -138,19 +139,17 @@ export async function migrateLocalAssetsToCloud(
             const nextCanvas = JSON.parse(replacedCanvasStr);
             const finalCanvas = {
                 projects: nextCanvas.projects || [],
+                ownerUserId: useCanvasStore.getState().ownerUserId,
             };
-            await localforage
-                .createInstance({
-                    name: "infinite-canvas",
-                    storeName: "app_state",
-                })
-                .setItem(
+            if (useUserStore.getState().token !== token || finalCanvas.ownerUserId !== currentStorageOwnerId()) return;
+            await localForageStorage.setItem(
                     "infinite-canvas:canvas_store",
                     JSON.stringify({
                         state: finalCanvas,
                         version: 0,
                     }),
                 );
+            if (useUserStore.getState().token !== token || finalCanvas.ownerUserId !== currentStorageOwnerId()) return;
             useCanvasStore.setState(finalCanvas);
             await useCanvasStore.getState().syncWithRemote(
                 token,

@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist, type PersistStorage, type StorageValue } from "zustand/middleware";
 
 import { nanoid } from "nanoid";
-import { localForageStorage } from "@/lib/localforage-storage";
+import { localForageStorage, currentStorageOwnerId, waitForStorageOwner } from "@/lib/localforage-storage";
 import { listCanvasProjects, saveCanvasProject, syncCanvasProjects } from "@/services/api/canvas-tasks";
 import { fetchUserConfig } from "@/services/api/user-config";
 import { useUserStore } from "@/stores/use-user-store";
@@ -38,6 +38,7 @@ export type CanvasProject = {
 };
 
 type CanvasStore = {
+    ownerUserId: string | null;
     hydrated: boolean;
     projects: CanvasProject[];
     createProject: (title?: string, options?: { agentConfig?: CanvasAgentConfig; pendingAgentRequest?: CanvasPendingAgentRequest }) => string;
@@ -52,29 +53,32 @@ type CanvasStore = {
 
 const initialViewport: ViewportTransform = { x: 0, y: 0, k: 1 };
 const CANVAS_STORE_KEY = "infinite-canvas:canvas_store";
-type PersistedCanvasState = Pick<CanvasStore, "projects">;
+type PersistedCanvasState = Pick<CanvasStore, "projects" | "ownerUserId">;
+let lastOwnerId: string | null = null;
+let ownerEpoch = 0;
+let ownerLoading = true;
+let ownerHydration: Promise<void> | undefined;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let queuedPersistState: PersistedCanvasState | null = null;
 let accountCanvasSyncEnabled = false;
 const projectSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-function waitForUserStoreHydration() {
-    if (useUserStore.persist.hasHydrated()) return Promise.resolve();
-
-    return new Promise<void>((resolve) => {
-        let unsubscribe = () => { };
-        unsubscribe = useUserStore.persist.onFinishHydration(() => {
-            unsubscribe();
-            resolve();
-        });
-        if (useUserStore.persist.hasHydrated()) {
-            unsubscribe();
-            resolve();
-        }
-    });
+function resetCanvasOwner(owner: string | null) {
+    if (lastOwnerId === owner) return;
+    lastOwnerId = owner;
+    ownerEpoch++;
+    ownerLoading = true;
+    accountCanvasSyncEnabled = false;
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = null;
+    queuedPersistState = null;
+    cancelProjectSaves([...projectSaveTimers.keys()]);
+    useCanvasStore.setState({ projects: [], ownerUserId: owner, hydrated: false });
 }
 
 function queueProjectSave(project: CanvasProject) {
+    const owner = currentStorageOwnerId();
+    if (!owner || useCanvasStore.getState().ownerUserId !== owner) return;
     const token = useUserStore.getState().token;
     const syncEnabled = accountCanvasSyncEnabled;
     const previous = projectSaveTimers.get(project.id);
@@ -89,6 +93,7 @@ function queueProjectSave(project: CanvasProject) {
                 !syncEnabled ||
                 !accountCanvasSyncEnabled ||
                 useUserStore.getState().token !== token
+                || currentStorageOwnerId() !== owner
             ) {
                 return;
             }
@@ -115,6 +120,9 @@ async function reconcileCanvasProjects(
     remoteProjects: CanvasProject[],
     localProjects: CanvasProject[],
 ) {
+    const owner = currentStorageOwnerId();
+    const epoch = ownerEpoch;
+    if (!owner || token !== useUserStore.getState().token || useCanvasStore.getState().ownerUserId !== owner) return [];
     const remoteById = new Map(
         remoteProjects.map((project) => [project.id, project]),
     );
@@ -137,6 +145,7 @@ async function reconcileCanvasProjects(
             )
         : mergeCanvasProjects(remoteProjects, existingLocalProjects);
 
+    if (epoch !== ownerEpoch || owner !== currentStorageOwnerId() || token !== useUserStore.getState().token) return [];
     localProjects.forEach((project) => {
         const remote = remoteById.get(project.id);
         if (
@@ -153,14 +162,18 @@ async function reconcileCanvasProjects(
 
 const canvasStorage: PersistStorage<CanvasStore> = {
     getItem: async (name) => {
-        await waitForUserStoreHydration();
-        const localValue = await localForageStorage.getItem(name);
+        const owner = await waitForStorageOwner();
+        if (!owner) return null;
+        resetCanvasOwner(owner);
+        const epoch = ownerEpoch;
         const token = useUserStore.getState().token;
+        const localValue = await localForageStorage.getItem(name);
+        const isCurrent = () => epoch === ownerEpoch && owner === currentStorageOwnerId() && token === useUserStore.getState().token;
+        if (!isCurrent()) return null;
         const localParsed = localValue
             ? (JSON.parse(localValue) as StorageValue<CanvasStore>)
             : null;
-        const localProjects =
-            (localParsed?.state as PersistedCanvasState)?.projects || [];
+        const localProjects = localParsed?.state.ownerUserId === owner ? localParsed.state.projects || [] : [];
         const localHasData =
             Array.isArray(localProjects) && localProjects.length > 0;
 
@@ -170,6 +183,7 @@ const canvasStorage: PersistStorage<CanvasStore> = {
                     fetchUserConfig(token),
                     listCanvasProjects(token),
                 ]);
+                if (!isCurrent()) return null;
                 accountCanvasSyncEnabled =
                     userConfig.syncCapabilities?.userData === true;
 
@@ -180,7 +194,8 @@ const canvasStorage: PersistStorage<CanvasStore> = {
                         localProjects,
                     );
 
-                    const nextState = { projects };
+                    if (!isCurrent()) return null;
+                    const nextState = { projects, ownerUserId: owner };
                     const parsed = {
                         state: nextState,
                         version: 0,
@@ -190,6 +205,8 @@ const canvasStorage: PersistStorage<CanvasStore> = {
                         name,
                         JSON.stringify(parsed),
                     );
+                    if (!isCurrent()) return null;
+                    ownerLoading = false;
                     return parsed;
                 }
 
@@ -197,7 +214,7 @@ const canvasStorage: PersistStorage<CanvasStore> = {
                     remoteProjects.length > 0 &&
                     (accountCanvasSyncEnabled || !localHasData)
                 ) {
-                    const nextState = { projects: remoteProjects };
+                    const nextState = { projects: remoteProjects, ownerUserId: owner };
                     const parsed = {
                         state: nextState,
                         version: 0,
@@ -207,6 +224,8 @@ const canvasStorage: PersistStorage<CanvasStore> = {
                         name,
                         JSON.stringify(parsed),
                     );
+                    if (!isCurrent()) return null;
+                    ownerLoading = false;
                     return parsed;
                 }
             } catch (error) {
@@ -217,13 +236,16 @@ const canvasStorage: PersistStorage<CanvasStore> = {
             }
         }
 
-        if (!localParsed) return null;
+        if (!isCurrent()) return null;
+        ownerLoading = false;
+        if (!localParsed || localParsed.state.ownerUserId !== owner) return { state: { ...useCanvasStore.getState(), projects: [], ownerUserId: owner }, version: 0 };
         queuedPersistState = localParsed.state as PersistedCanvasState;
         return localParsed;
     },
 
     setItem: (name, value) => {
         const nextState = value.state as PersistedCanvasState;
+        if (ownerLoading || !nextState.ownerUserId || nextState.ownerUserId !== currentStorageOwnerId()) return;
         if (
             queuedPersistState &&
             queuedPersistState.projects === nextState.projects
@@ -243,6 +265,7 @@ const canvasStorage: PersistStorage<CanvasStore> = {
 export const useCanvasStore = create<CanvasStore>()(
     persist(
         (set, get) => ({
+            ownerUserId: null,
             hydrated: false,
             projects: [],
             createProject: (title = "未命名画布", options) => {
@@ -343,23 +366,33 @@ export const useCanvasStore = create<CanvasStore>()(
                 queueProjectSave(nextProject);
             },
             syncWithRemote: async (token, syncEnabled) => {
+                const owner = await waitForStorageOwner();
+                if (!owner || token !== useUserStore.getState().token) return;
+                if (owner !== lastOwnerId || get().ownerUserId !== owner) {
+                    resetCanvasOwner(owner);
+                    ownerHydration = useCanvasStore.persist.rehydrate() as Promise<void>;
+                }
+                if (ownerLoading) await (ownerHydration || useCanvasStore.persist.rehydrate());
+                if (owner !== currentStorageOwnerId() || token !== useUserStore.getState().token) return;
+                const epoch = ownerEpoch;
                 accountCanvasSyncEnabled = syncEnabled;
                 if (!syncEnabled) return;
                 const localProjects = get().projects;
                 const remoteProjects = await listCanvasProjects(token).catch(
                     () => null,
                 );
-                if (!remoteProjects) return;
+                if (!remoteProjects || epoch !== ownerEpoch || owner !== currentStorageOwnerId() || token !== useUserStore.getState().token) return;
                 const projects = await reconcileCanvasProjects(
                     token,
                     remoteProjects,
                     localProjects,
                 );
+                if (epoch !== ownerEpoch || owner !== currentStorageOwnerId() || token !== useUserStore.getState().token) return;
                 if (saveTimer) {
                     clearTimeout(saveTimer);
                     saveTimer = null;
                 }
-                const nextState = { projects };
+                const nextState = { projects, ownerUserId: owner };
                 queuedPersistState = nextState;
                 set(nextState);
                 await localForageStorage.setItem(
@@ -376,6 +409,7 @@ export const useCanvasStore = create<CanvasStore>()(
             storage: canvasStorage,
             partialize: (state) =>
                 ({
+                    ownerUserId: state.ownerUserId,
                     projects: state.projects.map((project) => ({
                         ...project,
                         nodes: sanitizeCanvasNodesForPersistence(project.nodes),
@@ -383,11 +417,22 @@ export const useCanvasStore = create<CanvasStore>()(
                     })),
                 }) as StorageValue<CanvasStore>["state"],
             onRehydrateStorage: () => () => {
-                useCanvasStore.setState({ hydrated: true });
+                if (!ownerLoading) useCanvasStore.setState({ hydrated: true });
+            },
+            merge: (persisted, current) => {
+                const state = persisted as PersistedCanvasState | undefined;
+                return state?.ownerUserId === currentStorageOwnerId() ? { ...current, ...state } : current;
             },
         },
     ),
 );
+
+useUserStore.subscribe(() => {
+    const owner = currentStorageOwnerId();
+    if (owner === lastOwnerId) return;
+    resetCanvasOwner(owner);
+    if (owner) ownerHydration = useCanvasStore.persist.rehydrate() as Promise<void>;
+});
 
 export function mergeCanvasProjects(
     remoteProjects: CanvasProject[],

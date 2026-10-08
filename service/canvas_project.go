@@ -70,7 +70,14 @@ func CurrentUserCanvasProjects(
 	if err != nil {
 		return nil, err
 	}
-	return canvasProjectData(projects), nil
+	data := canvasProjectData(projects)
+	for index, raw := range data {
+		data[index], err = RewriteStorageObjectAliases(raw)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return data, nil
 }
 
 func SaveCurrentUserCanvasProject(
@@ -82,6 +89,10 @@ func SaveCurrentUserCanvasProject(
 		return nil, errors.New("请先登录")
 	}
 
+	raw, err := RewriteStorageObjectAliases(raw)
+	if err != nil {
+		return nil, err
+	}
 	project, err := canvasProjectFromRaw(user.ID, raw)
 	if err != nil {
 		return nil, err
@@ -107,6 +118,10 @@ func SyncCurrentUserCanvasProjects(
 
 	projects := make([]model.CanvasProject, 0, len(rawProjects))
 	for _, raw := range rawProjects {
+		raw, err := RewriteStorageObjectAliases(raw)
+		if err != nil {
+			return nil, err
+		}
 		project, err := canvasProjectFromRaw(user.ID, raw)
 		if err != nil {
 			return nil, err

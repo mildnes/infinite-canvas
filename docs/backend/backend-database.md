@@ -32,6 +32,7 @@ description: 当前后端主要数据表与字段说明
 - `canvas_projects`
 - `user_configs`
 - `storage_objects`
+- `storage_object_aliases`
 - `media_cleanup_candidates`
 - `agent_skills`
 - `agent_skill_files`

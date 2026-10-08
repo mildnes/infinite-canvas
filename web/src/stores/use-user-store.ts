@@ -35,13 +35,14 @@ export const useUserStore = create<UserStore>()(
                 set({ isLoading: true });
                 try {
                     const user = await fetchCurrentUser(token);
+                    if (get().token !== token) return;
                     if (user.role === "guest") {
                         set({ token: "", user: null, isReady: true, isLoading: false });
                         return;
                     }
                     set({ user, isReady: true, isLoading: false });
                 } catch {
-                    set({ token: "", user: null, isReady: true, isLoading: false });
+                    if (get().token === token) set({ user: null, isReady: true, isLoading: false });
                 }
             },
             login: async (payload) => {

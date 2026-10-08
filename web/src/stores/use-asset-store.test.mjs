@@ -27,7 +27,7 @@ function server(initial = { assets: [] }) {
 }
 
 function fixture(api = server(), prepare = async value => assetData.normalizeAsset(value)) {
-    const user = { token: "owner" }, timers = new Map(), writes = [];
+    const user = { token: "owner", user: { id: "owner" }, isReady: true }, timers = new Map(), writes = [];
     let persistOptions, sequence = 0, timer = 0, disk;
     const source = readFileSync(new URL("./use-asset-store.ts", import.meta.url), "utf8");
     const code = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS } }).outputText;
@@ -39,12 +39,13 @@ function fixture(api = server(), prepare = async value => assetData.normalizeAss
         if (name.endsWith("asset-data")) return assetData;
         if (name.endsWith("asset-storage")) return { prepareAssetForSave: prepare };
         if (name.endsWith("api/user-config")) return api;
-        if (name.endsWith("use-user-store")) return { useUserStore: { getState: () => user } };
-        if (name.endsWith("localforage-storage")) return { localForageStorage: { getItem: async () => disk, setItem: async (name, value) => { writes.push(JSON.parse(value)); }, removeItem: async () => {} } };
+        if (name.endsWith("use-user-store")) return { useUserStore: { getState: () => user, subscribe: () => () => {} } };
+        if (name.endsWith("localforage-storage")) return { currentStorageOwnerId: () => user.token ? user.user?.id : "anon", waitForStorageOwner: async () => user.token ? user.user?.id : "anon", localForageStorage: { getItem: async () => disk, setItem: async (name, value) => { writes.push(JSON.parse(value)); }, removeItem: async () => {} } };
         return {};
     } });
     const store = exports.useAssetStore;
-    return { store, user, api, timers, writes, storage: persistOptions.storage, disk: value => { disk = JSON.stringify(value); }, state: () => store.getState(), seed: assets => store.setState({ assets }) };
+    store.persist = { rehydrate: async () => { const loaded = await persistOptions.storage.getItem("assets"); if (loaded) store.setState(persistOptions.merge(loaded.state, store.getState())); } };
+    return { store, user, api, timers, writes, storage: persistOptions.storage, disk: value => { disk = JSON.stringify({ ...value, state: { ...value.state, ownerUserId: user.user.id } }); }, state: () => store.getState(), seed: assets => { store.setState({ assets, ownerUserId: user.user.id }); disk = JSON.stringify({ state: { assets, ownerUserId: user.user.id }, version: 0 }); } };
 }
 
 test("hydrate merges unsynced local additions and repairs old URLs; persistence never stores blob references", async () => {

@@ -240,7 +240,11 @@ func CurrentUserAssetData(ctx context.Context) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	return assetDataWithRevision(config.AssetData), nil
+	raw, err := RewriteStorageObjectAliases(json.RawMessage(config.AssetData))
+	if err != nil {
+		return nil, err
+	}
+	return assetDataWithRevision(string(raw)), nil
 }
 
 var ErrAssetDataConflict = errors.New("素材已被其他设备修改，请合并后重试")
@@ -266,12 +270,21 @@ func SaveCurrentUserAssetData(ctx context.Context, raw json.RawMessage, baseRevi
 	if err != nil {
 		return nil, err
 	}
+	currentRaw, err := RewriteStorageObjectAliases(json.RawMessage(config.AssetData))
+	if err != nil {
+		return nil, err
+	}
+	previousRaw := config.AssetData
 	var previous *string
 	if len(baseRevision) > 0 {
-		if baseRevision[0] != assetDataRevision(config.AssetData) {
+		if baseRevision[0] != assetDataRevision(string(currentRaw)) {
 			return nil, ErrAssetDataConflict
 		}
-		previous = &config.AssetData
+		previous = &previousRaw
+	}
+	raw, err = RewriteStorageObjectAliases(raw)
+	if err != nil {
+		return nil, err
 	}
 	saved, err := repository.SaveUserAssetData(config.UserID, string(raw), previous)
 	if err != nil {

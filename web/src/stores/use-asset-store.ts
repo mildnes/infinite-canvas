@@ -4,7 +4,7 @@ import { create } from "zustand";
 import { persist, type PersistStorage, type StorageValue } from "zustand/middleware";
 
 import { nanoid } from "nanoid";
-import { localForageStorage } from "@/lib/localforage-storage";
+import { localForageStorage, currentStorageOwnerId, waitForStorageOwner } from "@/lib/localforage-storage";
 import { cleanupUnusedImages } from "@/services/image-storage";
 import { cleanupUnusedMedia } from "@/services/file-storage";
 import { mergeAssetSnapshots, type AssetSnapshot, type AssetTombstone } from "@/lib/asset-data";
@@ -34,6 +34,7 @@ type AssetBase<T extends AssetKind> = {
 };
 
 type AssetStore = {
+    ownerUserId: string | null;
     assets: Asset[];
     tombstones: AssetTombstone[];
     addAsset: (asset: Omit<Asset, "id" | "createdAt" | "updatedAt">) => Promise<string>;
@@ -52,29 +53,53 @@ let isHydratingAccountAssets = false;
 let syncTimer: number | null = null;
 let syncSession = 0;
 let syncInFlight: Promise<void> | null = null;
+let lastOwnerId: string | null = null;
+let ownerEpoch = 0;
+let ownerLoading = true;
+let ownerHydration: Promise<void> | undefined;
+
+function resetAssetOwner(owner: string | null) {
+    if (lastOwnerId === owner) return;
+    lastOwnerId = owner;
+    ownerEpoch++;
+    ownerLoading = true;
+    useAssetStore.getState().stopAccountAssetSync();
+    useAssetStore.setState({ assets: [], tombstones: [], ownerUserId: owner });
+}
 
 const assetStorage: PersistStorage<AssetStore> = {
     getItem: async (name) => {
+        const owner = await waitForStorageOwner();
+        if (!owner) return null;
+        resetAssetOwner(owner);
+        const epoch = ownerEpoch;
         const ownerToken = useUserStore.getState().token;
         const value = await localForageStorage.getItem(name);
-        if (!value) return null;
+        if (epoch !== ownerEpoch || owner !== currentStorageOwnerId()) return null;
+        if (!value) { ownerLoading = false; return { state: { ...useAssetStore.getState(), assets: [], tombstones: [], ownerUserId: owner }, version: 0 }; }
         const parsed = JSON.parse(value) as StorageValue<AssetStore>;
+        if (parsed.state.ownerUserId !== owner) { ownerLoading = false; return { state: { ...useAssetStore.getState(), assets: [], tombstones: [], ownerUserId: owner }, version: 0 }; }
         // Preserve the existing legacy inline-image migration, without reviving old blob URLs.
         parsed.state.assets = await Promise.all((parsed.state.assets || []).map(async asset => {
             if (asset.kind !== "image" || asset.data.storageKey || !asset.data.dataUrl?.startsWith("data:image/")) return asset;
             try { return await prepareAssetForSave(asset); } catch { return asset; }
         }));
-        if (useUserStore.getState().token !== ownerToken) return null;
+        if (useUserStore.getState().token !== ownerToken || epoch !== ownerEpoch || owner !== currentStorageOwnerId()) return null;
         Object.assign(parsed.state, mergeAssetSnapshots(parsed.state));
+        ownerLoading = false;
         return parsed;
     },
-    setItem: (name, value) => localForageStorage.setItem(name, JSON.stringify({ ...value, state: mergeAssetSnapshots(value.state) })),
+    setItem: (name, value) => {
+        if (ownerLoading) return;
+        return localForageStorage.setItem(name, JSON.stringify({ ...value, state: { ...mergeAssetSnapshots(value.state), ownerUserId: value.state.ownerUserId } }));
+    },
     removeItem: (name) => localForageStorage.removeItem(name),
 };
 
 export const useAssetStore = create<AssetStore>()(
     persist(
         (set, get) => ({
+            ownerUserId: null,
             assets: [],
             tombstones: [],
             addAsset: async (asset) => {
@@ -178,7 +203,14 @@ export const useAssetStore = create<AssetStore>()(
                     return mergeAssetSnapshots({ ...state, assets }, { assets: [], tombstones: [{ id, deletedAt }] });
                 }),
             hydrateAccountAssets: async (token, syncEnabled = false) => {
-                if (!token) return;
+                const owner = await waitForStorageOwner();
+                if (!token || !owner || token !== useUserStore.getState().token) return;
+                if (owner !== lastOwnerId || get().ownerUserId !== owner) {
+                    resetAssetOwner(owner);
+                    ownerHydration = useAssetStore.persist.rehydrate() as Promise<void>;
+                }
+                if (ownerLoading) await (ownerHydration || useAssetStore.persist.rehydrate());
+                if (owner !== currentStorageOwnerId() || token !== useUserStore.getState().token) return;
                 activeAssetSyncToken = token;
                 accountAssetSyncEnabled = syncEnabled;
                 const session = ++syncSession;
@@ -289,13 +321,24 @@ export const useAssetStore = create<AssetStore>()(
         {
             name: ASSET_STORE_KEY,
             storage: assetStorage,
-            partialize: (state) => mergeAssetSnapshots(state) as StorageValue<AssetStore>["state"],
+            partialize: (state) => ({ ...mergeAssetSnapshots(state), ownerUserId: state.ownerUserId }) as StorageValue<AssetStore>["state"],
+            merge: (persisted, current) => {
+                const state = persisted as Partial<AssetStore> | undefined;
+                return state?.ownerUserId === currentStorageOwnerId() ? { ...current, ...state } : current;
+            },
         },
     ),
 );
 
+useUserStore.subscribe(() => {
+    const owner = currentStorageOwnerId();
+    if (owner === lastOwnerId) return;
+    resetAssetOwner(owner);
+    if (owner) ownerHydration = useAssetStore.persist.rehydrate() as Promise<void>;
+});
+
 function isCurrentAssetSession(token: string, session: number) {
-    return Boolean(token) && token === activeAssetSyncToken && session === syncSession && useUserStore.getState().token === token;
+    return Boolean(token) && token === activeAssetSyncToken && session === syncSession && useUserStore.getState().token === token && Boolean(currentStorageOwnerId()) && useAssetStore.getState().ownerUserId === currentStorageOwnerId();
 }
 
 function scheduleAssetSync(get: () => AssetStore, delay = 600) {
