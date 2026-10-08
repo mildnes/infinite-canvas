@@ -1747,22 +1747,11 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     }, [finishNodeDrag, handleGlobalMouseMove, handleGlobalMouseUp, handleGlobalPointerMove]);
 
     const appendImportedImageNode = useCallback((image: UploadedImage, title: string, position: Position, type: CanvasNodeType.Image | CanvasNodeType.Panorama) => {
-        const isPanorama = type === CanvasNodeType.Panorama;
-        const size = isPanorama ? PANORAMA_NODE_SIZE : fitNodeSize(image.width, image.height);
-        const id = type + "-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7);
-        const newNode: CanvasNodeData = {
-            id,
-            type,
-            title,
-            position: { x: position.x - size.width / 2, y: position.y - size.height / 2 },
-            width: size.width,
-            height: size.height,
-            metadata: isPanorama ? { ...imageMetadata(image), size: PANORAMA_IMAGE_SIZE, panoramaProjection: "equirectangular" } : imageMetadata(image),
-        };
+        const newNode = buildImportedImageNode(image, title, position, type);
         setNodes((prev) => [...prev, newNode]);
-        setSelectedNodeIds(new Set([id]));
+        setSelectedNodeIds(new Set([newNode.id]));
         setSelectedConnectionId(null);
-        setDialogNodeId(id);
+        setDialogNodeId(newNode.id);
     }, []);
 
     const createImageFileNode = useCallback(async (file: File, position: Position, choosePanoramaImport = false) => {
@@ -1831,6 +1820,75 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         } finally {
             hideLoading();
         }
+    }, [message]);
+
+    const importFiles = useCallback(async (files: File[], anchor: Position) => {
+        const supported = files.filter((file) => file.type.startsWith("image/") || file.type.startsWith("video/") || isAudioFile(file));
+        if (!supported.length) {
+            message.warning("没有可导入的文件");
+            return;
+        }
+        if (supported.length > 100) {
+            message.error("一次最多导入 100 个文件");
+            return;
+        }
+
+        type ImportedResult = { file: File; image?: UploadedImage; media?: UploadedFile; error?: unknown };
+        const results: Array<ImportedResult | undefined> = new Array(supported.length);
+        let nextIndex = 0;
+        let completed = 0;
+        const loadingKey = "canvas-file-import-" + Date.now();
+        const updateProgress = () => {
+            message.open({ key: loadingKey, type: "loading", content: "正在上传 " + completed + "/" + supported.length + "…", duration: 0 });
+        };
+        updateProgress();
+
+        const worker = async () => {
+            while (true) {
+                const index = nextIndex++;
+                if (index >= supported.length) return;
+                const file = supported[index];
+                try {
+                    if (file.type.startsWith("image/")) {
+                        results[index] = { file, image: await uploadImage(file) };
+                    } else {
+                        results[index] = { file, media: await uploadMediaFile(file, isAudioFile(file) ? "audio" : "video") };
+                    }
+                } catch (error) {
+                    console.error("Batch canvas file import failed:", file.name, error);
+                    results[index] = { file, error };
+                } finally {
+                    completed += 1;
+                    updateProgress();
+                }
+            }
+        };
+        await Promise.all(Array.from({ length: Math.min(3, supported.length) }, () => worker()));
+
+        const importedNodes: CanvasNodeData[] = [];
+        let panoramaCandidates = 0;
+        for (const result of results) {
+            if (!result || result.error) continue;
+            if (result.image) {
+                if (result.image.width === result.image.height * 2) panoramaCandidates += 1;
+                importedNodes.push(buildImportedImageNode(result.image, result.file.name, { x: 0, y: 0 }));
+            } else if (result.media) {
+                importedNodes.push(result.file.type.startsWith("video/") ? buildImportedVideoNode(result.media, result.file.name, { x: 0, y: 0 }) : buildImportedAudioNode(result.media, result.file.name, { x: 0, y: 0 }));
+            }
+        }
+
+        if (importedNodes.length) {
+            const arranged = layoutImportedNodes(importedNodes, anchor);
+            setNodes((prev) => [...prev, ...arranged]);
+            setSelectedNodeIds(new Set(arranged.map((node) => node.id)));
+            setSelectedConnectionId(null);
+        }
+        message.destroy(loadingKey);
+        const failed = supported.length - importedNodes.length;
+        if (importedNodes.length && failed) message.warning(importedNodes.length + " 成功、" + failed + " 失败（失败详情已打印到控制台）");
+        else if (importedNodes.length) message.success("已导入 " + importedNodes.length + " 个文件");
+        else message.error("文件导入失败，请检查文件后重试");
+        if (panoramaCandidates) message.info("其中 " + panoramaCandidates + " 张疑似全景图已按普通图片导入");
     }, [message]);
 
     const extractingAudioRef = useRef(new Set<string>());
@@ -2742,9 +2800,27 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
     const handleImageInputChange = useCallback(
         async (event: ReactChangeEvent<HTMLInputElement>) => {
-            const file = event.target.files?.[0];
+            const files = Array.from(event.target.files || []);
             const target = uploadTargetRef.current;
-            if (!file || (!file.type.startsWith("image/") && !file.type.startsWith("video/") && !isAudioFile(file))) return;
+            if (!files.length) {
+                event.target.value = "";
+                return;
+            }
+            if (!target?.nodeId && files.length > 1) {
+                const position = target?.position || screenToCanvas((containerRef.current?.getBoundingClientRect().left || 0) + size.width / 2, (containerRef.current?.getBoundingClientRect().top || 0) + size.height / 2);
+                await importFiles(files, position);
+                uploadTargetRef.current = null;
+                event.target.value = "";
+                return;
+            }
+            const file = files[0];
+            if (!file || (!file.type.startsWith("image/") && !file.type.startsWith("video/") && !isAudioFile(file))) {
+                message.warning("不支持的文件类型");
+                uploadTargetRef.current = null;
+                event.target.value = "";
+                return;
+            }
+            if (target?.nodeId && files.length > 1) message.warning("填充指定节点时仅支持单个文件，已使用第一个文件");
             const targetNode = target?.nodeId ? nodesRef.current.find((node) => node.id === target.nodeId) : null;
             if (isPanoramaNodeType(targetNode?.type) && !file.type.startsWith("image/")) {
                 message.warning("全景图节点仅支持上传图片作为参考");
@@ -2828,7 +2904,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             uploadTargetRef.current = null;
             event.target.value = "";
         },
-        [createAudioFileNode, createImageFileNode, createVideoFileNode, screenToCanvas, size.height, size.width],
+        [createAudioFileNode, createImageFileNode, createVideoFileNode, importFiles, message, screenToCanvas, size.height, size.width],
     );
 
     async function insertAssetAt(payload: InsertAssetPayload, position?: Position, nodeId?: string) {
@@ -2873,12 +2949,31 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 void insertAssetAt(payload, screenToCanvas(event.clientX, event.clientY));
                 return;
             }
-            const file = Array.from(event.dataTransfer.files).find((item) => item.type.startsWith("image/") || item.type.startsWith("video/") || isAudioFile(item));
-            if (!file) return;
             const pos = screenToCanvas(event.clientX, event.clientY);
+            const hasDirectory = Array.from(event.dataTransfer.items || []).some((item) => {
+                const entry = (item as DataTransferItem & { webkitGetAsEntry?: () => { isDirectory?: boolean } | null }).webkitGetAsEntry?.();
+                return Boolean(entry?.isDirectory);
+            });
+            if (hasDirectory) {
+                message.warning("暂不支持拖入文件夹，请直接拖入文件");
+                return;
+            }
+            const files = Array.from(event.dataTransfer.files);
+            if (!files.length) {
+                return;
+            }
+            if (files.length > 1) {
+                void importFiles(files, pos);
+                return;
+            }
+            const file = files[0];
+            if (!file.type.startsWith("image/") && !file.type.startsWith("video/") && !isAudioFile(file)) {
+                message.warning("不支持的文件类型");
+                return;
+            }
             void (isAudioFile(file) ? createAudioFileNode(file, pos) : file.type.startsWith("video/") ? createVideoFileNode(file, pos) : createImageFileNode(file, pos, true));
         },
-        [createAudioFileNode, createImageFileNode, createVideoFileNode, insertAssetAt, screenToCanvas],
+        [createAudioFileNode, createImageFileNode, createVideoFileNode, importFiles, insertAssetAt, message, screenToCanvas],
     );
 
     const pasteAssistantImage = useCallback(
@@ -4554,7 +4649,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         </button>
                     </div>
                 ) : null}
-                <input ref={imageInputRef} type="file" accept="image/*,video/*,audio/mpeg,audio/wav,audio/x-wav,.mp3,.wav" className="hidden" onChange={handleImageInputChange} />
+                <input ref={imageInputRef} type="file" multiple accept="image/*,video/*,audio/mpeg,audio/wav,audio/x-wav,.mp3,.wav" className="hidden" onChange={handleImageInputChange} />
 
                 <CanvasNodeInfoModal node={infoNode} open={Boolean(infoNode)} onClose={() => setInfoNodeId(null)} />
 
@@ -5222,6 +5317,54 @@ function buildImportedVideoNode(video: UploadedFile, title: string, center: Posi
         height: size.height,
         metadata: videoMetadata(video),
     };
+}
+
+function buildImportedImageNode(image: UploadedImage, title: string, center: Position, type: CanvasNodeType.Image | CanvasNodeType.Panorama = CanvasNodeType.Image): CanvasNodeData {
+    const isPanorama = type === CanvasNodeType.Panorama;
+    const size = isPanorama ? PANORAMA_NODE_SIZE : fitNodeSize(image.width, image.height);
+    const id = type + "-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7);
+    return {
+        id,
+        type,
+        title,
+        position: { x: center.x - size.width / 2, y: center.y - size.height / 2 },
+        width: size.width,
+        height: size.height,
+        metadata: isPanorama ? { ...imageMetadata(image), size: PANORAMA_IMAGE_SIZE, panoramaProjection: "equirectangular" } : imageMetadata(image),
+    };
+}
+
+function buildImportedAudioNode(audio: UploadedFile, title: string, center: Position): CanvasNodeData {
+    const size = NODE_DEFAULT_SIZE[CanvasNodeType.Audio];
+    return {
+        id: "audio-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7),
+        type: CanvasNodeType.Audio,
+        title,
+        position: { x: center.x - size.width / 2, y: center.y - size.height / 2 },
+        width: size.width,
+        height: size.height,
+        metadata: audioMetadata(audio),
+    };
+}
+
+function layoutImportedNodes(nodes: CanvasNodeData[], anchor: Position): CanvasNodeData[] {
+    const rows: CanvasNodeData[][] = [];
+    for (let index = 0; index < nodes.length; index += 4) rows.push(nodes.slice(index, index + 4));
+    const rowHeights = rows.map((row) => Math.max(...row.map((node) => node.height)));
+    const totalHeight = rowHeights.reduce((sum, height) => sum + height, 0) + Math.max(0, rows.length - 1) * 32;
+    let y = anchor.y - totalHeight / 2;
+    return rows.flatMap((row, rowIndex) => {
+        const rowWidth = row.reduce((sum, node) => sum + node.width, 0) + Math.max(0, row.length - 1) * 32;
+        let x = anchor.x - rowWidth / 2;
+        const rowTop = y;
+        const arranged = row.map((node) => {
+            const next = { ...node, position: { x, y: rowTop + (rowHeights[rowIndex] - node.height) / 2 } };
+            x += node.width + 32;
+            return next;
+        });
+        y += rowHeights[rowIndex] + 32;
+        return arranged;
+    });
 }
 
 function getNextDirectorOutputY(
