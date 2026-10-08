@@ -1,6 +1,7 @@
 "use client";
 
 import { previewSrcFor, loadOriginalImage, previewContentHit } from "../utils/canvas-image-preview";
+import { resolveCanvasAssetPayload } from "../utils/canvas-asset-insertion";
 import { backfillStoragePreviewFromOriginal } from "@/services/storage-preview-client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -2419,13 +2420,13 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             if (node.type === CanvasNodeType.Text) {
                 const content = node.metadata?.content?.trim();
                 if (!content) return message.error("没有可保存的文本");
-                addAsset({ kind: "text", title: node.metadata?.prompt?.slice(0, 24) || "画布文本", coverUrl: "", tags: [], source: "Canvas", data: { content }, metadata: { source: "canvas", nodeId: node.id } });
+                await addAsset({ kind: "text", title: node.metadata?.prompt?.slice(0, 24) || "画布文本", coverUrl: "", tags: [], source: "Canvas", data: { content }, metadata: { source: "canvas", nodeId: node.id } });
                 message.success("已加入我的素材");
                 return;
             }
             if (node.type === CanvasNodeType.Video) {
                 if (!node.metadata?.content) return message.error("没有可保存的视频");
-                addAsset({ kind: "video", title: node.metadata?.prompt?.slice(0, 24) || "画布视频", coverUrl: "", tags: [], source: "Canvas", data: { url: node.metadata.content, storageKey: node.metadata.storageKey, width: node.width, height: node.height, bytes: node.metadata.bytes || 0, mimeType: node.metadata.mimeType || "video/mp4" }, metadata: { source: "canvas", nodeId: node.id, prompt: node.metadata?.prompt } });
+                await addAsset({ kind: "video", title: node.metadata?.prompt?.slice(0, 24) || "画布视频", coverUrl: "", tags: [], source: "Canvas", data: { url: node.metadata.content, storageKey: node.metadata.storageKey, width: node.width, height: node.height, bytes: node.metadata.bytes || 0, mimeType: node.metadata.mimeType || "video/mp4" }, metadata: { source: "canvas", nodeId: node.id, prompt: node.metadata?.prompt } });
                 message.success("已加入我的素材");
                 return;
             }
@@ -2434,8 +2435,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 const stored = !node.metadata.storageKey && node.metadata.content.startsWith("blob:") ? await uploadImage(node.metadata.content, { localOnly: true }) : null;
                 const imageUrl = stored?.url || node.metadata.content;
                 const storageKey = stored?.storageKey || node.metadata.storageKey;
-                const dataUrl = storageKey ? "" : imageUrl;
-                addAsset({
+                const dataUrl = imageUrl;
+                await addAsset({
                     kind: "image",
                     title: node.metadata?.prompt?.slice(0, 24) || "画布图片",
                     coverUrl: imageUrl,
@@ -2830,30 +2831,38 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         [createAudioFileNode, createImageFileNode, createVideoFileNode, screenToCanvas, size.height, size.width],
     );
 
-    function insertAssetAt(payload: InsertAssetPayload, position?: Position, nodeId?: string) {
-        const center = position || screenToCanvas((containerRef.current?.getBoundingClientRect().left || 0) + size.width / 2, (containerRef.current?.getBoundingClientRect().top || 0) + size.height / 2);
-        if (payload.kind === "text") {
-            createNode(CanvasNodeType.Text, position, payload.content, nodeId);
-            return;
+    async function insertAssetAt(payload: InsertAssetPayload, position?: Position, nodeId?: string) {
+        const ownerToken = useUserStore.getState().token;
+        const ownerProjectId = projectId;
+        try {
+            const resolved = await resolveCanvasAssetPayload(payload);
+            if (activeProjectIdRef.current !== ownerProjectId || useUserStore.getState().token !== ownerToken) return;
+            const center = position || screenToCanvas((containerRef.current?.getBoundingClientRect().left || 0) + size.width / 2, (containerRef.current?.getBoundingClientRect().top || 0) + size.height / 2);
+            if (resolved.kind === "text") {
+                createNode(CanvasNodeType.Text, position, resolved.content, nodeId);
+                return;
+            }
+            if (resolved.kind === "video") {
+                const spec = NODE_DEFAULT_SIZE[CanvasNodeType.Video];
+                const id = nodeId || `video-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+                const nextSize = fitNodeSize(resolved.width || spec.width, resolved.height || spec.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+                setNodes((prev) => [...prev, { id, type: CanvasNodeType.Video, title: resolved.title, position: { x: center.x - nextSize.width / 2, y: center.y - nextSize.height / 2 }, width: nextSize.width, height: nextSize.height, metadata: { content: resolved.url, storageKey: resolved.storageKey, status: NODE_STATUS_SUCCESS, naturalWidth: resolved.width, naturalHeight: resolved.height } }]);
+                setSelectedNodeIds(new Set([id]));
+                setSelectedConnectionId(null);
+                return;
+            }
+            if (resolved.kind === "audio") {
+                const spec = NODE_DEFAULT_SIZE[CanvasNodeType.Audio];
+                const id = nodeId || `audio-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+                setNodes((prev) => [...prev, { id, type: CanvasNodeType.Audio, title: resolved.title, position: { x: center.x - spec.width / 2, y: center.y - spec.height / 2 }, width: spec.width, height: spec.height, metadata: { content: resolved.url, storageKey: resolved.storageKey, status: NODE_STATUS_SUCCESS, bytes: resolved.bytes, mimeType: resolved.mimeType || "audio/mpeg", durationMs: resolved.durationMs } }]);
+                setSelectedNodeIds(new Set([id]));
+                setSelectedConnectionId(null);
+                return;
+            }
+            await insertAssistantImage({ id: nodeId || `asset-${Date.now()}`, prompt: resolved.title, dataUrl: resolved.dataUrl, storageKey: resolved.storageKey, source: resolved.source }, position, nodeId);
+        } catch (error) {
+            if (activeProjectIdRef.current === ownerProjectId && useUserStore.getState().token === ownerToken) message.error(error instanceof Error ? error.message : "素材插入失败，请恢复素材后重试");
         }
-        if (payload.kind === "video") {
-            const spec = NODE_DEFAULT_SIZE[CanvasNodeType.Video];
-            const id = nodeId || `video-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-            const nextSize = fitNodeSize(payload.width || spec.width, payload.height || spec.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
-            setNodes((prev) => [...prev, { id, type: CanvasNodeType.Video, title: payload.title, position: { x: center.x - nextSize.width / 2, y: center.y - nextSize.height / 2 }, width: nextSize.width, height: nextSize.height, metadata: { content: payload.url, storageKey: payload.storageKey, status: NODE_STATUS_SUCCESS, naturalWidth: payload.width, naturalHeight: payload.height } }]);
-            setSelectedNodeIds(new Set([id]));
-            setSelectedConnectionId(null);
-            return;
-        }
-        if (payload.kind === "audio") {
-            const spec = NODE_DEFAULT_SIZE[CanvasNodeType.Audio];
-            const id = nodeId || `audio-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-            setNodes((prev) => [...prev, { id, type: CanvasNodeType.Audio, title: payload.title, position: { x: center.x - spec.width / 2, y: center.y - spec.height / 2 }, width: spec.width, height: spec.height, metadata: { content: payload.url, storageKey: payload.storageKey, status: NODE_STATUS_SUCCESS, bytes: payload.bytes, mimeType: payload.mimeType || "audio/mpeg", durationMs: payload.durationMs } }]);
-            setSelectedNodeIds(new Set([id]));
-            setSelectedConnectionId(null);
-            return;
-        }
-        return insertAssistantImage({ id: nodeId || `asset-${Date.now()}`, prompt: payload.title, dataUrl: payload.dataUrl, storageKey: payload.storageKey, source: payload.source }, position, nodeId);
     }
 
     const handleDrop = useCallback(
@@ -4045,8 +4054,11 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
     const insertAssistantImage = useCallback(
         async (image: CanvasAssistantImage, position?: Position, nodeId?: string) => {
+            const ownerToken = useUserStore.getState().token;
+            const ownerProjectId = projectId;
             const storedImage = { url: image.dataUrl, storageKey: image.storageKey || "", width: 1, height: 1, bytes: 0, mimeType: "image/png" };
             const meta = storedImage.width === 1 && storedImage.height === 1 ? await readImageMeta(storedImage.url) : storedImage;
+            if (activeProjectIdRef.current !== ownerProjectId || useUserStore.getState().token !== ownerToken) return;
             const config = fitNodeSize(meta.width, meta.height);
             const center = position || screenToCanvas((containerRef.current?.getBoundingClientRect().left || 0) + size.width / 2, (containerRef.current?.getBoundingClientRect().top || 0) + size.height / 2);
             const id = nodeId || `image-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -4065,7 +4077,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             setSelectedConnectionId(null);
             setDialogNodeId(id);
         },
-        [screenToCanvas, size.height, size.width],
+        [projectId, screenToCanvas, size.height, size.width],
     );
 
     const insertAssetAtRef = useRef(insertAssetAt);

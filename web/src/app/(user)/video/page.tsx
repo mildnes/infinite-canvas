@@ -845,17 +845,21 @@ export default function VideoPage() {
         if (previewLog?.id === log.id) setPreviewLog(nextLog);
     };
 
-    const saveResultToAssets = (video: GeneratedVideo) => {
-        addAsset({
-            kind: "video",
-            title: "生成视频",
-            coverUrl: "",
-            tags: [],
-            source: "视频创作台",
-            data: { url: video.url, storageKey: video.storageKey, width: video.width, height: video.height, bytes: video.bytes, mimeType: video.mimeType },
-            metadata: { source: "video-page", prompt },
-        });
-        message.success("已加入我的素材");
+    const saveResultToAssets = async (video: GeneratedVideo) => {
+        try {
+            await addAsset({
+                kind: "video",
+                title: "生成视频",
+                coverUrl: "",
+                tags: [],
+                source: "视频创作台",
+                data: { url: video.url, storageKey: video.storageKey, width: video.width, height: video.height, bytes: video.bytes, mimeType: video.mimeType },
+                metadata: { source: "video-page", prompt },
+            });
+            message.success("已加入我的素材");
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "素材保存失败，请重试");
+        }
     };
 
     const insertPickedAsset = async (payload: InsertAssetPayload) => {

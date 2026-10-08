@@ -60,7 +60,7 @@ export default function AssetLibraryPage() {
                     bitmap.close();
                 } catch { /* 无法读取远程元数据时仍可保存原始 URL。 */ }
                 if (useAssetStore.getState().assets.some((item) => item.metadata?.source === "asset-library" && item.metadata.assetId === asset.id)) return void message.info("该素材已在我的素材中");
-                addAsset({
+                await addAsset({
                     kind: "image",
                     title: asset.title,
                     coverUrl: asset.coverUrl,
@@ -72,7 +72,7 @@ export default function AssetLibraryPage() {
                     metadata: { source: "asset-library", assetId: asset.id },
                 });
             } else if (asset.type === "video") {
-                addAsset({
+                await addAsset({
                     kind: "video",
                     title: asset.title,
                     coverUrl: asset.coverUrl,
@@ -84,7 +84,7 @@ export default function AssetLibraryPage() {
                     metadata: { source: "asset-library", assetId: asset.id },
                 });
             } else if (asset.type === "audio") {
-                addAsset({
+                await addAsset({
                     kind: "audio",
                     title: asset.title,
                     coverUrl: asset.coverUrl,
@@ -96,7 +96,7 @@ export default function AssetLibraryPage() {
                     metadata: { source: "asset-library", assetId: asset.id },
                 });
             } else {
-                addAsset({
+                await addAsset({
                     kind: "text",
                     title: asset.title,
                     coverUrl: asset.coverUrl,

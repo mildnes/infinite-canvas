@@ -7,6 +7,7 @@ import { ImagePlus, Plus, Search } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useAssetStore, type Asset } from "@/stores/use-asset-store";
+import { useAssetMediaUrl } from "@/hooks/use-asset-media-url";
 import { fetchAssetLibrary, type AssetLibraryItem } from "@/services/api/assets";
 import { uploadAssetMediaFile } from "@/services/file-storage";
 import { uploadImage } from "@/services/image-storage";
@@ -150,6 +151,11 @@ function LibraryTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => v
     );
 }
 
+function MyAssetCard({ asset, onClick }: { asset: Asset; onClick: () => void }) {
+    const mediaUrl = useAssetMediaUrl(asset.kind === "image" ? asset : null);
+    return <PickerCard title={asset.title} kind={asset.kind} cover={asset.coverUrl || mediaUrl} onClick={onClick} />;
+}
+
 function PickerCard({ title, kind, cover, loading, onClick }: { title: string; kind: string; cover: string; loading?: boolean; onClick: () => void }) {
     return (
         <button
@@ -246,14 +252,14 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
                     message.error("请输入文本内容");
                     return;
                 }
-                addAsset({ kind: "text", title, coverUrl: "", tags: [], source: "素材选择器", data: { content } });
+                await addAsset({ kind: "text", title, coverUrl: "", tags: [], source: "素材选择器", data: { content } });
             } else if (createKind === "image") {
                 if (!selectedFile && !createUrl.trim()) {
                     message.error("请选择图片或填写图片 URL");
                     return;
                 }
                 const stored = selectedFile ? await uploadImage(selectedFile) : null;
-                addAsset({
+                await addAsset({
                     kind: "image",
                     title,
                     coverUrl: stored?.url || createUrl.trim(),
@@ -267,7 +273,7 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
                     return;
                 }
                 const stored = selectedFile ? await uploadAssetMediaFile(selectedFile, "asset-video") : null;
-                addAsset({
+                await addAsset({
                     kind: "video",
                     title,
                     coverUrl: "",
@@ -283,7 +289,7 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
                     return;
                 }
                 const stored = selectedFile ? await uploadAssetMediaFile(selectedFile, "asset-audio") : null;
-                addAsset({
+                await addAsset({
                     kind: "audio",
                     title,
                     coverUrl: "",
@@ -340,7 +346,7 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
             {visible.length ? (
                 <div className="grid grid-cols-4 gap-3">
                     {visible.map((asset) => (
-                        <PickerCard key={asset.id} title={asset.title} kind={asset.kind} cover={asset.coverUrl || (asset.kind === "image" ? asset.data.dataUrl : "")} onClick={() => handleInsert(asset)} />
+                        <MyAssetCard key={asset.id} asset={asset} onClick={() => handleInsert(asset)} />
                     ))}
                 </div>
             ) : (

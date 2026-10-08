@@ -6,6 +6,10 @@ import { App, Button, Card, Drawer, Empty, Image, Input, Modal, Pagination, Sele
 import { saveAs } from "file-saver";
 
 import { useCopyText } from "@/hooks/use-copy-text";
+import { useAssetMediaUrl } from "@/hooks/use-asset-media-url";
+import { resolveImageUrl } from "@/services/image-storage";
+import { resolveMediaUrl } from "@/services/file-storage";
+import { stableAssetUrl } from "@/lib/asset-data";
 import { formatBytes } from "@/lib/image-utils";
 import { cn } from "@/lib/utils";
 import { useAssetStore, type Asset, type AssetKind } from "@/stores/use-asset-store";
@@ -77,10 +81,17 @@ export default function AssetsPage() {
         copyText(asset.data.content, "文本已复制");
     };
 
-    const downloadAsset = (asset: Asset) => {
+    const downloadAsset = async (asset: Asset) => {
         if (asset.kind !== "image" && asset.kind !== "video" && asset.kind !== "audio") return;
-        const url = asset.kind === "image" ? asset.data.dataUrl : asset.data.url;
-        saveAs(url, `${asset.title || "asset"}.${asset.data.mimeType.split("/")[1] || "png"}`);
+        try {
+            const fallback = asset.kind === "image" ? asset.data.dataUrl : asset.data.url;
+            const resolve = asset.kind === "image" ? resolveImageUrl : resolveMediaUrl;
+            const url = await resolve(asset.data.storageKey, stableAssetUrl(asset.data.storageKey, fallback));
+            if (!url) throw new Error("素材无法读取，请恢复文件后重试");
+            saveAs(url, `${asset.title || "asset"}.${asset.data.mimeType.split("/")[1] || "png"}`);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "素材下载失败，请重试");
+        }
     };
 
     const exportAllAssets = async () => {
@@ -95,13 +106,13 @@ export default function AssetsPage() {
         if (!file) return;
         try {
             const importedAssets = await readAssetPackage(file);
-            importedAssets.forEach((asset) => {
+            for (const asset of importedAssets) {
                 const payload = { ...asset } as Record<string, unknown>;
                 delete payload.id;
                 delete payload.createdAt;
                 delete payload.updatedAt;
-                addAsset(payload as Parameters<typeof addAsset>[0]);
-            });
+                await addAsset(payload as Parameters<typeof addAsset>[0]);
+            }
             message.success(`已导入 ${importedAssets.length} 个素材`);
         } catch {
             message.error("导入失败，请选择有效的素材压缩包");
@@ -263,7 +274,8 @@ export default function AssetsPage() {
 }
 
 function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete }: { asset: Asset; onOpen: () => void; onEdit: () => void; onCopy: (asset: Asset) => void; onDownload: (asset: Asset) => void; onDelete: () => void }) {
-    const cover = asset.coverUrl || (asset.kind === "image" ? asset.data.dataUrl : "");
+    const mediaUrl = useAssetMediaUrl(asset);
+    const cover = asset.coverUrl || (asset.kind === "image" ? mediaUrl : "");
     const summary = assetSummary(asset);
     return (
         <Card
@@ -275,7 +287,7 @@ function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete }: { as
                     {cover ? (
                         <img src={cover} alt={asset.title} className="aspect-[4/3] w-full object-cover" />
                     ) : asset.kind === "video" ? (
-                        <video src={asset.data.url + "#t=0.1"} muted playsInline preload="metadata" className="aspect-[4/3] w-full object-cover" />
+                        <video src={mediaUrl ? mediaUrl + "#t=0.1" : undefined} muted playsInline preload="metadata" className="aspect-[4/3] w-full object-cover" />
                     ) : (
                         <div className="flex aspect-[4/3] items-center justify-center bg-stone-100 p-5 text-center text-sm leading-6 text-stone-600 dark:bg-stone-900 dark:text-stone-300">{asset.kind === "text" ? asset.data.content : "暂无封面"}</div>
                     )}
@@ -332,7 +344,8 @@ function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete }: { as
 }
 
 function AssetDrawer({ asset, onClose, onCopy, onDownload }: { asset: Asset | null; onClose: () => void; onCopy: (asset: Asset) => void; onDownload: (asset: Asset) => void }) {
-    const cover = asset ? asset.coverUrl || (asset.kind === "image" ? asset.data.dataUrl : "") : "";
+    const mediaUrl = useAssetMediaUrl(asset);
+    const cover = asset ? asset.coverUrl || (asset.kind === "image" ? mediaUrl : "") : "";
     return (
         <Drawer title="素材详情" open={Boolean(asset)} size="large" onClose={onClose}>
             {asset ? (
@@ -360,9 +373,9 @@ function AssetDrawer({ asset, onClose, onCopy, onDownload }: { asset: Asset | nu
                         {asset.kind === "text" ? (
                             <Typography.Paragraph className="mt-2 whitespace-pre-wrap">{asset.data.content}</Typography.Paragraph>
                         ) : asset.kind === "video" ? (
-                            <video src={asset.data.url} controls className="mt-2 aspect-video w-full rounded-lg bg-black" />
+                            <video src={mediaUrl || undefined} controls className="mt-2 aspect-video w-full rounded-lg bg-black" />
                         ) : asset.kind === "audio" ? (
-                            <audio src={asset.data.url} controls className="mt-2 w-full" />
+                            <audio src={mediaUrl || undefined} controls className="mt-2 w-full" />
                         ) : (
                             <Typography.Text className="mt-2 block">
                                 {asset.data.width}x{asset.data.height} · {formatBytes(asset.data.bytes)} · {asset.data.mimeType}

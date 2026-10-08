@@ -631,26 +631,30 @@ export default function ImagePage() {
     };
 
     const saveResultToAssets = async (image: GeneratedImage, index: number) => {
-        const stored = image.storageKey
-            ? {
-                  url: await resolveImageUrl(image.storageKey, image.dataUrl),
-                  storageKey: image.storageKey,
-                  width: image.width,
-                  height: image.height,
-                  bytes: image.bytes,
-                  mimeType: image.mimeType || "image/png",
-              }
-            : await uploadImage(await imageToDataUrl(image));
-        addAsset({
-            kind: "image",
-            title: `生成结果 ${index + 1}`,
-            coverUrl: stored.url,
-            tags: [],
-            source: "生图工作台",
-            data: { dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType },
-            metadata: { source: "image-page", prompt },
-        });
-        message.success("已加入我的素材");
+        try {
+            const stored = image.storageKey
+                ? {
+                      url: await resolveImageUrl(image.storageKey, image.dataUrl),
+                      storageKey: image.storageKey,
+                      width: image.width,
+                      height: image.height,
+                      bytes: image.bytes,
+                      mimeType: image.mimeType || "image/png",
+                  }
+                : await uploadImage(await imageToDataUrl(image));
+            await addAsset({
+                kind: "image",
+                title: `生成结果 ${index + 1}`,
+                coverUrl: stored.url,
+                tags: [],
+                source: "生图工作台",
+                data: { dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType },
+                metadata: { source: "image-page", prompt },
+            });
+            message.success("已加入我的素材");
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "素材保存失败，请重试");
+        }
     };
 
     const syncImage = async (image: GeneratedImage, index: number) => {

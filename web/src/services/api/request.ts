@@ -74,7 +74,7 @@ async function apiRequest<T>(config: { url: string; method: "GET" | "POST" | "DE
 
     const payload = result as ApiResponse<T>;
     if (response.status < 200 || response.status >= 300 || payload.code !== 0) {
-        throw new Error(payload.msg || "请求失败");
+        throw Object.assign(new Error(payload.msg || "请求失败"), { status: response.status });
     }
 
     return payload.data;

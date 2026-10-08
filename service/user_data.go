@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/tigerowo/infinite-canvas/model"
@@ -238,20 +240,47 @@ func CurrentUserAssetData(ctx context.Context) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(config.AssetData) == "" {
-		return json.RawMessage(`{"assets":[]}`), nil
-	}
-	return json.RawMessage(config.AssetData), nil
+	return assetDataWithRevision(config.AssetData), nil
 }
 
-func SaveCurrentUserAssetData(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
-	config, err := saveCurrentUserConfigField(ctx, func(config *model.UserConfig) {
-		config.AssetData = string(raw)
-	})
+var ErrAssetDataConflict = errors.New("素材已被其他设备修改，请合并后重试")
+
+func assetDataRevision(raw string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(raw)))
+}
+
+func assetDataWithRevision(raw string) json.RawMessage {
+	var payload map[string]json.RawMessage
+	if strings.TrimSpace(raw) == "" {
+		payload = map[string]json.RawMessage{"assets": json.RawMessage(`[]`)}
+	} else if json.Unmarshal([]byte(raw), &payload) != nil || payload == nil {
+		return json.RawMessage(raw)
+	}
+	payload["revision"], _ = json.Marshal(assetDataRevision(raw))
+	encoded, _ := json.Marshal(payload)
+	return encoded
+}
+
+func SaveCurrentUserAssetData(ctx context.Context, raw json.RawMessage, baseRevision ...string) (json.RawMessage, error) {
+	config, err := currentUserConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return json.RawMessage(config.AssetData), nil
+	var previous *string
+	if len(baseRevision) > 0 {
+		if baseRevision[0] != assetDataRevision(config.AssetData) {
+			return nil, ErrAssetDataConflict
+		}
+		previous = &config.AssetData
+	}
+	saved, err := repository.SaveUserAssetData(config.UserID, string(raw), previous)
+	if err != nil {
+		return nil, err
+	}
+	if !saved {
+		return nil, ErrAssetDataConflict
+	}
+	return assetDataWithRevision(string(raw)), nil
 }
 
 func currentUserConfig(ctx context.Context) (model.UserConfig, error) {

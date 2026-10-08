@@ -64,8 +64,8 @@ export async function fetchUserAssetData<T>(token: string) {
     return apiGet<T>("/api/v1/user-data/assets", undefined, token);
 }
 
-export async function syncUserAssetData<T>(token: string, data: T) {
-    return apiPost<T>("/api/v1/user-data/assets", { data }, token);
+export async function syncUserAssetData<T>(token: string, data: T, baseRevision?: string) {
+    return apiPost<T>("/api/v1/user-data/assets", { data, ...(baseRevision === undefined ? {} : { base_revision: baseRevision }) }, token);
 }
 
 export type CreativeWorkflowRecord<T = unknown> = {

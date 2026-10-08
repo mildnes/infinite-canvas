@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/tigerowo/infinite-canvas/service"
@@ -87,14 +88,23 @@ func UserAssetData(w http.ResponseWriter, r *http.Request) {
 
 func SaveUserAssetData(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		Data json.RawMessage `json:"data"`
+		Data         json.RawMessage `json:"data"`
+		BaseRevision *string         `json:"base_revision"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil || len(request.Data) == 0 {
 		Fail(w, "数据内容不能为空")
 		return
 	}
-	data, err := service.SaveCurrentUserAssetData(r.Context(), request.Data)
+	var baseRevision []string
+	if request.BaseRevision != nil {
+		baseRevision = append(baseRevision, *request.BaseRevision)
+	}
+	data, err := service.SaveCurrentUserAssetData(r.Context(), request.Data, baseRevision...)
 	if err != nil {
+		if errors.Is(err, service.ErrAssetDataConflict) {
+			FailWithStatus(w, http.StatusConflict, err.Error())
+			return
+		}
 		FailError(w, err)
 		return
 	}

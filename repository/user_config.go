@@ -6,6 +6,7 @@ import (
 
 	"github.com/tigerowo/infinite-canvas/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func userConfigTimestamp() string {
@@ -37,4 +38,28 @@ func SaveUserConfig(config model.UserConfig) (model.UserConfig, error) {
 
 	config.UpdatedAt = userConfigTimestamp()
 	return config, db.Save(&config).Error
+}
+
+// Update just asset_data; other configuration fields must survive concurrent saves.
+// A nil previous value preserves the legacy last-write-wins API.
+func SaveUserAssetData(userID, raw string, previous *string) (bool, error) {
+	db, err := DB()
+	if err != nil {
+		return false, err
+	}
+	stamp := userConfigTimestamp()
+	values := map[string]interface{}{"asset_data": raw, "updated_at": stamp}
+	if previous != nil {
+		result := db.Model(&model.UserConfig{}).Where("user_id = ? AND COALESCE(asset_data, '') = ?", userID, *previous).Updates(values)
+		if result.Error != nil || result.RowsAffected > 0 {
+			return result.RowsAffected > 0, result.Error
+		}
+		if *previous != "" {
+			return false, nil
+		}
+		result = db.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.UserConfig{UserID: userID, AssetData: raw, CreatedAt: stamp, UpdatedAt: stamp})
+		return result.RowsAffected > 0, result.Error
+	}
+	result := db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "user_id"}}, DoUpdates: clause.Assignments(values)}).Create(&model.UserConfig{UserID: userID, AssetData: raw, CreatedAt: stamp, UpdatedAt: stamp})
+	return result.RowsAffected > 0, result.Error
 }

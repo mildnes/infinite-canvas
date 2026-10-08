@@ -2,9 +2,10 @@ import localforage from "localforage";
 import { uploadImage } from "./image-storage";
 import { uploadMediaBlob } from "./file-storage";
 import { useCanvasStore } from "@/app/(user)/canvas/stores/use-canvas-store";
-import { useAssetStore, mergeAssets } from "@/stores/use-asset-store";
+import { useAssetStore } from "@/stores/use-asset-store";
+import { mergeAssetSnapshots, type AssetSnapshot } from "@/lib/asset-data";
 import { useUserStore } from "@/stores/use-user-store";
-import { fetchUserConfig, syncUserAssetData, syncUserImageHistory } from "./api/user-config";
+import { fetchUserConfig, syncUserImageHistory } from "./api/user-config";
 import { saveVideoGenerationLogs } from "./api/generation-logs";
 
 export async function checkLocalAssetsExist(): Promise<boolean> {
@@ -41,7 +42,7 @@ export async function migrateLocalAssetsToCloud(
 
     // 先拉取云端已存的数据
     const userConfig = await fetchUserConfig(token).catch(() => null);
-    const remoteAssets = userConfig?.assetData as { assets?: any[] } | undefined;
+    const remoteAssets = userConfig?.assetData as AssetSnapshot | undefined;
 
     const imageStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_files" });
     const mediaStore = localforage.createInstance({ name: "infinite-canvas", storeName: "media_files" });
@@ -165,21 +166,25 @@ export async function migrateLocalAssetsToCloud(
 
     // 5. Update Asset store
     const assets = useAssetStore.getState().assets;
-    if (assets.length > 0) {
+    if (assets.length > 0 || useAssetStore.getState().tombstones.length > 0) {
         try {
-            const assetsStr = JSON.stringify({ assets });
+            const assetsStr = JSON.stringify({ assets, tombstones: useAssetStore.getState().tombstones });
             const replacedAssetsStr = await replaceKeysInString(assetsStr);
             const nextAssets = JSON.parse(replacedAssetsStr);
+            // A changed storage reference is a real edit, not an equal-date duplicate.
+            nextAssets.assets = nextAssets.assets.map((asset: AssetSnapshot["assets"][number]) => {
+                const previous = assets.find(item => item.id === asset.id);
+                return previous && JSON.stringify(previous) !== JSON.stringify(asset) ? { ...asset, updatedAt: new Date().toISOString() } : asset;
+            });
             // 与云端已存的资产执行智能合并，防止覆盖云端其它设备的数据
-            const mergedAssets = mergeAssets(remoteAssets?.assets || [], nextAssets.assets);
-            const finalAssets = { assets: mergedAssets };
+            if (useUserStore.getState().token !== token) return;
+            const finalAssets = mergeAssetSnapshots(remoteAssets, mergeAssetSnapshots(nextAssets, useAssetStore.getState()));
             // Save locally
-            await localforage.createInstance({ name: "infinite-canvas", storeName: "app_state" })
-                .setItem("infinite-canvas:asset_store", JSON.stringify({ state: finalAssets }));
-            // Set in Zustand store
+            // The store's persistence adapter normalizes and writes the current account.
             useAssetStore.setState(finalAssets);
             // Sync to server
-            await syncUserAssetData(token, finalAssets);
+            await useAssetStore.getState().hydrateAccountAssets(token, true);
+            await useAssetStore.getState().syncAccountAssets(token);
         } catch (e) {
             console.error("Failed to migrate assets", e);
         }

@@ -5,8 +5,10 @@ import { persist, type PersistStorage, type StorageValue } from "zustand/middlew
 
 import { nanoid } from "nanoid";
 import { localForageStorage } from "@/lib/localforage-storage";
-import { cleanupUnusedImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
-import { cleanupUnusedMedia, resolveMediaUrl } from "@/services/file-storage";
+import { cleanupUnusedImages } from "@/services/image-storage";
+import { cleanupUnusedMedia } from "@/services/file-storage";
+import { mergeAssetSnapshots, type AssetSnapshot, type AssetTombstone } from "@/lib/asset-data";
+import { prepareAssetForSave } from "@/services/asset-storage";
 import { fetchUserAssetData, syncUserAssetData } from "@/services/api/user-config";
 import { useUserStore } from "@/stores/use-user-store";
 
@@ -33,8 +35,9 @@ type AssetBase<T extends AssetKind> = {
 
 type AssetStore = {
     assets: Asset[];
-    addAsset: (asset: Omit<Asset, "id" | "createdAt" | "updatedAt">) => string;
-    updateAsset: (id: string, patch: Partial<Omit<Asset, "id" | "createdAt">>) => void;
+    tombstones: AssetTombstone[];
+    addAsset: (asset: Omit<Asset, "id" | "createdAt" | "updatedAt">) => Promise<string>;
+    updateAsset: (id: string, patch: Partial<Omit<Asset, "id" | "createdAt">>) => Promise<void>;
     removeAsset: (id: string) => void;
     hydrateAccountAssets: (token: string, syncEnabled?: boolean) => Promise<void>;
     syncAccountAssets: (token: string) => Promise<void>;
@@ -47,33 +50,25 @@ let activeAssetSyncToken = "";
 let accountAssetSyncEnabled = false;
 let isHydratingAccountAssets = false;
 let syncTimer: number | null = null;
-
-type AssetSnapshot = { assets: Asset[] };
+let syncSession = 0;
+let syncInFlight: Promise<void> | null = null;
 
 const assetStorage: PersistStorage<AssetStore> = {
     getItem: async (name) => {
+        const ownerToken = useUserStore.getState().token;
         const value = await localForageStorage.getItem(name);
         if (!value) return null;
         const parsed = JSON.parse(value) as StorageValue<AssetStore>;
-        parsed.state.assets = await Promise.all(
-            parsed.state.assets.map(async (asset) => {
-                if (asset.kind === "video" && asset.data.storageKey) return { ...asset, data: { ...asset.data, url: await resolveMediaUrl(asset.data.storageKey, asset.data.url) } };
-                if (asset.kind === "audio" && asset.data.storageKey) return { ...asset, data: { ...asset.data, url: await resolveMediaUrl(asset.data.storageKey, asset.data.url) } };
-                if (asset.kind !== "image") return asset;
-                if (asset.data.storageKey)
-                    return {
-                        ...asset,
-                        coverUrl: asset.coverUrl.startsWith("blob:") ? await resolveImageUrl(asset.data.storageKey, asset.coverUrl) : asset.coverUrl,
-                        data: { ...asset.data, dataUrl: await resolveImageUrl(asset.data.storageKey, asset.data.dataUrl) },
-                    };
-                if (!asset.data.dataUrl.startsWith("data:image/")) return asset;
-                const image = await uploadImage(asset.data.dataUrl);
-                return { ...asset, coverUrl: asset.coverUrl.startsWith("data:image/") ? image.url : asset.coverUrl, data: { ...asset.data, dataUrl: image.url, storageKey: image.storageKey, bytes: image.bytes, mimeType: image.mimeType } };
-            }),
-        );
+        // Preserve the existing legacy inline-image migration, without reviving old blob URLs.
+        parsed.state.assets = await Promise.all((parsed.state.assets || []).map(async asset => {
+            if (asset.kind !== "image" || asset.data.storageKey || !asset.data.dataUrl?.startsWith("data:image/")) return asset;
+            try { return await prepareAssetForSave(asset); } catch { return asset; }
+        }));
+        if (useUserStore.getState().token !== ownerToken) return null;
+        Object.assign(parsed.state, mergeAssetSnapshots(parsed.state));
         return parsed;
     },
-    setItem: (name, value) => localForageStorage.setItem(name, JSON.stringify(value)),
+    setItem: (name, value) => localForageStorage.setItem(name, JSON.stringify({ ...value, state: mergeAssetSnapshots(value.state) })),
     removeItem: (name) => localForageStorage.removeItem(name),
 };
 
@@ -81,19 +76,27 @@ export const useAssetStore = create<AssetStore>()(
     persist(
         (set, get) => ({
             assets: [],
-            addAsset: (asset) => {
+            tombstones: [],
+            addAsset: async (asset) => {
+                const ownerToken = useUserStore.getState().token;
                 const now = new Date().toISOString();
                 const id = nanoid();
-                set((state) => ({ assets: [{ ...asset, id, createdAt: now, updatedAt: now } as Asset, ...state.assets] }));
+                const prepared = await prepareAssetForSave({ ...asset, id, createdAt: now, updatedAt: now } as Asset);
+                if (useUserStore.getState().token !== ownerToken) throw new Error("登录状态已变化，请重新保存素材");
+                set((state) => mergeAssetSnapshots(state, { assets: [prepared] }));
                 scheduleAssetSync(get);
                 return id;
             },
-            updateAsset: (id, patch) =>
-                set((state) => {
-                    const assets = state.assets.map((asset) => (asset.id === id ? ({ ...asset, ...patch, updatedAt: new Date().toISOString() } as Asset) : asset));
-                    window.setTimeout(() => scheduleAssetSync(get), 0);
-                    return { assets };
-                }),
+            updateAsset: async (id, patch) => {
+                const current = get().assets.find(asset => asset.id === id);
+                if (!current) return;
+                const ownerToken = useUserStore.getState().token;
+                const prepared = await prepareAssetForSave({ ...current, ...patch, updatedAt: new Date(Math.max(Date.now(), Date.parse(current.updatedAt) + 1 || 0)).toISOString() } as Asset);
+                if (useUserStore.getState().token !== ownerToken) throw new Error("登录状态已变化，请重新保存素材");
+                if (get().assets.find(asset => asset.id === id)?.updatedAt !== current.updatedAt) throw new Error("素材已变更，请重新打开后保存");
+                set(state => mergeAssetSnapshots({ ...state, assets: state.assets.filter(asset => asset.id !== id) }, { assets: [prepared] }));
+                scheduleAssetSync(get);
+            },
             removeAsset: (id) =>
                 set((state) => {
                     const deletedAsset = state.assets.find((asset) => asset.id === id);
@@ -171,34 +174,59 @@ export const useAssetStore = create<AssetStore>()(
                     }
 
                     window.setTimeout(() => scheduleAssetSync(get), 0);
-                    return { assets };
+                    const deletedAt = new Date(Math.max(Date.now(), Date.parse(deletedAsset?.updatedAt || "") + 1 || 0)).toISOString();
+                    return mergeAssetSnapshots({ ...state, assets }, { assets: [], tombstones: [{ id, deletedAt }] });
                 }),
             hydrateAccountAssets: async (token, syncEnabled = false) => {
                 if (!token) return;
                 activeAssetSyncToken = token;
                 accountAssetSyncEnabled = syncEnabled;
+                const session = ++syncSession;
+                syncInFlight = null;
                 isHydratingAccountAssets = true;
                 try {
                     const remote = await fetchUserAssetData<AssetSnapshot>(token);
-                    const remoteAssets = Array.isArray(remote?.assets) ? remote.assets : [];
-                    if (syncEnabled) {
-                        set({ assets: remoteAssets });
-                    } else {
-                        const localHasAssets = get().assets.length > 0;
-                        if (!localHasAssets && remoteAssets.length) {
-                            set({ assets: remoteAssets });
-                        }
-                    }
+                    if (!isCurrentAssetSession(token, session)) return;
+                    set(mergeAssetSnapshots(remote, get()));
                 } finally {
-                    isHydratingAccountAssets = false;
+                    if (isCurrentAssetSession(token, session)) {
+                        isHydratingAccountAssets = false;
+                        scheduleAssetSync(get);
+                    }
                 }
             },
             syncAccountAssets: async (token) => {
-                if (!token || !accountAssetSyncEnabled) return;
-                await syncUserAssetData(token, { assets: get().assets });
+                const session = syncSession;
+                if (!isCurrentAssetSession(token, session) || !accountAssetSyncEnabled || isHydratingAccountAssets) return;
+                if (syncInFlight) return syncInFlight;
+                const run = async () => {
+                    for (let attempt = 0; attempt < 5; attempt++) {
+                        const remote = await fetchUserAssetData<AssetSnapshot>(token);
+                        if (!isCurrentAssetSession(token, session)) return;
+                        const merged = mergeAssetSnapshots(remote, get());
+                        try {
+                            const saved = await syncUserAssetData(token, merged, remote?.revision);
+                            if (!isCurrentAssetSession(token, session)) return;
+                            const settled = mergeAssetSnapshots(saved, get());
+                            set(settled);
+                            if (JSON.stringify(settled) === JSON.stringify(merged)) return;
+                        } catch (error) {
+                            if (!isCurrentAssetSession(token, session)) return;
+                            if ((error as { status?: number }).status !== 409) throw error;
+                        }
+                    }
+                    throw new Error("素材同步发生冲突，将保留本地修改并稍后重试");
+                };
+                const pending = run();
+                syncInFlight = pending;
+                try { await pending; } finally { if (syncInFlight === pending) syncInFlight = null; }
             },
             stopAccountAssetSync: () => {
                 activeAssetSyncToken = "";
+                ++syncSession;
+                syncInFlight = null;
+                accountAssetSyncEnabled = false;
+                isHydratingAccountAssets = false;
                 if (syncTimer) window.clearTimeout(syncTimer);
                 syncTimer = null;
             },
@@ -261,26 +289,25 @@ export const useAssetStore = create<AssetStore>()(
         {
             name: ASSET_STORE_KEY,
             storage: assetStorage,
-            partialize: (state) => ({ assets: state.assets }) as StorageValue<AssetStore>["state"],
+            partialize: (state) => mergeAssetSnapshots(state) as StorageValue<AssetStore>["state"],
         },
     ),
 );
 
-function scheduleAssetSync(get: () => AssetStore) {
+function isCurrentAssetSession(token: string, session: number) {
+    return Boolean(token) && token === activeAssetSyncToken && session === syncSession && useUserStore.getState().token === token;
+}
+
+function scheduleAssetSync(get: () => AssetStore, delay = 600) {
     if (isHydratingAccountAssets || !activeAssetSyncToken || !accountAssetSyncEnabled || typeof window === "undefined") return;
     if (syncTimer) window.clearTimeout(syncTimer);
     syncTimer = window.setTimeout(() => {
-        void get().syncAccountAssets(activeAssetSyncToken).catch(() => {});
-    }, 600);
+        const token = activeAssetSyncToken;
+        const session = syncSession;
+        void get().syncAccountAssets(token).catch(() => {
+            if (isCurrentAssetSession(token, session)) scheduleAssetSync(get, 30_000);
+        });
+    }, delay);
 }
 
-export function mergeAssets(remoteAssets: Asset[], localAssets: Asset[]) {
-    const records = new Map<string, Asset>();
-    [...localAssets, ...remoteAssets].forEach((asset) => {
-        const previous = records.get(asset.id);
-        if (!previous || Date.parse(asset.updatedAt || "") >= Date.parse(previous.updatedAt || "")) {
-            records.set(asset.id, asset);
-        }
-    });
-    return Array.from(records.values()).sort((a, b) => Date.parse(b.updatedAt || "") - Date.parse(a.updatedAt || ""));
-}
+export { mergeAssets } from "@/lib/asset-data";

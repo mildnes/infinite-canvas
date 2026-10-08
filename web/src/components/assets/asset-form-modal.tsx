@@ -64,59 +64,63 @@ export function AssetFormModal({ open, asset = null, onClose }: AssetFormModalPr
     }, [asset, form, open]);
 
     const saveAsset = async () => {
-        const values = await form.validateFields();
-        const base = {
-            title: values.title.trim(),
-            coverUrl: values.coverUrl?.trim() || (values.kind === "image" && imageDraft ? imageDraft.dataUrl : ""),
-            tags: values.tags || [],
-            category: values.category?.trim(),
-            source: values.source?.trim(),
-            note: values.note?.trim(),
-            metadata: asset?.metadata || { source: "manual" },
-        };
+        try {
+            const values = await form.validateFields();
+            const base = {
+                title: values.title.trim(),
+                coverUrl: values.coverUrl?.trim() || (values.kind === "image" && imageDraft ? imageDraft.dataUrl : ""),
+                tags: values.tags || [],
+                category: values.category?.trim(),
+                source: values.source?.trim(),
+                note: values.note?.trim(),
+                metadata: asset?.metadata || { source: "manual" },
+            };
 
-        if (values.kind === "text") {
-            const nextAsset = { ...base, kind: "text" as const, data: { content: (values.content || "").trim() } };
-            asset ? updateAsset(asset.id, nextAsset) : addAsset(nextAsset);
-        } else if (values.kind === "image") {
-            const url = (values.content || "").trim();
-            if (!imageDraft && !url) {
-                message.error("请选择图片文件或填写图片 URL");
-                return;
+            if (values.kind === "text") {
+                const nextAsset = { ...base, kind: "text" as const, data: { content: (values.content || "").trim() } };
+                await (asset ? updateAsset(asset.id, nextAsset) : addAsset(nextAsset));
+            } else if (values.kind === "image") {
+                const url = (values.content || "").trim();
+                if (!imageDraft && !url) {
+                    message.error("请选择图片文件或填写图片 URL");
+                    return;
+                }
+                let data = imageDraft || { dataUrl: url, width: 0, height: 0, bytes: 0, mimeType: "image/*" };
+                if (!imageDraft) {
+                    try {
+                        const blob = await (await fetch(url)).blob();
+                        const bitmap = await createImageBitmap(blob);
+                        data = { dataUrl: url, width: bitmap.width, height: bitmap.height, bytes: blob.size, mimeType: blob.type || "image/*" };
+                        bitmap.close();
+                    } catch {}
+                }
+                const nextAsset = { ...base, coverUrl: base.coverUrl || data.dataUrl, kind: "image" as const, data };
+                await (asset ? updateAsset(asset.id, nextAsset) : addAsset(nextAsset));
+            } else if (values.kind === "video") {
+                const url = (values.content || "").trim();
+                if (!mediaDraft && !url) {
+                    message.error("请选择视频文件或填写视频 URL");
+                    return;
+                }
+                const data = (mediaDraft as VideoAsset["data"] | null) || { url, width: 0, height: 0, bytes: 0, mimeType: "video/mp4" };
+                const nextAsset = { ...base, kind: "video" as const, data };
+                await (asset ? updateAsset(asset.id, nextAsset) : addAsset(nextAsset));
+            } else {
+                const url = (values.content || "").trim();
+                if (!mediaDraft && !url) {
+                    message.error("请选择音频文件或填写音频 URL");
+                    return;
+                }
+                const data = (mediaDraft as AudioAsset["data"] | null) || { url, mimeType: "audio/mpeg" };
+                const nextAsset = { ...base, kind: "audio" as const, data };
+                await (asset ? updateAsset(asset.id, nextAsset) : addAsset(nextAsset));
             }
-            let data = imageDraft || { dataUrl: url, width: 0, height: 0, bytes: 0, mimeType: "image/*" };
-            if (!imageDraft) {
-                try {
-                    const blob = await (await fetch(url)).blob();
-                    const bitmap = await createImageBitmap(blob);
-                    data = { dataUrl: url, width: bitmap.width, height: bitmap.height, bytes: blob.size, mimeType: blob.type || "image/*" };
-                    bitmap.close();
-                } catch {}
-            }
-            const nextAsset = { ...base, coverUrl: base.coverUrl || data.dataUrl, kind: "image" as const, data };
-            asset ? updateAsset(asset.id, nextAsset) : addAsset(nextAsset);
-        } else if (values.kind === "video") {
-            const url = (values.content || "").trim();
-            if (!mediaDraft && !url) {
-                message.error("请选择视频文件或填写视频 URL");
-                return;
-            }
-            const data = (mediaDraft as VideoAsset["data"] | null) || { url, width: 0, height: 0, bytes: 0, mimeType: "video/mp4" };
-            const nextAsset = { ...base, kind: "video" as const, data };
-            asset ? updateAsset(asset.id, nextAsset) : addAsset(nextAsset);
-        } else {
-            const url = (values.content || "").trim();
-            if (!mediaDraft && !url) {
-                message.error("请选择音频文件或填写音频 URL");
-                return;
-            }
-            const data = (mediaDraft as AudioAsset["data"] | null) || { url, mimeType: "audio/mpeg" };
-            const nextAsset = { ...base, kind: "audio" as const, data };
-            asset ? updateAsset(asset.id, nextAsset) : addAsset(nextAsset);
+
+            message.success(asset ? "素材已更新" : "素材已保存");
+            onClose();
+        } catch (error) {
+            if (!(error as { errorFields?: unknown })?.errorFields) message.error(error instanceof Error ? error.message : "素材保存失败，请重试");
         }
-
-        message.success(asset ? "素材已更新" : "素材已保存");
-        onClose();
     };
 
     const readCoverFile = async (file?: File) => {
