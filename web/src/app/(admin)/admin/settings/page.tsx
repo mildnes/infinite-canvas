@@ -2,7 +2,7 @@
 
 import { CheckCircleOutlined, DeleteOutlined, FormatPainterOutlined, LoadingOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import { json } from "@codemirror/lang-json";
-import { App, AutoComplete, Button, Card, Checkbox, Col, Collapse, Drawer, Flex, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from "antd";
+import { App, Button, Card, Checkbox, Col, Collapse, Drawer, Flex, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from "antd";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { EditorView } from "@uiw/react-codemirror";
@@ -20,6 +20,7 @@ import { modelMatchesCapability, notifyPublicSettingsUpdated } from "@/stores/us
 import { useUserStore } from "@/stores/use-user-store";
 import { normalizeImageQualityCapabilities } from "./image-quality-capabilities";
 import { normalizeImageOutputCapabilities } from "./image-output-capabilities";
+import { appendUpstreamModelRows, buildModelMappingRows, deriveModelMapping, emptyModelMappingRow, ModelMappingEditor, type ModelMappingRow } from "./model-mapping-editor";
 
 const CodeMirror = dynamic(() => import("@uiw/react-codemirror"), { ssr: false });
 const WorkflowChannelPane = dynamic(() => import("@/components/workflow/workflow-channel-pane").then((module) => module.WorkflowChannelPane), { ssr: false });
@@ -97,16 +98,19 @@ export default function AdminSettingsPage() {
     const [fetchingMCPToolsIndex, setFetchingMCPToolsIndex] = useState<number | null>(null);
     const [modelCosts, setModelCosts] = useState<AdminModelCost[]>([]);
     const [knownModels, setKnownModels] = useState<string[]>([]);
-    const savedModelMapKeysRef = useRef<string[]>([]);
+    // Snapshot all saved request names, including same-name passthrough rows.
+    const savedRequestModelNamesRef = useRef<string[]>([]);
+    const [modelMappingRows, setModelMappingRows] = useState<ModelMappingRow[]>([]);
+    const [channelUpstreamModels, setChannelUpstreamModels] = useState<string[]>([]);
+    const committedModelRowsRef = useRef<ModelMappingRow[]>([]);
     const publicModels = Form.useWatch(["public", "modelChannel", "availableModels"], form) || [];
     const publicWorkflows = Form.useWatch(["public", "modelChannel", "availableWorkflows"], form) || [];
     const storageProviders = Form.useWatch(["private", "storage", "providers"], form) || [];
     const agentMCPServers = Form.useWatch(["private", "agent", "mcpServers"], form) || [];
     const channelProtocol = Form.useWatch("protocol", channelForm);
-    const channelBaseUrl = Form.useWatch("baseUrl", channelForm);
-    const rawSelectedChannelModels = Form.useWatch("models", channelForm) || [];
-    const channelModelMap = Form.useWatch("modelMap", channelForm) || {};
-    const selectedChannelModels = useMemo(() => uniqueModels([...rawSelectedChannelModels, ...Object.keys(channelModelMap)]), [rawSelectedChannelModels, channelModelMap]);
+    const rawSelectedChannelModels = Form.useWatch("models", { form: channelForm, preserve: true }) || [];
+    const channelModelMap = Form.useWatch("modelMap", { form: channelForm, preserve: true }) || {};
+    const selectedChannelModels = useMemo(() => deriveModelMapping(modelMappingRows).models, [modelMappingRows]);
     const channelModelCapabilities = Form.useWatch("modelCapabilities", { form: channelForm, preserve: true }) || {};
     const channelImageQualityCapabilities = Form.useWatch("imageQualityCapabilities", { form: channelForm, preserve: true }) || {};
     const channelImageOutputCapabilities = Form.useWatch("imageOutputCapabilities", { form: channelForm, preserve: true }) || {};
@@ -136,7 +140,7 @@ export default function AdminSettingsPage() {
             const data = normalizeSettings(await fetchAdminSettings(token));
             form.setFieldsValue(data);
             setChannels(data.private.channels);
-            savedModelMapKeysRef.current = collectChannelModelMapKeys(data.private.channels);
+            savedRequestModelNamesRef.current = collectChannelModels(data.private.channels);
             setModelCosts(data.public.modelChannel.modelCosts);
             setKnownModels(collectKnownModels(data));
             setJsonText({
@@ -160,7 +164,7 @@ export default function AdminSettingsPage() {
 
     const saveSettings = async () => {
         if (!token) return;
-        const values = await collectSettings(form, editorMode, jsonText, message, savedModelMapKeysRef.current);
+        const values = await collectSettings(form, editorMode, jsonText, message, savedRequestModelNamesRef.current);
         if (!values) {
             return;
         }
@@ -172,7 +176,7 @@ export default function AdminSettingsPage() {
             const merged = mergeChannelApiKeys(values.private.channels, saved);
             form.setFieldsValue(merged);
             setChannels(merged.private.channels);
-            savedModelMapKeysRef.current = collectChannelModelMapKeys(merged.private.channels);
+            savedRequestModelNamesRef.current = collectChannelModels(merged.private.channels);
             setModelCosts(merged.public.modelChannel.modelCosts);
             rememberKnownModels(merged);
             setJsonText({
@@ -227,6 +231,11 @@ export default function AdminSettingsPage() {
         setIsChannelDrawerOpen(true);
         const channel = index === null ? emptyChannel : normalizeChannel(channels[index]);
         channelForm.setFieldsValue(channel);
+        const existingUpstreamModels = Object.values(channel.modelMap || {});
+        const rows = buildModelMappingRows(channel, existingUpstreamModels);
+        setModelMappingRows(rows);
+        committedModelRowsRef.current = rows;
+        setChannelUpstreamModels(uniqueModels(existingUpstreamModels));
         setBulkTargetModels([]);
         setBulkModelCapabilities([]);
         setWorkflowChannelDraft(channel);
@@ -237,11 +246,15 @@ export default function AdminSettingsPage() {
         setIsChannelDrawerOpen(false);
         setEditingChannelIndex(null);
         channelForm.resetFields();
+        setModelMappingRows([]);
+        setChannelUpstreamModels([]);
     };
 
     const saveChannel = async () => {
+        commitModelMappingRows(modelMappingRows);
         const values = await channelForm.validateFields();
-        const channel = normalizeChannel({ ...(isWorkflowProtocol(values.protocol) ? workflowChannelDraft : {}), ...channelForm.getFieldsValue(true), ...values });
+        const derived = deriveModelMapping(modelMappingRows);
+        const channel = normalizeChannel({ ...(isWorkflowProtocol(values.protocol) ? workflowChannelDraft : {}), ...channelForm.getFieldsValue(true), ...values, ...(!isWorkflowProtocol(values.protocol) ? derived : {}) });
         if (channel.protocol === "runninghub" && (!channel.baseUrl.trim() || (!channel.apiKey.trim() && editingChannelIndex === null))) {
             message.error("请填写 RunningHub Base URL 和积分 API Key");
             return;
@@ -273,25 +286,36 @@ export default function AdminSettingsPage() {
     const closeChannelModelSelector = () => setIsModelSelectorOpen(false);
 
     const confirmChannelModelSelector = (models: string[]) => {
-        const nextModels = mergeChannelModelSelection(rawSelectedChannelModels, channelModelMap, models);
-        const preserved = rawSelectedChannelModels.filter((model) => Object.prototype.hasOwnProperty.call(channelModelMap, model));
-        channelForm.setFieldValue("models", nextModels);
-        rememberModels(nextModels);
-        if (preserved.length) message.info("已保留 " + preserved.length + " 个自定义模型及其映射");
+        const nextRows = appendUpstreamModelRows(modelMappingRows, models);
+        setModelMappingRows(nextRows);
+        setChannelUpstreamModels((current) => uniqueModels([...current, ...models]));
+        rememberModels(models);
         closeChannelModelSelector();
     };
 
-    const renameModel = (oldModel: string, newModel: string) => {
-        channelForm.setFieldsValue(renameChannelModel(channelForm.getFieldsValue(true), oldModel, newModel));
+    const addModelMapping = () => {
+        setModelMappingRows((current) => [...current, emptyModelMappingRow(current)]);
     };
 
-    const addModelMapping = () => {
-        const base = "自定义模型" + (selectedChannelModels.length + 1);
-        let next = base;
-        let index = 2;
-        while (selectedChannelModels.includes(next)) next = base + index++;
-        channelForm.setFieldsValue({ models: uniqueModels([...rawSelectedChannelModels, next]), modelMap: { ...channelModelMap, [next]: "" } });
+    const removeModelMapping = (item: ModelMappingRow) => {
+        const next = modelMappingRows.filter((row) => row.id !== item.id);
+        setModelMappingRows(next);
+        commitModelMappingRows(next);
     };
+
+    const updateModelMappingRows = (rows: ModelMappingRow[]) => {
+        setModelMappingRows(rows);
+    };
+
+    function commitModelMappingRows(rows: ModelMappingRow[]) {
+        if (isWorkflowProtocol(channelForm.getFieldValue("protocol"))) return;
+        const next = applyModelMappingRows(channelForm.getFieldsValue(true), rows, committedModelRowsRef.current);
+        // setFieldsValue merges nested maps; exact field replacement removes renamed/deleted keys.
+        for (const key of ["models", "modelMap", "modelCapabilities", "imageQualityCapabilities", "imageOutputCapabilities"] as const) {
+            channelForm.setFieldValue(key, next[key]);
+        }
+        committedModelRowsRef.current = rows;
+    }
 
     const updateChannelModelCapabilities = (model: string, values?: ModelCapability[]) => {
         const next: NonNullable<AdminModelChannel["modelCapabilities"]> = { ...(channelForm.getFieldValue("modelCapabilities") || {}) };
@@ -380,12 +404,11 @@ export default function AdminSettingsPage() {
     async function persistChannels(nextChannels: AdminModelChannel[]) {
         if (!token) throw new Error("请先登录");
         const values = normalizeSettings(form.getFieldsValue(true) as AdminSettings);
-        const nextChannelModels = collectChannelModels(nextChannels);
         const nextChannelWorkflows = collectChannelWorkflows(nextChannels);
-        const newlyAddedMappingKeys = collectChannelModelMapKeys(nextChannels).filter((key) => !savedModelMapKeysRef.current.includes(key));
+        const newlyAddedRequestNames = collectChannelModels(nextChannels).filter((name) => !savedRequestModelNamesRef.current.includes(name));
         const nextSettings = normalizeSettings({
             ...values,
-            public: { ...values.public, modelChannel: { ...values.public.modelChannel, availableModels: resolveAvailableModels(values.public.modelChannel.availableModels, nextChannels, newlyAddedMappingKeys), availableWorkflows: filterModels(values.public.modelChannel.availableWorkflows, nextChannelWorkflows.map((item) => item.value)) } },
+            public: { ...values.public, modelChannel: { ...values.public.modelChannel, availableModels: resolveAvailableModels(values.public.modelChannel.availableModels, nextChannels, newlyAddedRequestNames), availableWorkflows: filterModels(values.public.modelChannel.availableWorkflows, nextChannelWorkflows.map((item) => item.value)) } },
             private: { ...values.private, channels: nextChannels },
         });
         const saved = normalizeSettings(await saveAdminSettings(token, nextSettings));
@@ -393,7 +416,7 @@ export default function AdminSettingsPage() {
         clearMediaStorageConfigCache();
         const merged = mergeChannelApiKeys(nextChannels, saved);
         setChannels(merged.private.channels);
-        savedModelMapKeysRef.current = collectChannelModelMapKeys(merged.private.channels);
+        savedRequestModelNamesRef.current = collectChannelModels(merged.private.channels);
         setModelCosts(merged.public.modelChannel.modelCosts);
         rememberKnownModels(merged);
         form.setFieldsValue(merged);
@@ -1053,7 +1076,7 @@ export default function AdminSettingsPage() {
                 <Drawer
                     title={editingChannelIndex === null ? "新增渠道" : "编辑渠道"}
                     open={isChannelDrawerOpen}
-                    size={isWorkflowProtocol(channelProtocol) ? "75vw" : 560}
+                    size={isWorkflowProtocol(channelProtocol) ? "75vw" : 760}
                     onClose={closeChannelDrawer}
                     extra={
                         <Space>
@@ -1125,36 +1148,16 @@ export default function AdminSettingsPage() {
                                 </Form.Item>
                             </Col>
                             <Col span={24}>
-                                <Form.Item label="渠道可用模型" extra={'这里就是画板里能选到的模型名，可以自定义（例如“我的高质图”）'}>
-                                    <Space.Compact style={{ width: "100%" }}>
-                                        <Form.Item name="models" noStyle>
-                                            <Select mode="tags" showSearch={{ optionFilterProp: ["label", "value"] }} maxTagCount="responsive" tokenSeparators={[",", "\n"]} options={knownModels.map((model) => ({ label: modelLabel(model, { protocol: channelProtocol, baseUrl: channelBaseUrl }), value: model }))} />
-                                        </Form.Item>
-                                        <Button onClick={() => openChannelModelSelector()}>选择模型</Button>
-                                    </Space.Compact>
+                                <Form.Item label="渠道可用模型" extra="由下方映射表推导出的请求模型名称；请直接编辑映射表，避免两个入口互相覆盖。">
+                                    <Typography.Text type="secondary">{selectedChannelModels.join("、") || "未配置模型"}</Typography.Text>
+                                    <Button type="link" onClick={() => openChannelModelSelector()}>选择模型</Button>
                                 </Form.Item>
                             </Col>
-                            {selectedChannelModels.length ? (
-                                <Col span={24}>
-                                    <Form.Item label="模型映射（本地名 → 上游名）" extra="左 = 画板里显示/选择的名字（可自定义）；右 = 实际发给上游的名字。留空表示同名直传。">
-                                        <Flex vertical gap={8}>
-                                            {selectedChannelModels.map((model: string) => (
-                                                <Row gutter={8} key={model} align="middle">
-                                                    <Col xs={24} sm={10}>
-                                                        <AutoComplete defaultValue={model} options={selectedChannelModels.map((name: string) => ({ label: name, value: name }))} onBlur={(event) => renameModel(model, (event.target as HTMLInputElement).value)} aria-label={model + " 本地模型名"} className="!w-full" />
-                                                    </Col>
-                                                    <Col xs={24} sm={14}>
-                                                        <Form.Item name={["modelMap", model]} noStyle>
-                                                            <AutoComplete allowClear options={knownModels.map((name) => ({ label: name, value: name }))} placeholder="上游真实模型名（留空 = 与本地名同名直传）" aria-label={model + " 上游模型名"} />
-                                                        </Form.Item>
-                                                    </Col>
-                                                </Row>
-                                            ))}
-                                            <Button type="dashed" icon={<PlusOutlined />} onClick={addModelMapping}>+ 添加映射</Button>
-                                        </Flex>
-                                    </Form.Item>
-                                </Col>
-                            ) : null}
+                            <Col span={24}>
+                                <Form.Item label="模型映射">
+                                    <ModelMappingEditor rows={modelMappingRows} requestModels={uniqueModels([...rawSelectedChannelModels, ...selectedChannelModels])} upstreamModels={uniqueModels([...channelUpstreamModels, ...knownModels])} onChange={updateModelMappingRows} onCommit={() => commitModelMappingRows(modelMappingRows)} onRemove={removeModelMapping} onAdd={addModelMapping} />
+                                </Form.Item>
+                            </Col>
                             {selectedChannelModels.length ? (
                                 <Col span={24}>
                                     <Form.Item label="模型能力声明（可选）" extra="自动推导按协议和模型名估算，自定义模型请手动声明。取消全部勾选表示无可用能力；点击自动推导可移除声明。">
@@ -1341,12 +1344,12 @@ export default function AdminSettingsPage() {
                 {isModelSelectorOpen ? (
                     <ChannelModelSelectorModal
                         channel={channelForm.getFieldsValue()}
-                        models={channelForm.getFieldValue("models") || []}
-                        sourceModels={knownModels}
+                        models={modelMappingRows.map((item) => item.upstreamName.trim() || item.requestName.trim()).filter(Boolean)}
+                        sourceModels={channelUpstreamModels}
                         onCancel={closeChannelModelSelector}
                         onConfirm={confirmChannelModelSelector}
                         onFetchModels={fetchChannelModelList}
-                        onModelsFetched={rememberModels}
+                        onModelsFetched={(models) => { setChannelUpstreamModels((current) => uniqueModels([...current, ...models])); rememberModels(models); }}
                     />
                 ) : null}
                 <Modal
@@ -1639,6 +1642,18 @@ function renameChannelModel(channel: Partial<AdminModelChannel>, oldModel: strin
     } as AdminModelChannel;
 }
 
+function applyModelMappingRows(channel: Partial<AdminModelChannel>, rows: ModelMappingRow[], previousRows: ModelMappingRow[]): AdminModelChannel {
+    let next = { ...channel };
+    for (const previous of previousRows) {
+        const current = rows.find((row) => row.id === previous.id);
+        const oldName = previous.requestName.trim() || previous.upstreamName.trim();
+        const newName = current && (current.requestName.trim() || current.upstreamName.trim());
+        if (oldName && newName && oldName !== newName) next = renameChannelModel(next, oldName, newName);
+    }
+    // The table is the sole source of models/modelMap; normalize only after replacing both.
+    return normalizeChannel({ ...next, ...deriveModelMapping(rows) });
+}
+
 function normalizeModelMap(mapping: AdminModelChannel["modelMap"], models: string[]) {
     const entries = uniqueModels([...models, ...Object.keys(mapping || {})]).flatMap(model => {
         const value = mapping?.[model];
@@ -1677,19 +1692,10 @@ function mergeChannelApiKeys(currentChannels: AdminModelChannel[], saved: AdminS
     };
 }
 
-function mergeChannelModelSelection(currentModels: string[], mapping: Record<string, string>, fetched: string[]) {
-    const preserved = uniqueModels(currentModels.filter((model) => Object.prototype.hasOwnProperty.call(mapping || {}, model)));
-    return uniqueModels([...preserved, ...fetched.filter((model) => !preserved.includes(model))]);
-}
-
 function resolveAvailableModels(availableModels: string[], channels: AdminModelChannel[], autoAddMappingKeys: string[] = []) {
     const enabledModels = collectChannelModels(channels);
     const autoAdd = new Set(autoAddMappingKeys);
     return uniqueModels([...filterModels(availableModels, enabledModels), ...enabledModels.filter((model) => autoAdd.has(model))]);
-}
-
-function collectChannelModelMapKeys(channels: AdminModelChannel[]) {
-    return uniqueModels(channels.filter((channel) => !isWorkflowProtocol(channel.protocol)).flatMap((channel) => Object.keys(channel.modelMap || {})));
 }
 
 function collectChannelModels(channels: AdminModelChannel[]) {
@@ -1742,7 +1748,7 @@ function parseTabJson(tab: SettingsTabKey, value: string): AdminSettings[Setting
     }
 }
 
-async function collectSettings(form: any, editorMode: Record<SettingsTabKey, EditorMode>, jsonText: Record<SettingsTabKey, string>, message: { error: (value: string) => void }, savedModelMapKeys: string[] = []) {
+async function collectSettings(form: any, editorMode: Record<SettingsTabKey, EditorMode>, jsonText: Record<SettingsTabKey, string>, message: { error: (value: string) => void }, savedRequestNames: string[] = []) {
     const values = normalizeSettings(form.getFieldsValue(true) as AdminSettings);
     if (editorMode.public === "json") {
         const publicSetting = parseTabJson("public", jsonText.public);
@@ -1760,9 +1766,8 @@ async function collectSettings(form: any, editorMode: Record<SettingsTabKey, Edi
         }
         values.private = privateSetting;
     }
-    const currentModelMapKeys = collectChannelModelMapKeys(values.private.channels);
-    const newlyAddedMappingKeys = currentModelMapKeys.filter((key) => !savedModelMapKeys.includes(key));
-    values.public.modelChannel.availableModels = resolveAvailableModels(values.public.modelChannel.availableModels, values.private.channels, newlyAddedMappingKeys);
+    const newlyAddedRequestNames = collectChannelModels(values.private.channels).filter((name) => !savedRequestNames.includes(name));
+    values.public.modelChannel.availableModels = resolveAvailableModels(values.public.modelChannel.availableModels, values.private.channels, newlyAddedRequestNames);
     values.public.modelChannel.availableWorkflows = filterModels(values.public.modelChannel.availableWorkflows, collectChannelWorkflows(values.private.channels).map((item) => item.value));
     values.public.modelChannel.systemPrompt = values.public.modelChannel.systemPrompts.image || values.public.modelChannel.systemPrompts.text || "";
     return normalizeSettings(values);
