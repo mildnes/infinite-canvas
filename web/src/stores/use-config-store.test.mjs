@@ -20,6 +20,15 @@ test("声明的模型能力优先于模型名称识别", () => {
     assert.equal(modelMatchesCapability("acme-renderer-v7", "text", "openai", capabilities), false);
 });
 
+test("渠道模型映射在规范化与 JSON 恢复中保留，本地可选模型和能力不改名", () => {
+    const input = { id: "mapped", models: ["custom-renderer", "other"], modelMap: { "custom-renderer": "upstream-renderer", other: "upstream-renderer" }, modelCapabilities: { "custom-renderer": ["image"] } };
+    const [channel] = normalizeLocalChannels(JSON.parse(JSON.stringify({ localChannels: [input] })));
+    assert.deepEqual(channel.modelMap, input.modelMap);
+    assert.deepEqual(channel.models, input.models);
+    assert.deepEqual(channel.modelCapabilities, input.modelCapabilities);
+    assert.deepEqual(filterChannelModelsByCapability([channel], "image"), ["custom-renderer"]);
+});
+
 test("显式空能力列表阻止旧名称规则覆盖声明", () => {
     assert.equal(modelMatchesCapability("gpt-image-custom", "image", "openai", { "gpt-image-custom": [] }), false);
 });

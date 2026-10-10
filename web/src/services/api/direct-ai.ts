@@ -66,7 +66,7 @@ async function prepareDirectRequest(config: AiConfig, provider: DirectAIProvider
     const serialized = await serializeDirectBody(body);
     assertSafeDirectBody(serialized.body);
     const plan = await apiPost<DirectRequestPlan>("/api/ai/direct-request", {
-        channel: { protocol: channel.protocol, baseUrl: channel.baseUrl, name: channel.name, models: channel.models, imageOutputCapabilities: channel.imageOutputCapabilities, imageQualityCapabilities: channel.imageQualityCapabilities },
+        channel: { protocol: channel.protocol, baseUrl: channel.baseUrl, name: channel.name, models: channel.models, modelMap: channel.modelMap, imageOutputCapabilities: channel.imageOutputCapabilities, imageQualityCapabilities: channel.imageQualityCapabilities },
         model: config.model || config.videoModel,
         endpoint,
         body: serialized.body,

@@ -20,6 +20,7 @@ export type LocalModelChannel = {
     baseUrl: string;
     apiKey: string;
     models: string[];
+    modelMap?: Record<string, string>;
     modelCapabilities?: ModelCapabilities;
     imageOutputCapabilities?: ImageOutputCapabilities;
     imageQualityCapabilities?: ImageQualityCapabilities;
@@ -100,7 +101,7 @@ export type AiConfig = {
         workflowAgent: string;
     };
     localChannels: LocalModelChannel[];
-    publicChannels: Array<{ id?: string; protocol?: LocalModelChannel["protocol"]; name?: string; baseUrl?: string; models?: string[]; modelCapabilities?: ModelCapabilities; imageOutputCapabilities?: ImageOutputCapabilities; imageQualityCapabilities?: ImageQualityCapabilities; workflows?: WorkflowSummary[]; weight?: number; timeout?: number; enabled?: boolean; remark?: string }>;
+    publicChannels: Array<{ id?: string; protocol?: LocalModelChannel["protocol"]; name?: string; baseUrl?: string; models?: string[]; modelMap?: Record<string, string>; modelCapabilities?: ModelCapabilities; imageOutputCapabilities?: ImageOutputCapabilities; imageQualityCapabilities?: ImageQualityCapabilities; workflows?: WorkflowSummary[]; weight?: number; timeout?: number; enabled?: boolean; remark?: string }>;
     syncStorageConfig: boolean;
     syncWebDAVStorageConfig: boolean;
     activeChannelId: string;
@@ -568,6 +569,7 @@ export function normalizeLocalChannels(config: Partial<AiConfig>): LocalModelCha
         baseUrl: channel.baseUrl || "",
         apiKey: channel.apiKey || "",
         models: Array.isArray(channel.models) ? channel.models.filter(Boolean) : [],
+        modelMap: channel.modelMap,
         modelCapabilities: channel.modelCapabilities,
         imageOutputCapabilities: channel.imageOutputCapabilities,
         imageQualityCapabilities: channel.imageQualityCapabilities,

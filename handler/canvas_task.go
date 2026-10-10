@@ -122,7 +122,7 @@ func CreateCanvasImageTask(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Image-Quality-Notice", "fallback-default")
 	}
 	OK(w, service.CanvasImageTaskResponse(task))
-	go runCanvasImageTask(task, user, body, contentType, task.ChannelID, task.UserChannelID)
+	go runCanvasImageTask(task, user, body, contentType, task.ChannelID, task.UserChannelID, service.ResolveUpstreamModelName(channel, modelName))
 }
 
 func isReusableCanvasImageTaskStatus(status string) bool {
@@ -321,7 +321,7 @@ func GetCanvasAudioTask(w http.ResponseWriter, r *http.Request, id string) {
 	OK(w, service.CanvasAudioTaskResponse(task))
 }
 
-func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []byte, contentType string, channelID string, userChannelID string) {
+func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []byte, contentType string, channelID string, userChannelID string, protocolModel string) {
 	current := taskTime()
 	task.Status = "processing"
 	task.Progress = 10
@@ -342,7 +342,8 @@ func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []
 		saveFailedCanvasImageTask(task, message, string(payload))
 		return
 	}
-	collectAll := allAIProtocolImageResults(task.Model)
+	// Provider result-shape rules use the upstream name; task/audit names stay local.
+	collectAll := allAIProtocolImageResults(protocolModel)
 	imageURLs, mimeType, bytes, err := imageURLsFromAIResponse(payload, responseContentType, collectAll, task.Endpoint == "/chat/completions")
 	if err != nil {
 		saveFailedCanvasImageTask(task, err.Error(), string(payload))

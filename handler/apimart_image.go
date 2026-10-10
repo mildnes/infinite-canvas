@@ -12,7 +12,7 @@ import (
 	"github.com/tigerowo/infinite-canvas/service"
 )
 
-func normalizeAPIMartImageBody(body []byte, contentType string, modelName string, channel model.ModelChannel) ([]byte, string, error) {
+func normalizeAPIMartImageBody(body []byte, contentType string, modelName string, channel model.ModelChannel, localModels ...string) ([]byte, string, error) {
 	payload, err := readAPIMartPayload(body, contentType, channel)
 	if err != nil {
 		return body, contentType, err
@@ -24,7 +24,7 @@ func normalizeAPIMartImageBody(body []byte, contentType string, modelName string
 	if finalModel != "" {
 		payload["model"] = finalModel
 	}
-	normalizeAPIMartImageParams(payload, finalModel, channel)
+	normalizeAPIMartImageParams(payload, finalModel, channel, localModels...)
 	if errMessage := strings.TrimSpace(toStringSafe(payload["_apimart_reference_error"])); errMessage != "" {
 		return body, contentType, errors.New(errMessage)
 	}
@@ -37,9 +37,13 @@ func normalizeAPIMartImageBody(body []byte, contentType string, modelName string
 	return encoded, "application/json", nil
 }
 
-func normalizeAPIMartImageParams(payload map[string]any, modelName string, channel model.ModelChannel) {
+func normalizeAPIMartImageParams(payload map[string]any, modelName string, channel model.ModelChannel, localModels ...string) {
 	config := apimartImageConfig(modelName)
-	if capability, ok := service.ResolveImageOutputCapability(channel, modelName); ok {
+	capabilityModel := modelName
+	if len(localModels) > 0 && localModels[0] != "" {
+		capabilityModel = localModels[0]
+	}
+	if capability, ok := service.ResolveImageOutputCapability(channel, capabilityModel); ok {
 		config.hasOutput = len(capability.Formats) > 0
 	}
 	if config.aspectField == "" {

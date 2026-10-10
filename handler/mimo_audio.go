@@ -87,7 +87,7 @@ func normalizeMiMoTTSBody(body []byte, contentType string, modelName string) ([]
 }
 
 func copyMiMoTTSResponse(w http.ResponseWriter, response *http.Response, logContext aiLogContext, onFailure func()) bool {
-	if logContext.Endpoint != "/audio/speech" || !service.IsMiMoTTSModelName(logContext.Model) {
+	if logContext.Endpoint != "/audio/speech" || !service.IsMiMoTTSModelName(service.ResolveUpstreamModelName(logContext.Channel, logContext.Model)) {
 		return false
 	}
 	payload, err := io.ReadAll(response.Body)

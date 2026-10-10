@@ -27,6 +27,7 @@ type directAIChannelInput struct {
 	BaseURL                  string                                  `json:"baseUrl"`
 	Name                     string                                  `json:"name,omitempty"`
 	Models                   []string                                `json:"models,omitempty"`
+	ModelMap                 map[string]string                       `json:"modelMap,omitempty"`
 	ImageOutputCapabilities  map[string]model.ImageOutputCapability  `json:"imageOutputCapabilities,omitempty"`
 	ImageQualityCapabilities map[string]model.ImageQualityCapability `json:"imageQualityCapabilities,omitempty"`
 }
@@ -95,6 +96,7 @@ func prepareDirectAIRequest(input directAIRequestInput) (directAIRequestPlan, er
 		BaseURL:                  input.Channel.BaseURL,
 		Name:                     input.Channel.Name,
 		Models:                   input.Channel.Models,
+		ModelMap:                 input.Channel.ModelMap,
 		ImageOutputCapabilities:  input.Channel.ImageOutputCapabilities,
 		ImageQualityCapabilities: input.Channel.ImageQualityCapabilities,
 	}
@@ -112,9 +114,14 @@ func prepareDirectAIRequest(input directAIRequestInput) (directAIRequestPlan, er
 	if err != nil {
 		return directAIRequestPlan{}, errors.New("图片质量参数无效")
 	}
-	upstreamPath := resolveAIProxyPath(channel, input.Model, input.Endpoint)
+	upstreamModel := upstreamAIModel(channel, input.Model)
+	body, err = rewriteAIRequestModel(body, contentType, input.Model, upstreamModel)
+	if err != nil {
+		return directAIRequestPlan{}, err
+	}
+	upstreamPath := resolveAIProxyPath(channel, upstreamModel, input.Endpoint)
 	prepared, provider, err := prepareAIProtocolRequest(aiProtocolRequest{
-		mode: aiProtocolDirectRequest, body: body, contentType: contentType, modelName: input.Model,
+		mode: aiProtocolDirectRequest, body: body, contentType: contentType, modelName: upstreamModel, localModelName: input.Model,
 		channel: channel, endpoint: input.Endpoint, path: upstreamPath,
 	})
 	if provider == "" {

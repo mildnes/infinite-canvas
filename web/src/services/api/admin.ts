@@ -201,6 +201,7 @@ export type AdminModelChannel = {
     baseUrl: string;
     apiKey: string;
     models: string[];
+    modelMap?: Record<string, string>;
     modelCapabilities?: ModelCapabilities;
     imageOutputCapabilities?: ImageOutputCapabilities;
     imageQualityCapabilities?: ImageQualityCapabilities;
@@ -248,6 +249,7 @@ export type AdminPublicModelChannelInfo = {
     name: string;
     baseUrl: string;
     models: string[];
+    modelMap?: Record<string, string>;
     modelCapabilities?: ModelCapabilities;
     imageOutputCapabilities?: ImageOutputCapabilities;
     imageQualityCapabilities?: ImageQualityCapabilities;

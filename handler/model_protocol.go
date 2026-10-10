@@ -19,14 +19,15 @@ const (
 )
 
 type aiProtocolRequest struct {
-	mode         aiProtocolRequestMode
-	body         []byte
-	contentType  string
-	modelName    string
-	channel      model.ModelChannel
-	endpoint     string
-	path         string
-	failureLabel string
+	mode           aiProtocolRequestMode
+	body           []byte
+	contentType    string
+	modelName      string
+	localModelName string
+	channel        model.ModelChannel
+	endpoint       string
+	path           string
+	failureLabel   string
 }
 
 type aiProtocolAdapter struct {
@@ -252,12 +253,12 @@ var builtinAIProtocols = []aiProtocolAdapter{
 				input.body, input.contentType, err = normalizeAPIMartVideoBody(input.body, input.contentType, input.modelName, input.channel)
 			} else if image {
 				input.failureLabel = "APIMart image"
-				input.body, input.contentType, err = normalizeAPIMartImageBody(input.body, input.contentType, input.modelName, input.channel)
+				input.body, input.contentType, err = normalizeAPIMartImageBody(input.body, input.contentType, input.modelName, input.channel, input.localModelName)
 			}
 			return input, video || image, err
 		},
 		copyResponse: func(w http.ResponseWriter, response *http.Response, request *http.Request, channel model.ModelChannel, context aiLogContext, onFailure func()) bool {
-			return isAPIMartChannel(channel, context.Model) && (copyAPIMartImageResponse(w, response, request, channel, context, onFailure) || copyAPIMartVideoResponse(w, response, request, channel, context))
+			return isAPIMartChannel(channel, service.ResolveUpstreamModelName(channel, context.Model)) && (copyAPIMartImageResponse(w, response, request, channel, context, onFailure) || copyAPIMartVideoResponse(w, response, request, channel, context))
 		},
 		videoResponse: func(payload []byte, request *http.Request, channel model.ModelChannel, modelName string, status bool) ([]byte, bool) {
 			if !isAPIMartChannel(channel, modelName) {
@@ -394,9 +395,13 @@ func copyAIProtocolResponse(w http.ResponseWriter, response *http.Response, requ
 }
 
 func transformAIProtocolVideoPayload(payload []byte, request *http.Request, channel model.ModelChannel, modelName string, status bool) []byte {
+	upstreamModel := service.ResolveUpstreamModelName(channel, modelName)
 	for _, adapter := range builtinAIProtocols {
 		if adapter.videoResponse != nil {
-			if result, ok := adapter.videoResponse(payload, request, channel, modelName, status); ok {
+			if result, ok := adapter.videoResponse(payload, request, channel, upstreamModel, status); ok {
+				if restored, err := rewriteAIRequestModel(result, "application/json", upstreamModel, modelName); err == nil {
+					return restored
+				}
 				return result
 			}
 		}
@@ -405,6 +410,7 @@ func transformAIProtocolVideoPayload(payload []byte, request *http.Request, chan
 }
 
 func readAIProtocolVideoError(payload []byte, channel model.ModelChannel, modelName string, status bool) string {
+	modelName = service.ResolveUpstreamModelName(channel, modelName)
 	for _, adapter := range builtinAIProtocols {
 		if adapter.videoError != nil {
 			if message := adapter.videoError(payload, channel, modelName, status); message != "" {

@@ -690,6 +690,14 @@ func normalizeModelChannel(channel model.ModelChannel) model.ModelChannel {
 	return channel
 }
 
+// ResolveUpstreamModelName is applied only after selecting a channel by its local model name.
+func ResolveUpstreamModelName(channel model.ModelChannel, localModel string) string {
+	if upstream := strings.TrimSpace(channel.ModelMap[strings.TrimSpace(localModel)]); upstream != "" {
+		return upstream
+	}
+	return localModel
+}
+
 func normalizeModelCapabilities(capabilities map[string][]model.ModelCapability) map[string][]model.ModelCapability {
 	if len(capabilities) == 0 {
 		return nil
@@ -1079,6 +1087,7 @@ func testAdminChannelModel(channel model.ModelChannel, modelName string) (string
 	if strings.TrimSpace(modelName) == "" {
 		return "", errors.New("缺少模型名称")
 	}
+	modelName = ResolveUpstreamModelName(channel, modelName)
 	adapter, _ := matchModelProtocol(modelGenerationTestRules, channel, modelName)
 	return adapter.testModel(channel, modelName)
 }
@@ -1522,6 +1531,7 @@ func publicChannelInfos(channels []model.ModelChannel, options ...[]string) []mo
 			Name:                     channel.Name,
 			BaseURL:                  channel.BaseURL,
 			Models:                   models,
+			ModelMap:                 channel.ModelMap,
 			ModelCapabilities:        modelCapabilities,
 			ImageOutputCapabilities:  imageOutputCapabilities,
 			ImageQualityCapabilities: imageQualityCapabilities,

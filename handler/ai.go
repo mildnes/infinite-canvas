@@ -116,8 +116,9 @@ func proxyAIGetRequest(w http.ResponseWriter, r *http.Request, path string) {
 		failAIChannelSelect(w, err, "AI 接口请求失败")
 		return
 	}
-	upstreamPath := resolveAIProxyPath(channel, modelName, path)
-	request, err := http.NewRequest(http.MethodGet, resolveAIProxyURL(channel, modelName, upstreamPath), nil)
+	upstreamModel := upstreamAIModel(channel, modelName)
+	upstreamPath := resolveAIProxyPath(channel, upstreamModel, rewriteAIQueryModel(path, modelName, upstreamModel))
+	request, err := http.NewRequest(http.MethodGet, resolveAIProxyURL(channel, upstreamModel, upstreamPath), nil)
 	if err != nil {
 		Fail(w, "AI 接口请求失败")
 		return
@@ -167,9 +168,15 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		}
 		credits *= readAIRequestCount(body, contentType)
 	}
-	upstreamPath := resolveAIProxyPath(channel, modelName, path)
+	upstreamModel := upstreamAIModel(channel, modelName)
+	body, err = rewriteAIRequestModel(body, contentType, modelName, upstreamModel)
+	if err != nil {
+		Fail(w, "模型映射请求参数无效")
+		return
+	}
+	upstreamPath := resolveAIProxyPath(channel, upstreamModel, path)
 	prepared, _, err := prepareAIProtocolRequest(aiProtocolRequest{
-		mode: aiProtocolProxyRequest, body: body, contentType: contentType, modelName: modelName,
+		mode: aiProtocolProxyRequest, body: body, contentType: contentType, modelName: upstreamModel, localModelName: modelName,
 		channel: channel, endpoint: path, path: upstreamPath,
 	})
 	if err != nil {

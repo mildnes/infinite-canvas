@@ -1114,6 +1114,26 @@ export default function AdminSettingsPage() {
                             </Col>
                             {selectedChannelModels.length ? (
                                 <Col span={24}>
+                                    <Form.Item label="模型映射（本地名 → 上游名）">
+                                        <Flex vertical gap={8}>
+                                            {selectedChannelModels.map((model: string) => (
+                                                <Row gutter={8} key={model} align="middle">
+                                                    <Col xs={24} sm={10}>
+                                                        <Select value={model} disabled options={selectedChannelModels.map((name: string) => ({ label: name, value: name }))} aria-label={model + " 本地模型名"} className="!w-full" />
+                                                    </Col>
+                                                    <Col xs={24} sm={14}>
+                                                        <Form.Item name={["modelMap", model]} noStyle>
+                                                            <Input allowClear placeholder="上游真实模型名（留空不映射）" aria-label={model + " 上游模型名"} />
+                                                        </Form.Item>
+                                                    </Col>
+                                                </Row>
+                                            ))}
+                                        </Flex>
+                                    </Form.Item>
+                                </Col>
+                            ) : null}
+                            {selectedChannelModels.length ? (
+                                <Col span={24}>
                                     <Form.Item label="模型能力声明（可选）" extra="自动推导按协议和模型名估算，自定义模型请手动声明。取消全部勾选表示无可用能力；点击自动推导可移除声明。">
                                         <Flex vertical gap={10}>
                                             <Flex align="center" gap={8} wrap>
@@ -1547,6 +1567,7 @@ function normalizeChannel(item: Partial<AdminModelChannel> = {}): AdminModelChan
         baseUrl: item.baseUrl || "",
         apiKey: item.apiKey || "",
         models,
+        modelMap: normalizeModelMap(item.modelMap, models),
         modelCapabilities: normalizeModelCapabilities(item.modelCapabilities, models),
         imageOutputCapabilities: normalizeImageOutputCapabilities(item.imageOutputCapabilities, models),
         imageQualityCapabilities: normalizeImageQualityCapabilities(item.imageQualityCapabilities, models),
@@ -1570,6 +1591,15 @@ function normalizeModelCapabilities(capabilities: AdminModelChannel["modelCapabi
         if (modelSet.has(model) && Array.isArray(values)) result[model] = uniqueCapabilities(values);
     }
     return Object.keys(result).length ? result : undefined;
+}
+
+function normalizeModelMap(mapping: AdminModelChannel["modelMap"], models: string[]) {
+    const entries = models.flatMap(model => {
+        const value = mapping?.[model];
+        const upstream = typeof value === "string" ? value.trim() : "";
+        return upstream ? [[model, upstream]] : [];
+    });
+    return entries.length ? Object.fromEntries(entries) as Record<string, string> : undefined;
 }
 
 function uniqueCapabilities(values: ModelCapability[] = []) {

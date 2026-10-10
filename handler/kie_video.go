@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/tigerowo/infinite-canvas/model"
+	"github.com/tigerowo/infinite-canvas/service"
 )
 
 func isKIEChannel(channel model.ModelChannel, modelName string) bool {
@@ -1401,7 +1402,7 @@ func boolLike(value any) bool {
 }
 
 func copyKIEVideoResponse(w http.ResponseWriter, response *http.Response, request *http.Request, channel model.ModelChannel, logContext aiLogContext, onFailure func()) bool {
-	if !isKIEChannel(channel, logContext.Model) {
+	if !isKIEChannel(channel, service.ResolveUpstreamModelName(channel, logContext.Model)) {
 		return false
 	}
 

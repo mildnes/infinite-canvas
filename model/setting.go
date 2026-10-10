@@ -22,6 +22,7 @@ type ModelChannel struct {
 	BaseURL                  string                            `json:"baseUrl"`
 	APIKey                   string                            `json:"apiKey"`
 	Models                   []string                          `json:"models"`
+	ModelMap                 map[string]string                 `json:"modelMap,omitempty"`
 	ModelCapabilities        map[string][]ModelCapability      `json:"modelCapabilities,omitempty"`
 	ImageOutputCapabilities  map[string]ImageOutputCapability  `json:"imageOutputCapabilities,omitempty"`
 	ImageQualityCapabilities map[string]ImageQualityCapability `json:"imageQualityCapabilities,omitempty"`
@@ -157,6 +158,7 @@ type PublicModelChannelInfo struct {
 	Name                     string                            `json:"name"`
 	BaseURL                  string                            `json:"baseUrl"`
 	Models                   []string                          `json:"models"`
+	ModelMap                 map[string]string                 `json:"modelMap,omitempty"`
 	ModelCapabilities        map[string][]ModelCapability      `json:"modelCapabilities,omitempty"`
 	ImageOutputCapabilities  map[string]ImageOutputCapability  `json:"imageOutputCapabilities,omitempty"`
 	ImageQualityCapabilities map[string]ImageQualityCapability `json:"imageQualityCapabilities,omitempty"`

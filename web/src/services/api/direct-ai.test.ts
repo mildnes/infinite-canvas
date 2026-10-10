@@ -14,7 +14,8 @@ test("local direct translation receives declarations and never receives the prov
         else Reflect.deleteProperty(globalThis, "window");
     });
     const imageOutputCapabilities = { "custom-renderer": { formats: ["png-transparent" as const], defaultFormat: "png-transparent" as const } };
-    const channel = { id: "local", name: "local APIMart", protocol: "apimart" as const, baseUrl: "https://api.apimart.ai", apiKey: "provider-secret", models: ["custom-renderer"], imageOutputCapabilities };
+    const modelMap = { "custom-renderer": "gpt-image-2" };
+    const channel = { id: "local", name: "local APIMart", protocol: "apimart" as const, baseUrl: "https://api.apimart.ai", apiKey: "provider-secret", models: ["custom-renderer"], modelMap, imageOutputCapabilities };
     let translation: Record<string, unknown> | undefined;
     t.mock.method(axios, "request", async (request: { data: Record<string, unknown> }) => {
         translation = request.data;
@@ -27,7 +28,7 @@ test("local direct translation receives declarations and never receives the prov
     });
     const body = { model: "custom-renderer", prompt: "test", output_format: "png", background: "transparent" };
     const result = await requestDirectImages({ ...defaultConfig, channelMode: "local", model: "custom-renderer", imageModel: "custom-renderer", imageChannelId: "local", localChannels: [channel] }, "apimart", "/images/generations", body, 10);
-    assert.deepEqual(translation?.channel, { protocol: channel.protocol, baseUrl: channel.baseUrl, name: channel.name, models: channel.models, imageOutputCapabilities, imageQualityCapabilities: undefined });
+    assert.deepEqual(translation?.channel, { protocol: channel.protocol, baseUrl: channel.baseUrl, name: channel.name, models: channel.models, modelMap, imageOutputCapabilities, imageQualityCapabilities: undefined });
     assert.equal(JSON.stringify(translation).includes("provider-secret"), false);
     assert.deepEqual(JSON.parse(String(upstream?.body)), body);
     assert.equal(new Headers(upstream?.headers).get("Authorization"), "Bearer provider-secret");

@@ -89,7 +89,8 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 		}
 		credits *= readAIRequestCount(body, contentType)
 	}
-	upstreamPath := resolveAIProxyPath(channel, modelName, "/videos")
+	upstreamModel := upstreamAIModel(channel, modelName)
+	upstreamPath := resolveAIProxyPath(channel, upstreamModel, "/videos")
 	body, contentType, err = normalizeVideoCreateBody(body, contentType, modelName, channel, upstreamPath)
 	if err != nil {
 		log.Printf("AI video normalize request failed: model=%s err=%v", modelName, err)
@@ -293,15 +294,16 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 		return service.VideoTaskPollUpdate{}, err
 	}
 	pollID := firstNonEmpty(task.UpstreamTaskID, task.ID)
-	if isAIProtocolVideoID(task.Model, task.UpstreamVideoID) {
+	upstreamModel := upstreamAIModel(channel, task.Model)
+	if isAIProtocolVideoID(upstreamModel, task.UpstreamVideoID) {
 		pollID = task.UpstreamVideoID
 	}
 	if strings.TrimSpace(pollID) == "" {
 		return service.VideoTaskPollUpdate{}, errors.New("视频任务缺少上游任务 ID")
 	}
 	endpoint := "/videos/" + pollID
-	upstreamPath := resolveAIProxyPath(channel, task.Model, endpoint)
-	request, err := http.NewRequest(http.MethodGet, resolveAIProxyURL(channel, task.Model, upstreamPath), nil)
+	upstreamPath := resolveAIProxyPath(channel, upstreamModel, endpoint)
+	request, err := http.NewRequest(http.MethodGet, resolveAIProxyURL(channel, upstreamModel, upstreamPath), nil)
 	if err != nil {
 		return service.VideoTaskPollUpdate{}, err
 	}
@@ -406,8 +408,13 @@ func persistChannelVideoResult(userID, sourceURL string, channel model.ModelChan
 }
 
 func normalizeVideoCreateBody(body []byte, contentType string, modelName string, channel model.ModelChannel, upstreamPath string) ([]byte, string, error) {
+	upstreamModel := service.ResolveUpstreamModelName(channel, modelName)
+	body, err := rewriteAIRequestModel(body, contentType, modelName, upstreamModel)
+	if err != nil {
+		return body, contentType, err
+	}
 	prepared, _, err := prepareAIProtocolRequest(aiProtocolRequest{
-		mode: aiProtocolVideoRequest, body: body, contentType: contentType, modelName: modelName,
+		mode: aiProtocolVideoRequest, body: body, contentType: contentType, modelName: upstreamModel, localModelName: modelName,
 		channel: channel, endpoint: "/videos", path: upstreamPath,
 	})
 	return prepared.body, prepared.contentType, err
