@@ -643,7 +643,31 @@ func modelMatchesCapability(channels []model.ModelChannel, modelName string, cap
 			}
 		}
 	}
-	return !declared && fallback(modelName)
+	if declared {
+		return false
+	}
+	upstreamName := upstreamModelNameForCapability(channels, modelName)
+	if capability == model.ModelCapabilityText && (isImageModelName(upstreamName) || isVideoModelName(upstreamName)) {
+		return false
+	}
+	if fallback(modelName) {
+		return true
+	}
+	return upstreamName != modelName && fallback(upstreamName)
+}
+
+func upstreamModelNameForCapability(channels []model.ModelChannel, localModel string) string {
+	for _, channel := range channels {
+		if _, ok := channel.ModelMap[strings.TrimSpace(localModel)]; ok {
+			return ResolveUpstreamModelName(channel, localModel)
+		}
+		for _, candidate := range channel.Models {
+			if candidate == localModel {
+				return ResolveUpstreamModelName(channel, localModel)
+			}
+		}
+	}
+	return localModel
 }
 
 func modelHasCapabilityDeclaration(channels []model.ModelChannel, modelName string) bool {
@@ -679,6 +703,7 @@ func normalizeModelChannel(channel model.ModelChannel) model.ModelChannel {
 	if channel.Models == nil {
 		channel.Models = []string{}
 	}
+	channel.Models = uniqueModelNames(append(channel.Models, modelMapKeys(channel.ModelMap)...))
 	channel.ImageQualityCapabilities = normalizeImageQualityCapabilities(channel.ImageQualityCapabilities)
 	channel.ImageOutputCapabilities = normalizeImageOutputCapabilities(channel.ImageOutputCapabilities, channel.Models)
 	if channel.Weight <= 0 {
@@ -688,6 +713,16 @@ func normalizeModelChannel(channel model.ModelChannel) model.ModelChannel {
 		channel.Timeout = 600
 	}
 	return channel
+}
+
+func modelMapKeys(mapping map[string]string) []string {
+	keys := make([]string, 0, len(mapping))
+	for key := range mapping {
+		if strings.TrimSpace(key) != "" {
+			keys = append(keys, key)
+		}
+	}
+	return keys
 }
 
 // ResolveUpstreamModelName is applied only after selecting a channel by its local model name.

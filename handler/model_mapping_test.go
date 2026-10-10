@@ -132,3 +132,23 @@ func TestVideoCreateMappingUsesUpstreamProtocolWithoutDoubleMapping(t *testing.T
 		t.Fatalf("video mapping order/double mapping failed: path=%s body=%s", path, encoded)
 	}
 }
+
+func TestDirectPlanForwardsCustomLocalAliasAsUpstreamModel(t *testing.T) {
+	channel := directAIChannelInput{Protocol: "apimart", BaseURL: "https://api.apimart.ai", Models: []string{"我的高质图"}, ModelMap: map[string]string{"我的高质图": "gpt-image-2.5-sunburst"},
+		ImageOutputCapabilities: map[string]model.ImageOutputCapability{"我的高质图": {Formats: []model.ImageOutputFormat{model.ImageOutputFormatPNG}, DefaultFormat: model.ImageOutputFormatPNG}},
+	}
+	plan, err := prepareDirectAIRequest(directAIRequestInput{Channel: channel, Model: "我的高质图", Endpoint: "/images/generations", Body: map[string]any{"model": "我的高质图", "prompt": "scene", "output_format": "png"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := testDirectRecord(t, plan.Body)
+	if body["model"] != "gpt-image-2.5-sunburst" || body["output_format"] != "png" {
+		t.Fatalf("forwarded body = %+v", body)
+	}
+	if _, ok := body["background"]; ok {
+		t.Fatalf("opaque png must not send background: %+v", body)
+	}
+	if plan.ImageOutputFormat != "png" {
+		t.Fatalf("output capability must still be looked up by local name: %+v", plan)
+	}
+}

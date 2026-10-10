@@ -312,7 +312,7 @@ function isVideoModelName(model: string) {
     );
 }
 
-function isImageModelName(model: string) {
+export function isImageModelName(model: string) {
     const value = model.toLowerCase();
     return !isVideoModelName(model) && !isAudioModelName(model) && (
         value.includes("image") ||
@@ -366,12 +366,12 @@ function isTextModelName(model: string) {
     return !isImageModelName(model) && !isVideoModelName(model) && !isAudioModelName(model);
 }
 
-export function modelMatchesCapability(model: string, capability?: ModelCapability, protocol = "", modelCapabilities?: ModelCapabilities) {
+export function modelMatchesCapability(model: string, capability?: ModelCapability, protocol = "", modelCapabilities?: ModelCapabilities, modelMap?: Record<string, string>) {
     if (!capability) return true;
     const declaredCapabilities = modelCapabilities?.[model];
     if (Array.isArray(declaredCapabilities)) return declaredCapabilities.includes(capability);
     if (protocol === "gemini") {
-        const value = model.toLowerCase();
+        const value = (modelMap?.[model]?.trim() || model).toLowerCase();
         const video = /^models\/veo-|^veo-/.test(value);
         const audio = value.includes("tts");
         const image = !video && !audio && value.includes("image");
@@ -380,24 +380,26 @@ export function modelMatchesCapability(model: string, capability?: ModelCapabili
         if (capability === "image") return image;
         return !video && !audio && !image;
     }
-    if (capability === "image") return isImageModelName(model);
-    if (capability === "video") return isVideoModelName(model);
-    if (capability === "audio") return isAudioModelName(model);
-    return isTextModelName(model);
+    const upstream = modelMap?.[model]?.trim() || model;
+    if (capability === "text" && (isImageModelName(upstream) || isVideoModelName(upstream) || isAudioModelName(upstream))) return false;
+    if (capability === "image") return isImageModelName(model) || (upstream !== model && isImageModelName(upstream));
+    if (capability === "video") return isVideoModelName(model) || (upstream !== model && isVideoModelName(upstream));
+    if (capability === "audio") return isAudioModelName(model) || (upstream !== model && isAudioModelName(upstream));
+    return isTextModelName(model) || (upstream !== model && isTextModelName(upstream));
 }
 
-export function filterModelsByCapability(models: string[], capability?: ModelCapability, protocol = "", modelCapabilities?: ModelCapabilities) {
-    return capability ? models.filter((model) => modelMatchesCapability(model, capability, protocol, modelCapabilities)) : models;
+export function filterModelsByCapability(models: string[], capability?: ModelCapability, protocol = "", modelCapabilities?: ModelCapabilities, modelMap?: Record<string, string>) {
+    return capability ? models.filter((model) => modelMatchesCapability(model, capability, protocol, modelCapabilities, modelMap)) : models;
 }
 
-export function filterChannelModelsByCapability(channels: Array<{ protocol?: LocalModelChannel["protocol"]; models: string[]; modelCapabilities?: ModelCapabilities }>, capability: ModelCapability, allowedModels?: string[]) {
+export function filterChannelModelsByCapability(channels: Array<{ protocol?: LocalModelChannel["protocol"]; models: string[]; modelCapabilities?: ModelCapabilities; modelMap?: Record<string, string> }>, capability: ModelCapability, allowedModels?: string[]) {
     const allowed = allowedModels ? new Set(allowedModels) : null;
-    return normalizeModelList(channels.flatMap((channel) => isWorkflowProtocol(channel.protocol || "") ? [] : filterModelsByCapability(channel.models, capability, channel.protocol || "", channel.modelCapabilities))).filter((model) => !allowed || allowed.has(model));
+    return normalizeModelList(channels.flatMap((channel) => isWorkflowProtocol(channel.protocol || "") ? [] : channel.models.filter((model) => modelMatchesCapability(model, capability, channel.protocol || "", channel.modelCapabilities, channel.modelMap)))).filter((model) => !allowed || allowed.has(model));
 }
 
 export function selectableModelsByCapability(config: AiConfig, capability?: ModelCapability) {
     if (!capability) return config.models;
-    const channels = config.channelMode === "remote" ? config.publicChannels.map((channel) => ({ protocol: channel.protocol, models: channel.models || [], modelCapabilities: channel.modelCapabilities })) : normalizeLocalChannels(config);
+    const channels = config.channelMode === "remote" ? config.publicChannels.map((channel) => ({ protocol: channel.protocol, models: channel.models || [], modelMap: channel.modelMap, modelCapabilities: channel.modelCapabilities })) : normalizeLocalChannels(config);
     return filterChannelModelsByCapability(channels, capability, config.models);
 }
 
@@ -592,7 +594,7 @@ export function channelIdForActiveModel(config: AiConfig) {
     const selectedChannelId = config.model === config.imageModel ? config.imageChannelId : config.model === config.videoModel ? config.videoChannelId : config.model === config.audioModel ? config.audioChannelId : config.model === config.textModel ? config.textChannelId : "";
     const selectedChannel = channels.find((channel) => channel.id === selectedChannelId);
     const modelChannel = selectedChannel?.models?.includes(config.model) ? selectedChannel : channels.find((channel) => channel.models?.includes(config.model));
-    const matchesCapability = (capability: ModelCapability) => modelMatchesCapability(config.model, capability, modelChannel?.protocol || "", modelChannel?.modelCapabilities);
+    const matchesCapability = (capability: ModelCapability) => modelMatchesCapability(config.model, capability, modelChannel?.protocol || "", modelChannel?.modelCapabilities, modelChannel?.modelMap);
     if (selectedChannel?.protocol === "gemini") return selectedChannelId;
     if (!selectedChannel) {
         const geminiChannel = channels.find((channel) => channel.protocol === "gemini" && (channel.models || []).includes(config.model));

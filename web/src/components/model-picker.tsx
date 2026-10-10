@@ -26,7 +26,7 @@ type ModelPickerProps = {
     side?: "top" | "bottom";
 };
 
-type PickerBase = { key: string; channelId?: string; channelName: string; protocol?: string; baseUrl?: string; modelCapabilities?: ModelCapabilities };
+type PickerBase = { key: string; channelId?: string; channelName: string; protocol?: string; baseUrl?: string; modelCapabilities?: ModelCapabilities; modelMap?: Record<string, string> };
 type PickerOption = (PickerBase & { model: string }) | (PickerBase & { model: ""; workflowRef: WorkflowRef; label: string });
 
 function isWorkflowOption(option: PickerOption): option is PickerBase & { model: ""; workflowRef: WorkflowRef; label: string } {
@@ -43,10 +43,10 @@ export function ModelPicker({ config, value, channelId, capability, onChange, wo
     const channelOptions = useMemo<PickerOption[]>(() => {
         const channels =
             config.channelMode === "remote"
-                ? config.publicChannels.map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "云端渠道", baseUrl: channel.baseUrl, models: channel.models, modelCapabilities: channel.modelCapabilities, workflows: channel.workflows || [] }))
-                : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "本地渠道", baseUrl: channel.baseUrl, models: channel.models, modelCapabilities: channel.modelCapabilities, workflows: channel.workflowSummaries || [] }));
-        const models = channels.filter((channel) => !isWorkflowProtocol(channel.protocol || "")).flatMap((channel) => (channel.models ?? []).map((model) => ({ key: `${channel.id}::${model}`, channelId: channel.id, channelName: channel.name, protocol: channel.protocol, baseUrl: channel.baseUrl, modelCapabilities: channel.modelCapabilities, model })));
-        const filtered = capability ? models.filter((item) => filterModelsByCapability([item.model], capability, item.protocol || "", item.modelCapabilities).length > 0) : models;
+                ? config.publicChannels.map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "云端渠道", baseUrl: channel.baseUrl, models: channel.models, modelMap: channel.modelMap, modelCapabilities: channel.modelCapabilities, workflows: channel.workflows || [] }))
+                : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "本地渠道", baseUrl: channel.baseUrl, models: channel.models, modelMap: channel.modelMap, modelCapabilities: channel.modelCapabilities, workflows: channel.workflowSummaries || [] }));
+        const models = channels.filter((channel) => !isWorkflowProtocol(channel.protocol || "")).flatMap((channel) => (channel.models ?? []).map((model) => ({ key: `${channel.id}::${model}`, channelId: channel.id, channelName: channel.name, protocol: channel.protocol, baseUrl: channel.baseUrl, modelMap: channel.modelMap, modelCapabilities: channel.modelCapabilities, model })));
+        const filtered = capability ? models.filter((item) => filterModelsByCapability([item.model], capability, item.protocol || "", item.modelCapabilities, item.modelMap).length > 0) : models;
         if (!workflowEnabled || !token) return filtered;
         const scope = config.channelMode === "remote" ? "system" : "personal";
         return [...filtered, ...channels.flatMap((channel) => isWorkflowProtocol(channel.protocol || "") ? channel.workflows.filter((entry) => entry.enabled && entry.capability === capability && entry.provider === channel.protocol).map((entry) => {

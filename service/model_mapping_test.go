@@ -24,6 +24,19 @@ func TestResolveUpstreamModelName(t *testing.T) {
 	}
 }
 
+func TestModelCapabilityFallbackUsesMappedUpstreamName(t *testing.T) {
+	channels := []model.ModelChannel{{Models: []string{"我的高质图"}, ModelMap: map[string]string{"我的高质图": "gpt-image-2.5-sunburst"}}}
+	if !modelMatchesCapability(channels, "我的高质图", model.ModelCapabilityImage, isImageModelName) {
+		t.Fatal("mapped upstream image model should satisfy image capability fallback")
+	}
+	if got := repairDefaultModelForCapability("", []string{"我的高质图"}, channels, model.ModelCapabilityImage, isImageModelName); got != "我的高质图" {
+		t.Fatalf("repairDefaultModelForCapability() = %q, want local alias", got)
+	}
+	if modelMatchesCapability(channels, "我的高质图", model.ModelCapabilityText, isTextModelName) {
+		t.Fatal("custom image alias must not fall back to text capability")
+	}
+}
+
 func TestPublicChannelMappingPreservesLocalModelsAndDeclarations(t *testing.T) {
 	channel := model.ModelChannel{ID: "channel", Enabled: true, APIKey: "key", BaseURL: "https://example.invalid", Models: []string{"local"},
 		ModelMap:                 map[string]string{"local": "upstream"},
@@ -40,5 +53,19 @@ func TestPublicChannelMappingPreservesLocalModelsAndDeclarations(t *testing.T) {
 	}
 	if _, ok := infos[0].ImageOutputCapabilities["upstream"]; ok {
 		t.Fatal("upstream name leaked into local capability keys")
+	}
+}
+
+func TestPublicAvailableModelsAndDefaultImageModelKeepCustomLocalAlias(t *testing.T) {
+	channel := normalizeModelChannel(model.ModelChannel{ID: "rolldek", Enabled: true, BaseURL: "https://api-cn.rolldek.com", ModelMap: map[string]string{"我的高质图": "gpt-image-2.5-sunburst"}})
+	if !reflect.DeepEqual(channel.Models, []string{"我的高质图"}) {
+		t.Fatalf("custom mapping key was not joined into channel models: %+v", channel.Models)
+	}
+	if !reflect.DeepEqual(enabledChannelModels([]model.ModelChannel{channel}), []string{"我的高质图"}) {
+		t.Fatalf("available models missing custom alias: %+v", enabledChannelModels([]model.ModelChannel{channel}))
+	}
+	setting := normalizePublicSettingWithChannels(model.PublicSetting{ModelChannel: model.PublicModelChannelSetting{AvailableModels: []string{"我的高质图"}}}, []model.ModelChannel{channel})
+	if setting.ModelChannel.DefaultImageModel != "我的高质图" {
+		t.Fatalf("default image model lost custom alias: %q", setting.ModelChannel.DefaultImageModel)
 	}
 }

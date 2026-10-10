@@ -54,3 +54,12 @@ test("新 Agent 配置未单独指定格式时沿用当前默认格式", () => {
 
     assert.equal(selection.imageOutputFormat, "png-transparent");
 });
+
+test("自定义本地名按映射的上游名识别图片能力", () => {
+    const aliasConfig = { ...config, imageModels: [], publicChannels: [{ id: "rolldek", models: ["我的高质图"], modelMap: { "我的高质图": "gpt-image-2.5-sunburst" } }] };
+    assert.deepEqual(resolveCanvasAgentImageSelection(aliasConfig, { imageModel: "我的高质图", imageChannelId: "rolldek" }), {
+        imageModel: "我的高质图",
+        imageChannelId: "rolldek",
+        imageOutputFormat: "auto",
+    });
+});

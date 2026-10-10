@@ -2,7 +2,7 @@
 
 import { CheckCircleOutlined, DeleteOutlined, FormatPainterOutlined, LoadingOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import { json } from "@codemirror/lang-json";
-import { App, Button, Card, Checkbox, Col, Collapse, Drawer, Flex, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from "antd";
+import { App, AutoComplete, Button, Card, Checkbox, Col, Collapse, Drawer, Flex, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from "antd";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { EditorView } from "@uiw/react-codemirror";
@@ -103,7 +103,9 @@ export default function AdminSettingsPage() {
     const agentMCPServers = Form.useWatch(["private", "agent", "mcpServers"], form) || [];
     const channelProtocol = Form.useWatch("protocol", channelForm);
     const channelBaseUrl = Form.useWatch("baseUrl", channelForm);
-    const selectedChannelModels = Form.useWatch("models", channelForm) || [];
+    const rawSelectedChannelModels = Form.useWatch("models", channelForm) || [];
+    const channelModelMap = Form.useWatch("modelMap", channelForm) || {};
+    const selectedChannelModels = useMemo(() => uniqueModels([...rawSelectedChannelModels, ...Object.keys(channelModelMap)]), [rawSelectedChannelModels, channelModelMap]);
     const channelModelCapabilities = Form.useWatch("modelCapabilities", { form: channelForm, preserve: true }) || {};
     const channelImageQualityCapabilities = Form.useWatch("imageQualityCapabilities", { form: channelForm, preserve: true }) || {};
     const channelImageOutputCapabilities = Form.useWatch("imageOutputCapabilities", { form: channelForm, preserve: true }) || {};
@@ -268,9 +270,24 @@ export default function AdminSettingsPage() {
     const closeChannelModelSelector = () => setIsModelSelectorOpen(false);
 
     const confirmChannelModelSelector = (models: string[]) => {
-        channelForm.setFieldValue("models", models);
-        rememberModels(models);
+        const nextModels = mergeChannelModelSelection(rawSelectedChannelModels, channelModelMap, models);
+        const preserved = rawSelectedChannelModels.filter((model) => Object.prototype.hasOwnProperty.call(channelModelMap, model));
+        channelForm.setFieldValue("models", nextModels);
+        rememberModels(nextModels);
+        if (preserved.length) message.info("已保留 " + preserved.length + " 个自定义模型及其映射");
         closeChannelModelSelector();
+    };
+
+    const renameModel = (oldModel: string, newModel: string) => {
+        channelForm.setFieldsValue(renameChannelModel(channelForm.getFieldsValue(true), oldModel, newModel));
+    };
+
+    const addModelMapping = () => {
+        const base = "自定义模型" + (selectedChannelModels.length + 1);
+        let next = base;
+        let index = 2;
+        while (selectedChannelModels.includes(next)) next = base + index++;
+        channelForm.setFieldsValue({ models: uniqueModels([...rawSelectedChannelModels, next]), modelMap: { ...channelModelMap, [next]: "" } });
     };
 
     const updateChannelModelCapabilities = (model: string, values?: ModelCapability[]) => {
@@ -1103,7 +1120,7 @@ export default function AdminSettingsPage() {
                                 </Form.Item>
                             </Col>
                             <Col span={24}>
-                                <Form.Item label="渠道可用模型">
+                                <Form.Item label="渠道可用模型" extra={'这里就是画板里能选到的模型名，可以自定义（例如“我的高质图”）'}>
                                     <Space.Compact style={{ width: "100%" }}>
                                         <Form.Item name="models" noStyle>
                                             <Select mode="tags" showSearch={{ optionFilterProp: ["label", "value"] }} maxTagCount="responsive" tokenSeparators={[",", "\n"]} options={knownModels.map((model) => ({ label: modelLabel(model, { protocol: channelProtocol, baseUrl: channelBaseUrl }), value: model }))} />
@@ -1114,20 +1131,21 @@ export default function AdminSettingsPage() {
                             </Col>
                             {selectedChannelModels.length ? (
                                 <Col span={24}>
-                                    <Form.Item label="模型映射（本地名 → 上游名）">
+                                    <Form.Item label="模型映射（本地名 → 上游名）" extra="左 = 画板里显示/选择的名字（可自定义）；右 = 实际发给上游的名字。留空表示同名直传。">
                                         <Flex vertical gap={8}>
                                             {selectedChannelModels.map((model: string) => (
                                                 <Row gutter={8} key={model} align="middle">
                                                     <Col xs={24} sm={10}>
-                                                        <Select value={model} disabled options={selectedChannelModels.map((name: string) => ({ label: name, value: name }))} aria-label={model + " 本地模型名"} className="!w-full" />
+                                                        <AutoComplete defaultValue={model} options={selectedChannelModels.map((name: string) => ({ label: name, value: name }))} onBlur={(event) => renameModel(model, (event.target as HTMLInputElement).value)} aria-label={model + " 本地模型名"} className="!w-full" />
                                                     </Col>
                                                     <Col xs={24} sm={14}>
                                                         <Form.Item name={["modelMap", model]} noStyle>
-                                                            <Input allowClear placeholder="上游真实模型名（留空不映射）" aria-label={model + " 上游模型名"} />
+                                                            <AutoComplete allowClear options={knownModels.map((name) => ({ label: name, value: name }))} placeholder="上游真实模型名（留空 = 与本地名同名直传）" aria-label={model + " 上游模型名"} />
                                                         </Form.Item>
                                                     </Col>
                                                 </Row>
                                             ))}
+                                            <Button type="dashed" icon={<PlusOutlined />} onClick={addModelMapping}>+ 添加映射</Button>
                                         </Flex>
                                     </Form.Item>
                                 </Col>
@@ -1157,7 +1175,7 @@ export default function AdminSettingsPage() {
                                                     const declared = channelModelCapabilities[model];
                                                     const automatic = !Array.isArray(declared);
                                                     const capabilities = automatic
-                                                        ? modelCapabilityOptions.filter(({ value }) => modelMatchesCapability(model, value, channelProtocol)).map(({ value }) => value)
+                                                        ? modelCapabilityOptions.filter(({ value }) => modelMatchesCapability(model, value, channelProtocol, channelModelCapabilities, channelModelMap)).map(({ value }) => value)
                                                         : declared;
                                                     return (
                                                         <Flex key={model} justify="space-between" align="center" gap={12} wrap style={{ minHeight: 38, borderBottom: "1px solid var(--ant-color-border-secondary)" }}>
@@ -1559,7 +1577,7 @@ function newAdminStorageProvider(type: AdminStorageProvider["type"], providers: 
 }
 
 function normalizeChannel(item: Partial<AdminModelChannel> = {}): AdminModelChannel {
-    const models = uniqueModels(item.models || []);
+    const models = uniqueModels([...(item.models || []), ...Object.keys(item.modelMap || {})]);
     return {
         id: item.id || "",
         protocol: item.protocol || "openai",
@@ -1593,8 +1611,31 @@ function normalizeModelCapabilities(capabilities: AdminModelChannel["modelCapabi
     return Object.keys(result).length ? result : undefined;
 }
 
+function renameChannelModel(channel: Partial<AdminModelChannel>, oldModel: string, newModel: string): AdminModelChannel {
+    const oldName = oldModel.trim();
+    const nextName = newModel.trim();
+    if (!nextName || oldName === nextName) return channel as AdminModelChannel;
+    const replaceKey = <T,>(values?: Record<string, T>) => {
+        if (!values) return values;
+        const next = { ...values };
+        if (Object.prototype.hasOwnProperty.call(next, oldName)) {
+            next[nextName] = next[oldName];
+            delete next[oldName];
+        }
+        return next;
+    };
+    return {
+        ...channel,
+        models: uniqueModels([...(channel.models || []).map((model) => model === oldName ? nextName : model), ...Object.keys(channel.modelMap || {}).map((model) => model === oldName ? nextName : model)]),
+        modelMap: replaceKey(channel.modelMap),
+        modelCapabilities: replaceKey(channel.modelCapabilities),
+        imageQualityCapabilities: replaceKey(channel.imageQualityCapabilities),
+        imageOutputCapabilities: replaceKey(channel.imageOutputCapabilities),
+    } as AdminModelChannel;
+}
+
 function normalizeModelMap(mapping: AdminModelChannel["modelMap"], models: string[]) {
-    const entries = models.flatMap(model => {
+    const entries = uniqueModels([...models, ...Object.keys(mapping || {})]).flatMap(model => {
         const value = mapping?.[model];
         const upstream = typeof value === "string" ? value.trim() : "";
         return upstream ? [[model, upstream]] : [];
@@ -1629,6 +1670,16 @@ function mergeChannelApiKeys(currentChannels: AdminModelChannel[], saved: AdminS
         public: saved.public,
         private: { ...saved.private, channels },
     };
+}
+
+function mergeChannelModelSelection(currentModels: string[], mapping: Record<string, string>, fetched: string[]) {
+    const preserved = uniqueModels(currentModels.filter((model) => Object.prototype.hasOwnProperty.call(mapping || {}, model)));
+    return uniqueModels([...preserved, ...fetched.filter((model) => !preserved.includes(model))]);
+}
+
+function resolveAvailableModels(availableModels: string[], channels: AdminModelChannel[]) {
+    const mappingModels = uniqueModels(channels.flatMap((channel) => Object.keys(channel.modelMap || {})));
+    return uniqueModels([...filterModels(availableModels, collectChannelModels(channels)), ...mappingModels]);
 }
 
 function collectChannelModels(channels: AdminModelChannel[]) {
@@ -1699,7 +1750,7 @@ async function collectSettings(form: any, editorMode: Record<SettingsTabKey, Edi
         }
         values.private = privateSetting;
     }
-    values.public.modelChannel.availableModels = filterModels(values.public.modelChannel.availableModels, collectChannelModels(values.private.channels));
+    values.public.modelChannel.availableModels = resolveAvailableModels(values.public.modelChannel.availableModels, values.private.channels);
     values.public.modelChannel.availableWorkflows = filterModels(values.public.modelChannel.availableWorkflows, collectChannelWorkflows(values.private.channels).map((item) => item.value));
     values.public.modelChannel.systemPrompt = values.public.modelChannel.systemPrompts.image || values.public.modelChannel.systemPrompts.text || "";
     return normalizeSettings(values);

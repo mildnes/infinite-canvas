@@ -1,8 +1,8 @@
-import type { AiConfig } from "@/stores/use-config-store";
+import { isImageModelName, type AiConfig } from "@/stores/use-config-store";
 import type { CanvasAgentConfig } from "../types";
 
 export function resolveCanvasAgentImageSelection(config: AiConfig, agentConfig?: CanvasAgentConfig | null) {
-    const channels: Array<{ id?: string; models?: string[]; modelCapabilities?: Record<string, string[]> }> = config.channelMode === "remote"
+    const channels: Array<{ id?: string; models?: string[]; modelMap?: Record<string, string>; modelCapabilities?: Record<string, string[]> }> = config.channelMode === "remote"
         ? config.publicChannels
         : config.localChannels.length
             ? config.localChannels
@@ -14,7 +14,8 @@ export function resolveCanvasAgentImageSelection(config: AiConfig, agentConfig?:
         const declaredCapabilities = channel.modelCapabilities?.[model];
         if (Array.isArray(declaredCapabilities)) return declaredCapabilities.includes("image");
         if (channels.some((candidate) => Array.isArray(candidate.modelCapabilities?.[model]))) return false;
-        return legacyImageModels.has(model);
+        const upstream = channel.modelMap?.[model]?.trim() || model;
+        return legacyImageModels.has(model) || (upstream !== model && isImageModelName(upstream));
     };
     const requestedIsAvailable = Boolean(requestedModel && channels.some((channel) => supportsImage(channel, requestedModel)));
     const defaultIsAvailable = channels.some((channel) => supportsImage(channel, config.imageModel));
