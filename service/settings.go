@@ -350,25 +350,9 @@ func normalizePrivateSetting(setting model.PrivateSetting) model.PrivateSetting 
 		}
 	}
 	for i := range setting.Channels {
-		if setting.Channels[i].Protocol == "" {
-			setting.Channels[i].Protocol = "openai"
-		}
 		setting.Channels[i].ID = strings.TrimSpace(setting.Channels[i].ID)
-		if setting.Channels[i].ID == "" {
-			setting.Channels[i].ID = stableModelChannelID(setting.Channels[i])
-		}
-		if setting.Channels[i].Models == nil {
-			setting.Channels[i].Models = []string{}
-		}
+		setting.Channels[i] = normalizeModelChannel(setting.Channels[i])
 		setting.Channels[i].ModelCapabilities = normalizeModelCapabilities(setting.Channels[i].ModelCapabilities)
-		setting.Channels[i].ImageOutputCapabilities = normalizeImageOutputCapabilities(setting.Channels[i].ImageOutputCapabilities, setting.Channels[i].Models)
-		setting.Channels[i].ImageQualityCapabilities = normalizeImageQualityCapabilities(setting.Channels[i].ImageQualityCapabilities)
-		if setting.Channels[i].Weight <= 0 {
-			setting.Channels[i].Weight = 1
-		}
-		if setting.Channels[i].Timeout <= 0 {
-			setting.Channels[i].Timeout = 600
-		}
 	}
 	return setting
 }

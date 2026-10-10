@@ -6,7 +6,7 @@ import ts from "typescript";
 
 const source = readFileSync(new URL("./page.tsx", import.meta.url), "utf8");
 const ast = ts.createSourceFile("page.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const names = new Set(["normalizeChannel", "normalizeModelMap", "normalizeModelCapabilities", "uniqueModels", "uniqueCapabilities", "renameChannelModel", "mergeChannelModelSelection", "resolveAvailableModels", "filterModels", "collectChannelModels"]);
+const names = new Set(["normalizeChannel", "normalizeModelMap", "normalizeModelCapabilities", "uniqueModels", "uniqueCapabilities", "renameChannelModel", "mergeChannelModelSelection", "resolveAvailableModels", "filterModels", "collectChannelModels", "collectChannelModelMapKeys"]);
 const functions = ast.statements.filter(node => ts.isFunctionDeclaration(node) && names.has(node.name?.text)).map(node => node.getText(ast)).join("\n");
 const context = {
     normalizeImageOutputCapabilities: value => value,
@@ -62,7 +62,12 @@ test("拉取上游模型时保留已有自定义本地名及其映射", () => {
 });
 
 test("保存时自定义本地名并入公开可选模型", () => {
-    const channel = { protocol: "openai", enabled: true, baseUrl: "https://example.invalid", models: ["gpt-image-2"], modelMap: { "我的高质图": "gpt-image-2.5-sunburst" } };
-    assert.deepEqual(plain(context.resolveAvailableModels(["gpt-image-2"], [channel])), ["gpt-image-2", "我的高质图"]);
-    assert.deepEqual(plain(context.resolveAvailableModels(["gpt-image-2", "gone"], [channel])), ["gpt-image-2", "我的高质图"]);
+    const channel = { protocol: "openai", enabled: true, baseUrl: "https://example.invalid", models: ["gpt-image-2", "我的高质图"], modelMap: { "我的高质图": "gpt-image-2.5-sunburst" } };
+    assert.deepEqual(plain(context.resolveAvailableModels(["gpt-image-2"], [channel], ["我的高质图"])), ["gpt-image-2", "我的高质图"]);
+    assert.deepEqual(plain(context.resolveAvailableModels(["gpt-image-2", "gone"], [channel], ["我的高质图"])), ["gpt-image-2", "我的高质图"]);
+});
+
+test("管理员取消勾选已保存映射别名后，保存不会自动加回", () => {
+    const channel = { protocol: "openai", enabled: true, models: ["gpt-image-2", "我的高质图"], modelMap: { "我的高质图": "gpt-image-2.5-sunburst" } };
+    assert.deepEqual(plain(context.resolveAvailableModels(["gpt-image-2"], [channel], [])), ["gpt-image-2"]);
 });

@@ -4,7 +4,7 @@ import { CheckCircleOutlined, DeleteOutlined, FormatPainterOutlined, LoadingOutl
 import { json } from "@codemirror/lang-json";
 import { App, AutoComplete, Button, Card, Checkbox, Col, Collapse, Drawer, Flex, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from "antd";
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { EditorView } from "@uiw/react-codemirror";
 
 import { ChannelModelSelectorModal } from "@/components/channel-model-selector-modal";
@@ -97,6 +97,7 @@ export default function AdminSettingsPage() {
     const [fetchingMCPToolsIndex, setFetchingMCPToolsIndex] = useState<number | null>(null);
     const [modelCosts, setModelCosts] = useState<AdminModelCost[]>([]);
     const [knownModels, setKnownModels] = useState<string[]>([]);
+    const savedModelMapKeysRef = useRef<string[]>([]);
     const publicModels = Form.useWatch(["public", "modelChannel", "availableModels"], form) || [];
     const publicWorkflows = Form.useWatch(["public", "modelChannel", "availableWorkflows"], form) || [];
     const storageProviders = Form.useWatch(["private", "storage", "providers"], form) || [];
@@ -135,6 +136,7 @@ export default function AdminSettingsPage() {
             const data = normalizeSettings(await fetchAdminSettings(token));
             form.setFieldsValue(data);
             setChannels(data.private.channels);
+            savedModelMapKeysRef.current = collectChannelModelMapKeys(data.private.channels);
             setModelCosts(data.public.modelChannel.modelCosts);
             setKnownModels(collectKnownModels(data));
             setJsonText({
@@ -158,7 +160,7 @@ export default function AdminSettingsPage() {
 
     const saveSettings = async () => {
         if (!token) return;
-        const values = await collectSettings(form, editorMode, jsonText, message);
+        const values = await collectSettings(form, editorMode, jsonText, message, savedModelMapKeysRef.current);
         if (!values) {
             return;
         }
@@ -170,6 +172,7 @@ export default function AdminSettingsPage() {
             const merged = mergeChannelApiKeys(values.private.channels, saved);
             form.setFieldsValue(merged);
             setChannels(merged.private.channels);
+            savedModelMapKeysRef.current = collectChannelModelMapKeys(merged.private.channels);
             setModelCosts(merged.public.modelChannel.modelCosts);
             rememberKnownModels(merged);
             setJsonText({
@@ -379,9 +382,10 @@ export default function AdminSettingsPage() {
         const values = normalizeSettings(form.getFieldsValue(true) as AdminSettings);
         const nextChannelModels = collectChannelModels(nextChannels);
         const nextChannelWorkflows = collectChannelWorkflows(nextChannels);
+        const newlyAddedMappingKeys = collectChannelModelMapKeys(nextChannels).filter((key) => !savedModelMapKeysRef.current.includes(key));
         const nextSettings = normalizeSettings({
             ...values,
-            public: { ...values.public, modelChannel: { ...values.public.modelChannel, availableModels: filterModels(values.public.modelChannel.availableModels, nextChannelModels), availableWorkflows: filterModels(values.public.modelChannel.availableWorkflows, nextChannelWorkflows.map((item) => item.value)) } },
+            public: { ...values.public, modelChannel: { ...values.public.modelChannel, availableModels: resolveAvailableModels(values.public.modelChannel.availableModels, nextChannels, newlyAddedMappingKeys), availableWorkflows: filterModels(values.public.modelChannel.availableWorkflows, nextChannelWorkflows.map((item) => item.value)) } },
             private: { ...values.private, channels: nextChannels },
         });
         const saved = normalizeSettings(await saveAdminSettings(token, nextSettings));
@@ -389,6 +393,7 @@ export default function AdminSettingsPage() {
         clearMediaStorageConfigCache();
         const merged = mergeChannelApiKeys(nextChannels, saved);
         setChannels(merged.private.channels);
+        savedModelMapKeysRef.current = collectChannelModelMapKeys(merged.private.channels);
         setModelCosts(merged.public.modelChannel.modelCosts);
         rememberKnownModels(merged);
         form.setFieldsValue(merged);
@@ -1677,9 +1682,14 @@ function mergeChannelModelSelection(currentModels: string[], mapping: Record<str
     return uniqueModels([...preserved, ...fetched.filter((model) => !preserved.includes(model))]);
 }
 
-function resolveAvailableModels(availableModels: string[], channels: AdminModelChannel[]) {
-    const mappingModels = uniqueModels(channels.flatMap((channel) => Object.keys(channel.modelMap || {})));
-    return uniqueModels([...filterModels(availableModels, collectChannelModels(channels)), ...mappingModels]);
+function resolveAvailableModels(availableModels: string[], channels: AdminModelChannel[], autoAddMappingKeys: string[] = []) {
+    const enabledModels = collectChannelModels(channels);
+    const autoAdd = new Set(autoAddMappingKeys);
+    return uniqueModels([...filterModels(availableModels, enabledModels), ...enabledModels.filter((model) => autoAdd.has(model))]);
+}
+
+function collectChannelModelMapKeys(channels: AdminModelChannel[]) {
+    return uniqueModels(channels.filter((channel) => !isWorkflowProtocol(channel.protocol)).flatMap((channel) => Object.keys(channel.modelMap || {})));
 }
 
 function collectChannelModels(channels: AdminModelChannel[]) {
@@ -1732,7 +1742,7 @@ function parseTabJson(tab: SettingsTabKey, value: string): AdminSettings[Setting
     }
 }
 
-async function collectSettings(form: any, editorMode: Record<SettingsTabKey, EditorMode>, jsonText: Record<SettingsTabKey, string>, message: { error: (value: string) => void }) {
+async function collectSettings(form: any, editorMode: Record<SettingsTabKey, EditorMode>, jsonText: Record<SettingsTabKey, string>, message: { error: (value: string) => void }, savedModelMapKeys: string[] = []) {
     const values = normalizeSettings(form.getFieldsValue(true) as AdminSettings);
     if (editorMode.public === "json") {
         const publicSetting = parseTabJson("public", jsonText.public);
@@ -1750,7 +1760,9 @@ async function collectSettings(form: any, editorMode: Record<SettingsTabKey, Edi
         }
         values.private = privateSetting;
     }
-    values.public.modelChannel.availableModels = resolveAvailableModels(values.public.modelChannel.availableModels, values.private.channels);
+    const currentModelMapKeys = collectChannelModelMapKeys(values.private.channels);
+    const newlyAddedMappingKeys = currentModelMapKeys.filter((key) => !savedModelMapKeys.includes(key));
+    values.public.modelChannel.availableModels = resolveAvailableModels(values.public.modelChannel.availableModels, values.private.channels, newlyAddedMappingKeys);
     values.public.modelChannel.availableWorkflows = filterModels(values.public.modelChannel.availableWorkflows, collectChannelWorkflows(values.private.channels).map((item) => item.value));
     values.public.modelChannel.systemPrompt = values.public.modelChannel.systemPrompts.image || values.public.modelChannel.systemPrompts.text || "";
     return normalizeSettings(values);

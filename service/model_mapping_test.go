@@ -69,3 +69,27 @@ func TestPublicAvailableModelsAndDefaultImageModelKeepCustomLocalAlias(t *testin
 		t.Fatalf("default image model lost custom alias: %q", setting.ModelChannel.DefaultImageModel)
 	}
 }
+
+func TestNormalizeSettingsSavePathKeepsCustomMappingAliasInModelsAndPublicModels(t *testing.T) {
+	settings := normalizeSettings(model.Settings{
+		Private: model.PrivateSetting{Channels: []model.ModelChannel{{
+			ID:      "rolldek",
+			Enabled: true,
+			Models:  []string{"gpt-image-2"},
+			ModelMap: map[string]string{"我的高质图": "gpt-image-2.5-sunburst"},
+		}}},
+		Public: model.PublicSetting{ModelChannel: model.PublicModelChannelSetting{
+			AvailableModels: []string{"gpt-image-2", "我的高质图"},
+		}},
+	})
+	channel := settings.Private.Channels[0]
+	if !reflect.DeepEqual(channel.Models, []string{"gpt-image-2", "我的高质图"}) {
+		t.Fatalf("save normalization did not join mapping key into channel models: %+v", channel.Models)
+	}
+	if !reflect.DeepEqual(enabledChannelModels(settings.Private.Channels), []string{"gpt-image-2", "我的高质图"}) {
+		t.Fatalf("enabledChannelModels missing custom alias: %+v", enabledChannelModels(settings.Private.Channels))
+	}
+	if !reflect.DeepEqual(settings.Public.ModelChannel.AvailableModels, []string{"gpt-image-2", "我的高质图"}) {
+		t.Fatalf("public available models dropped custom alias: %+v", settings.Public.ModelChannel.AvailableModels)
+	}
+}
