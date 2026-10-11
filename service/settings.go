@@ -385,6 +385,12 @@ func stableAgentID(name string, index int) string {
 }
 
 func hidePrivateAPIKeys(settings model.Settings) model.Settings {
+	// Redact the response copy without clearing credentials held by the caller.
+	if settings.Private.Channels != nil {
+		channels := make([]model.ModelChannel, len(settings.Private.Channels))
+		copy(channels, settings.Private.Channels)
+		settings.Private.Channels = channels
+	}
 	for i := range settings.Private.Channels {
 		settings.Private.Channels[i].APIKey = ""
 		settings.Private.Channels[i].UploadAPIKey = ""
