@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { App } from "antd";
 
-import { adjustAdminUserCredits, deleteAdminUser, fetchAdminUsers, saveAdminUser, type AdminUser } from "@/services/api/admin";
+import { adjustAdminUserCredits, deleteAdminUser, fetchAdminSettings, fetchAdminUsers, saveAdminUser, type AdminUser } from "@/services/api/admin";
+import { availableUserGroupModels, normalizeUserGroups } from "@/lib/user-groups";
 import { useUserStore } from "@/stores/use-user-store";
 
 const defaultPageSize = 10;
@@ -23,6 +24,27 @@ export function useAdminUsers() {
         queryFn: () => fetchAdminUsers(token, { keyword, page, pageSize }),
         enabled: Boolean(token),
         retry: false,
+    });
+    const groupsQuery = useQuery({
+        queryKey: ["admin", "user-groups", token],
+        queryFn: async () => {
+            const settings = await fetchAdminSettings(token);
+            return normalizeUserGroups(settings.public.modelChannel.userGroups, availableUserGroupModels(settings));
+        },
+        enabled: Boolean(token), retry: false,
+    });
+    const groupMutation = useMutation({
+        mutationFn: async ({ ids, groupId }: { ids: string[]; groupId: string }) => {
+            const failures: string[] = [];
+            for (const id of ids) {
+                try { await saveAdminUser(token, { id, groupId, groupOnly: true }); }
+                catch (error) { failures.push(error instanceof Error ? error.message : "保存失败"); }
+            }
+            if (failures.length) throw new Error(failures.length + " 个用户分组设置失败：" + failures[0]);
+        },
+        onSettled: () => queryClient.invalidateQueries({ queryKey: ["admin", "users"] }),
+        onSuccess: () => message.success("用户分组已更新"),
+        onError: error => message.error(error instanceof Error ? error.message : "分组设置失败"),
     });
 
     const saveMutation = useMutation({
@@ -71,12 +93,14 @@ export function useAdminUsers() {
     const data = query.data;
 
     return {
+        groups: groupsQuery.data || [],
+        setUserGroups: (ids: string[], groupId: string) => groupMutation.mutateAsync({ ids, groupId }),
         users: data?.items || [],
         keyword,
         page,
         pageSize,
         total: data?.total || 0,
-        isLoading: query.isFetching || saveMutation.isPending || deleteMutation.isPending || creditMutation.isPending,
+        isLoading: query.isFetching || saveMutation.isPending || deleteMutation.isPending || creditMutation.isPending || groupMutation.isPending,
         searchUsers: (value = keyword) => updateFilters({ keyword: value }),
         changePage: (value: number) => updateFilters({ page: value }),
         changePageSize: (value: number) => updateFilters({ pageSize: value }),

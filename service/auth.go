@@ -244,6 +244,14 @@ func ListUsers(q model.Query) (model.UserList, error) {
 }
 
 func SaveUser(user model.User, password string) (model.User, error) {
+	user.GroupID = strings.TrimSpace(user.GroupID)
+	settings, err := repository.GetSettings()
+	if err != nil {
+		return user, err
+	}
+	if err := validateUserGroupID(user.GroupID, normalizeSettings(settings).Public.ModelChannel.UserGroups); err != nil {
+		return user, err
+	}
 	user.Username = strings.TrimSpace(user.Username)
 	if strings.ContainsAny(user.Username, " \t\r\n") {
 		return user, safeMessageError{message: "用户名不能包含空格"}
@@ -297,7 +305,21 @@ func SaveUser(user model.User, password string) (model.User, error) {
 		return user, safeMessageError{message: "密码不能为空"}
 	}
 	user.UpdatedAt = now()
-	user, err := repository.SaveUser(user)
+	user, err = repository.SaveUser(user)
+	user.Password = ""
+	return user, err
+}
+
+func SetUserGroup(id, groupID string) (model.User, error) {
+	groupID = strings.TrimSpace(groupID)
+	settings, err := repository.GetSettings()
+	if err != nil {
+		return model.User{}, err
+	}
+	if err := validateUserGroupID(groupID, normalizeSettings(settings).Public.ModelChannel.UserGroups); err != nil {
+		return model.User{}, err
+	}
+	user, err := repository.SetUserGroup(strings.TrimSpace(id), groupID, now())
 	user.Password = ""
 	return user, err
 }

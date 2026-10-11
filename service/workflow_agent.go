@@ -31,7 +31,7 @@ func DraftCreativeWorkflow(ctx context.Context, request WorkflowAgentDraftReques
 	if request.ChannelMode != "local" && !UserCanUseRemoteModelChannel(user) {
 		return WorkflowAgentDraftResponse{}, safeMessageError{message: "当前账号未开放云端渠道"}
 	}
-	channel, err := workflowDraftChannel(request, modelName)
+	channel, err := workflowDraftChannelForUser(ctx, request, modelName)
 	if err != nil {
 		return WorkflowAgentDraftResponse{}, err
 	}
@@ -193,7 +193,7 @@ func workflowDraftModel(modelName string) (string, error) {
 	return "", safeMessageError{message: "请先配置文本模型"}
 }
 
-func workflowDraftChannel(request WorkflowAgentDraftRequest, modelName string) (model.ModelChannel, error) {
+func workflowDraftChannelForUser(ctx context.Context, request WorkflowAgentDraftRequest, modelName string) (model.ModelChannel, error) {
 	if request.ChannelMode == "local" {
 		channel := model.ModelChannel{
 			ID:       strings.TrimSpace(request.ChannelID),
@@ -210,7 +210,7 @@ func workflowDraftChannel(request WorkflowAgentDraftRequest, modelName string) (
 		}
 		return channel, nil
 	}
-	return SelectModelChannel(modelName)
+	return SelectModelChannelForUser(ctx, modelName, "", true)
 }
 
 func workflowAgentMessages(prompt string, references []string) []map[string]any {

@@ -79,6 +79,25 @@ func SaveUser(user model.User) (model.User, error) {
 	return user, db.Save(&user).Error
 }
 
+func SetUserGroup(id, groupID, now string) (model.User, error) {
+	db, err := DB()
+	if err != nil {
+		return model.User{}, err
+	}
+	result := db.Model(&model.User{}).Where("id = ?", id).Updates(map[string]any{"group_id": groupID, "updated_at": now})
+	if result.Error != nil {
+		return model.User{}, result.Error
+	}
+	user, found, err := GetUserByID(id)
+	if err != nil {
+		return user, err
+	}
+	if !found {
+		return user, gorm.ErrRecordNotFound
+	}
+	return user, nil
+}
+
 func ConsumeUserCredits(id string, credits int, now string, log model.CreditLog, task any) (model.User, bool, error) {
 	db, err := DB()
 	if err != nil {

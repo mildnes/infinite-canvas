@@ -217,10 +217,10 @@ type ConfigStore = {
 function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSettings["modelChannel"] | null, canUseRemoteChannel: boolean) {
     const channelMode = !canUseRemoteChannel
         ? "local"
-        : !modelChannel?.allowCustomChannel || !config.channelModeManuallySelected
+        : (modelChannel ? !modelChannel.allowCustomChannel : false) || !config.channelModeManuallySelected
             ? "remote"
             : config.channelMode;
-    if (channelMode === "local" || !modelChannel) {
+    if (channelMode === "local") {
         const localChannels = normalizeLocalChannels(config);
         const modelChannels = localChannels.filter((channel) => !isWorkflowProtocol(channel.protocol));
         return {
@@ -230,6 +230,9 @@ function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSetti
             models: normalizeModelList(modelChannels.flatMap((channel) => channel.models)),
             publicChannels: modelChannel?.channels || [],
         };
+    }
+    if (!modelChannel) {
+        return { ...config, channelMode, models: [], imageModels: [], videoModels: [], textModels: [], audioModels: [], publicChannels: [], model: "", imageModel: "", videoModel: "", textModel: "", audioModel: "" };
     }
     const models = modelChannel.availableModels;
     const textModels = filterChannelModelsByCapability(modelChannel.channels, "text", models);
@@ -407,6 +410,7 @@ export function resolveModelForCapability(config: AiConfig, currentModel: string
     const configuredModel = capability === "image" ? config.imageModel : capability === "video" ? config.videoModel : capability === "audio" ? config.audioModel : config.textModel;
     const fallbackModel = capability === "image" ? defaultConfig.imageModel : capability === "video" ? defaultConfig.videoModel : capability === "audio" ? defaultConfig.audioModel : defaultConfig.textModel;
     const selectableModels = selectableModelsByCapability(config, capability);
+    if (config.channelMode === "remote" && selectableModels.length === 0) return "";
     const matches = (model: string | undefined) => Boolean(model && (selectableModels.length ? selectableModels.includes(model) : modelMatchesCapability(model, capability)));
     if (matches(currentModel)) return currentModel!;
     if (matches(configuredModel)) return configuredModel;
@@ -414,8 +418,16 @@ export function resolveModelForCapability(config: AiConfig, currentModel: string
 }
 
 function isAiConfigReady(config: AiConfig, model: string) {
+    if (config.channelMode === "remote") return Boolean(model.trim() && config.models.includes(model));
     const channel = localChannelForActiveModel({ ...config, model });
-    return Boolean(model.trim()) && (config.channelMode === "remote" || Boolean(channel?.baseUrl.trim() && channel?.apiKey.trim()));
+    return Boolean(model.trim()) && Boolean(channel?.baseUrl.trim() && channel?.apiKey.trim());
+}
+
+let publicSettingsGeneration = 0;
+let publicSettingsFlight: { owner: string; promise: Promise<void> } | null = null;
+function settingsOwner() {
+    const { token, user } = useUserStore.getState();
+    return token + ":" + (user?.id || "");
 }
 
 export const useConfigStore = create<ConfigStore>()(
@@ -433,14 +445,25 @@ export const useConfigStore = create<ConfigStore>()(
                         [key]: value,
                     },
                 })),
-            loadPublicSettings: async () => {
-                if (get().isPublicSettingsLoading) return;
+            loadPublicSettings: () => {
+                const owner = settingsOwner();
+                if (publicSettingsFlight?.owner === owner) return publicSettingsFlight.promise;
+                const generation = ++publicSettingsGeneration;
+                const token = useUserStore.getState().token;
                 set({ isPublicSettingsLoading: true });
-                try {
-                    set({ publicSettings: await apiGet<AdminPublicSettings>("/api/settings") });
-                } finally {
-                    set({ isPublicSettingsLoading: false });
-                }
+                const promise = (async () => {
+                    try {
+                        const settings = await apiGet<AdminPublicSettings>("/api/settings", undefined, token);
+                        if (generation === publicSettingsGeneration && settingsOwner() === owner) set({ publicSettings: settings });
+                    } finally {
+                        if (generation === publicSettingsGeneration && settingsOwner() === owner) {
+                            publicSettingsFlight = null;
+                            set({ isPublicSettingsLoading: false });
+                        }
+                    }
+                })();
+                publicSettingsFlight = { owner, promise };
+                return promise;
             },
             isAiConfigReady: (config, model) => isAiConfigReady(config, model),
             openConfigDialog: (shouldPromptContinue = false) => set({ isConfigOpen: true, shouldPromptContinue }),
@@ -520,6 +543,14 @@ export const useConfigStore = create<ConfigStore>()(
     ),
 );
 
+// Invalidate synchronously on every account transition, before React effects run.
+useUserStore.subscribe((state, previous) => {
+    if (state.token === previous.token && state.user?.id === previous.user?.id) return;
+    publicSettingsGeneration++;
+    publicSettingsFlight = null;
+    useConfigStore.setState({ publicSettings: null, isPublicSettingsLoading: false });
+});
+
 function normalizeModelList(models: string[]) {
     return Array.from(new Set((models || []).map((model) => model.trim()).filter(Boolean)));
 }
@@ -529,7 +560,7 @@ export function useEffectiveConfig() {
     const modelChannel = useConfigStore((state) => state.publicSettings?.modelChannel || null);
     const token = useUserStore((state) => state.token);
     const user = useUserStore((state) => state.user);
-    const canUseRemoteChannel = Boolean(token && user && (user.role === "admin" || modelChannel?.allowUserRemoteChannel === true));
+    const canUseRemoteChannel = Boolean(token && (!user || user.role === "admin" || !modelChannel || modelChannel.allowUserRemoteChannel === true));
     return useMemo(() => resolveEffectiveConfig(config, modelChannel, canUseRemoteChannel), [canUseRemoteChannel, config, modelChannel]);
 }
 

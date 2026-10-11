@@ -156,9 +156,9 @@ export default function VideoPage() {
     const effectiveConfigRef = useRef(videoConfig);
     const workflowSubmissionRef = useRef(0);
 
-    const model = effectiveConfig.videoModel || effectiveConfig.model;
+    const model = effectiveConfig.channelMode === "remote" ? effectiveConfig.videoModel : effectiveConfig.videoModel || effectiveConfig.model;
     const referenceLimits = !videoConfig.videoWorkflowRef && channelProtocolForConfig({ ...videoConfig, model, videoModel: model }) === "ark" && modelKey(model).includes("seedance-2-5") ? ARK_SEEDANCE_REFERENCE_LIMITS : SEEDANCE_REFERENCE_LIMITS;
-    const canGenerate = Boolean(prompt.trim() || videoConfig.videoWorkflowRef);
+    const canGenerate = Boolean(prompt.trim() || videoConfig.videoWorkflowRef) && (videoConfig.channelMode !== "remote" || Boolean(videoConfig.videoWorkflowRef) || Boolean(model));
     const pendingCount = results.filter((item) => item.status === "pending").length;
     const klingWorkbench = videoConfig.videoWorkflowRef ? null : resolveKlingWorkbenchConfig(videoConfig, model);
     const klingWorkbenchVariant = klingWorkbench?.variant || "";

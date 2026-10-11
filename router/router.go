@@ -21,7 +21,7 @@ func New() *gin.Engine {
 	api.GET("/auth/linux-do/authorize", gin.WrapF(handler.LinuxDoAuthorize))
 	api.GET("/auth/linux-do/callback", gin.WrapF(handler.LinuxDoCallback))
 	api.GET("/auth/me", middleware.OptionalAuth, gin.WrapF(handler.CurrentUser))
-	api.GET("/settings", gin.WrapF(handler.Settings))
+	api.GET("/settings", middleware.OptionalAuth, gin.WrapF(handler.Settings))
 	api.GET("/agent/settings", middleware.OptionalAuth, gin.WrapF(handler.AgentSettings))
 	api.GET("/agent-skills", gin.WrapF(handler.AgentSkills))
 	api.GET("/agent-skills/:id/file", func(c *gin.Context) {

@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 
 import type { AdminUser } from "@/services/api/admin";
 import { useAdminUsers } from "./use-admin-users";
+import { userGroupLabel } from "@/lib/user-groups";
 
 type UserFormValues = Partial<AdminUser> & { password?: string };
 
@@ -22,16 +23,19 @@ const statusOptions = [
 ];
 
 export default function AdminUsersPage() {
-    const { users, keyword, page, pageSize, total, isLoading, searchUsers, changePage, changePageSize, resetFilters, refreshUsers, saveUser: saveAdminUser, adjustCredits, deleteUser } = useAdminUsers();
+    const { users, groups, setUserGroups, keyword, page, pageSize, total, isLoading, searchUsers, changePage, changePageSize, resetFilters, refreshUsers, saveUser: saveAdminUser, adjustCredits, deleteUser } = useAdminUsers();
     const [form] = Form.useForm<UserFormValues>();
     const [keywordText, setKeywordText] = useState(keyword);
     const [editingUser, setEditingUser] = useState<Partial<AdminUser> | null>(null);
     const [deletingUser, setDeletingUser] = useState<AdminUser | null>(null);
+    const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
+    const [batchGroupId, setBatchGroupId] = useState("");
+    const groupOptions = groups.map(group => ({ label: group.name, value: group.id === "default" ? "" : group.id }));
 
     useEffect(() => setKeywordText(keyword), [keyword]);
 
     useEffect(() => {
-        if (editingUser) form.setFieldsValue({ role: "user", status: "active", ...editingUser, password: "" });
+        if (editingUser) form.setFieldsValue({ role: "user", status: "active", groupId: "", ...editingUser, password: "" });
     }, [editingUser, form]);
 
     const saveUser = async () => {
@@ -77,6 +81,10 @@ export default function AdminUsersPage() {
             dataIndex: "status",
             width: 90,
             render: (_, item) => <Tag color={item.status === "ban" ? "red" : "green"}>{item.status === "ban" ? "禁用" : "正常"}</Tag>,
+        },
+        {
+            title: "分组", dataIndex: "groupId", width: 130,
+            render: (_, item) => <Typography.Text>{userGroupLabel(item.groupId, groups)}</Typography.Text>,
         },
         {
             title: "算力点",
@@ -154,6 +162,8 @@ export default function AdminUsersPage() {
                 </Card>
                 <ProTable<AdminUser>
                     rowKey="id"
+                    rowSelection={{ selectedRowKeys: selectedUserIds, onChange: keys => setSelectedUserIds(keys.map(String)) }}
+                    tableAlertRender={false}
                     columns={columns}
                     dataSource={users}
                     loading={isLoading}
@@ -169,6 +179,8 @@ export default function AdminUsersPage() {
                     }
                     options={{ density: true, setting: true, reload: () => void refreshUsers() }}
                     toolBarRender={() => [
+                        <Select key="group" aria-label="批量用户分组" placeholder="选择用户分组" value={batchGroupId} options={groupOptions} onChange={setBatchGroupId} style={{ width: 160 }} disabled={!groups.length || isLoading} />,
+                        <Button key="batch" disabled={!selectedUserIds.length || !groups.length || isLoading} onClick={async () => { await setUserGroups(selectedUserIds, batchGroupId); setSelectedUserIds([]); }}>批量设置分组（{selectedUserIds.length}）</Button>,
                         <Button key="add" type="primary" icon={<PlusOutlined />} onClick={() => setEditingUser({ role: "user", status: "active" })}>
                             新增
                         </Button>,
@@ -217,6 +229,11 @@ export default function AdminUsersPage() {
                         <Col span={12}>
                             <Form.Item name="status" label="状态" rules={[{ required: true, message: "请选择状态" }]}>
                                 <Select options={statusOptions} />
+                            </Form.Item>
+                        </Col>
+                        <Col span={12}>
+                            <Form.Item name="groupId" label="用户分组">
+                                <Select options={groupOptions} disabled={!groups.length} />
                             </Form.Item>
                         </Col>
                     </Row>

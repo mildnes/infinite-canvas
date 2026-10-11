@@ -5,7 +5,7 @@ import { Image as ImageIcon, LoaderCircle, MessageSquare, Music2, Play, Settings
 import { Button, Segmented } from "antd";
 
 import { ModelPicker } from "@/components/model-picker";
-import { defaultConfig, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { defaultConfig, resolveModelForCapability, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { CreditSymbol } from "@/constant/credits";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatCreditQuote, indexModelCredits, requestCreditQuote } from "@/lib/model-credits";
@@ -49,7 +49,8 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, videoFram
     const chipStyle = { background: theme.node.fill, borderColor: theme.node.stroke, color: theme.node.text };
     const hasAnyInput = Boolean(inputSummary.textCount || inputSummary.imageCount || inputSummary.videoCount || inputSummary.audioCount);
     const hasComposerContent = Boolean((node.metadata?.composerContent ?? node.metadata?.prompt ?? "").trim());
-    const canGenerate = (mode !== "text" && Boolean(node.metadata?.workflowRef)) || hasComposerContent || (mode === "audio" ? inputSummary.textCount > 0 : hasAnyInput);
+    const hasModel = config.channelMode !== "remote" || Boolean(config.model) || Boolean(workflowRef);
+    const canGenerate = hasModel && ((mode !== "text" && Boolean(node.metadata?.workflowRef)) || hasComposerContent || (mode === "audio" ? inputSummary.textCount > 0 : hasAnyInput));
 
     return (
         <div className="flex h-full w-full cursor-move flex-col px-3 pb-3 pt-7 text-sm" style={{ color: theme.node.text }} onWheel={(event) => event.stopPropagation()}>
@@ -164,10 +165,11 @@ function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: Can
     const textChannelId = mode === "text" ? channelId || globalConfig.textChannelId : globalConfig.textChannelId;
     const audioChannelId = mode === "audio" ? channelId || globalConfig.audioChannelId : globalConfig.audioChannelId;
     const activeChannelId = mode === "image" ? imageChannelId : mode === "video" ? videoChannelId : mode === "text" ? textChannelId : mode === "audio" ? audioChannelId || globalConfig.activeChannelId : globalConfig.activeChannelId;
+    const requestModel = globalConfig.channelMode === "remote" ? resolveModelForCapability(globalConfig, node.metadata?.model, mode) : node.metadata?.model || defaultModel || (mode === "audio" ? defaultConfig.audioModel : globalConfig.model || defaultConfig.model);
     return {
         ...globalConfig,
-        model: node.metadata?.model || defaultModel || (mode === "audio" ? defaultConfig.audioModel : globalConfig.model || defaultConfig.model),
-        imageModel: mode === "image" ? node.metadata?.model || defaultModel || globalConfig.imageModel : globalConfig.imageModel,
+        model: requestModel,
+        imageModel: mode === "image" ? requestModel : globalConfig.imageModel,
         imageWorkflowRef: mode === "image" ? node.metadata?.workflowRef : globalConfig.imageWorkflowRef,
         activeChannelId,
         imageChannelId,

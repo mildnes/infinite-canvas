@@ -17,6 +17,7 @@ export type AdminPromptCategory = {
 };
 
 export type AdminUser = {
+    groupId?: string;
     id: string;
     username: string;
     email: string;
@@ -67,7 +68,7 @@ export async function fetchAdminUsers(token: string, query: AdminUserQuery = {})
     return apiGet<AdminUserListResponse>("/api/admin/users", compactApiParams(query), token);
 }
 
-export async function saveAdminUser(token: string, user: Partial<AdminUser> & { password?: string }) {
+export async function saveAdminUser(token: string, user: Partial<AdminUser> & { password?: string; groupOnly?: boolean }) {
     return apiPost<AdminUser>("/api/admin/users", user, token);
 }
 
@@ -217,6 +218,7 @@ export type AdminModelChannel = {
 };
 
 export type AdminPublicModelChannelSettings = {
+    userGroups?: AdminUserGroup[];
     availableModels: string[];
     availableWorkflows: string[];
     modelCosts: AdminModelCost[];
@@ -236,6 +238,8 @@ export type AdminPublicModelChannelSettings = {
     allowCustomChannel: boolean;
     allowUserRemoteChannel: boolean;
 };
+
+export type AdminUserGroup = { id: string; name: string; unrestricted: boolean; models: string[]; isDefault: boolean; remark?: string };
 
 export type AdminModelCost = {
     channelId?: string;

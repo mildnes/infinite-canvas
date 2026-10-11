@@ -128,8 +128,18 @@ type ImageQualityCapability struct {
 	DefaultValue string            `json:"defaultValue,omitempty"`
 }
 
+type UserGroupSetting struct {
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Unrestricted bool     `json:"unrestricted"`
+	Models       []string `json:"models"`
+	IsDefault    bool     `json:"isDefault"`
+	Remark       string   `json:"remark"`
+}
+
 // PublicModelChannelSetting 公开模型渠道配置。
 type PublicModelChannelSetting struct {
+	UserGroups             []UserGroupSetting       `json:"userGroups,omitempty"`
 	AvailableModels        []string                 `json:"availableModels"`
 	AvailableWorkflows     []string                 `json:"availableWorkflows"`
 	ModelCosts             []ModelCost              `json:"modelCosts"`

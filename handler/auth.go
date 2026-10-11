@@ -27,6 +27,8 @@ type saveUserRequest struct {
 	Email       string           `json:"email"`
 	DisplayName string           `json:"displayName"`
 	Role        model.UserRole   `json:"role"`
+	GroupID     string           `json:"groupId"`
+	GroupOnly   bool             `json:"groupOnly"`
 	Status      model.UserStatus `json:"status"`
 }
 
@@ -109,12 +111,22 @@ func AdminUsers(w http.ResponseWriter, r *http.Request) {
 func AdminSaveUser(w http.ResponseWriter, r *http.Request) {
 	var request saveUserRequest
 	_ = json.NewDecoder(r.Body).Decode(&request)
+	if request.GroupOnly {
+		user, err := service.SetUserGroup(request.ID, request.GroupID)
+		if err != nil {
+			FailError(w, err)
+			return
+		}
+		OK(w, user)
+		return
+	}
 	user, err := service.SaveUser(model.User{
 		ID:          request.ID,
 		Username:    request.Username,
 		Email:       request.Email,
 		DisplayName: request.DisplayName,
 		Role:        request.Role,
+		GroupID:     request.GroupID,
 		Status:      request.Status,
 	}, request.Password)
 	if err != nil {

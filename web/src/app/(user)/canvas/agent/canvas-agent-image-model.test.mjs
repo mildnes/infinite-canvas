@@ -63,3 +63,17 @@ test("自定义本地名按映射的上游名识别图片能力", () => {
         imageOutputFormat: "auto",
     });
 });
+
+test("remote 仅开放文本时 Agent 图片选择为空，应用选择不恢复旧图片模型", () => {
+    const restricted = { ...config, imageModels: [], publicChannels: [{ id: "text", models: ["text-only"], modelCapabilities: { "text-only": ["text"] } }] };
+    const selection = resolveCanvasAgentImageSelection(restricted, { imageModel: "gpt-image-2", imageChannelId: "default" });
+    assert.equal(selection.imageModel, "");
+    assert.equal(selection.imageChannelId, "");
+    assert.equal(applyCanvasAgentImageSelection(restricted, selection).imageModel, "");
+});
+
+test("local 无图片候选仍保留原 Agent 图片兜底", () => {
+    const local = { ...config, channelMode: "local", localChannels: [], models: [], imageModels: [] };
+    assert.equal(resolveCanvasAgentImageSelection(local).imageModel, config.imageModel);
+    assert.equal(applyCanvasAgentImageSelection(local, { imageModel: "", imageChannelId: "" }).imageModel, config.imageModel);
+});

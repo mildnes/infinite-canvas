@@ -54,6 +54,7 @@ description: 当前后端主要数据表与字段说明
 | `display_name` | string | 昵称 |
 | `avatar_url` | string | 头像地址 |
 | `role` | string | 角色：`user`、`admin` |
+| `group_id` | string | 用户分组 ID，带索引；空值表示内置默认分组，未知 ID 也按默认组处理 |
 | `credits` | number | 算力点余额 |
 | `aff_code` | string | 用户自己的邀请码，唯一索引 |
 | `aff_count` | number | 已邀请用户数量，冗余统计字段 |

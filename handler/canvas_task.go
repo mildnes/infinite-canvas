@@ -60,7 +60,7 @@ func CreateCanvasImageTask(w http.ResponseWriter, r *http.Request) {
 		Fail(w, "缺少模型渠道")
 		return
 	}
-	channel, resolvedUserChannelID, err := selectAIRequestChannel(user, modelName, channelID, userChannelID)
+	channel, resolvedUserChannelID, err := selectAIRequestChannel(r.Context(), user, modelName, channelID, userChannelID)
 	if err != nil {
 		log.Printf("canvas image task select channel failed: model=%s err=%v", modelName, err)
 		failAIChannelSelect(w, err, "AI 接口请求失败")
@@ -261,7 +261,7 @@ func CreateCanvasAudioTask(w http.ResponseWriter, r *http.Request) {
 		Fail(w, "缺少模型渠道")
 		return
 	}
-	channel, resolvedUserChannelID, err := selectAIRequestChannel(user, modelName, channelID, userChannelID)
+	channel, resolvedUserChannelID, err := selectAIRequestChannel(r.Context(), user, modelName, channelID, userChannelID)
 	if err != nil {
 		log.Printf("canvas audio task select channel failed: model=%s err=%v", modelName, err)
 		failAIChannelSelect(w, err, "AI 接口请求失败")

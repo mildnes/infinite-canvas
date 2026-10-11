@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -56,7 +57,19 @@ func SaveSettings(settings model.Settings) (model.Settings, error) {
 	if err != nil {
 		return model.Settings{}, err
 	}
+	rawGroups := settings.Public.ModelChannel.UserGroups
+	if rawGroups == nil {
+		rawGroups = saved.Public.ModelChannel.UserGroups
+		settings.Public.ModelChannel.UserGroups = rawGroups
+	}
 	settings = normalizeSettings(settings)
+	groupAvailableModels := settings.Public.ModelChannel.AvailableModels
+	if len(groupAvailableModels) == 0 {
+		groupAvailableModels = enabledChannelModels(settings.Private.Channels)
+	}
+	if err := validateUserGroups(rawGroups, saved.Public.ModelChannel.UserGroups, groupAvailableModels); err != nil {
+		return model.Settings{}, err
+	}
 	if err := validateUniqueModelChannelIDs(settings.Private.Channels); err != nil {
 		return model.Settings{}, err
 	}
@@ -210,6 +223,11 @@ func normalizePublicSettingWithChannels(setting model.PublicSetting, channels []
 		setting.Auth.AllowRegister = &enabled
 	}
 	setting.ModelChannel.AvailableModels = filterEnabledModels(setting.ModelChannel.AvailableModels, enabledChannelModels(channels))
+	groupAvailableModels := setting.ModelChannel.AvailableModels
+	if len(groupAvailableModels) == 0 {
+		groupAvailableModels = enabledChannelModels(channels)
+	}
+	setting.ModelChannel.UserGroups = normalizeUserGroups(setting.ModelChannel.UserGroups, groupAvailableModels)
 	setting.ModelChannel.DefaultTextModel = repairDefaultModelForCapability(setting.ModelChannel.DefaultTextModel, setting.ModelChannel.AvailableModels, channels, model.ModelCapabilityText, isTextModelName)
 	setting.ModelChannel.DefaultImageModel = repairDefaultModelForCapability(setting.ModelChannel.DefaultImageModel, setting.ModelChannel.AvailableModels, channels, model.ModelCapabilityImage, isImageModelName)
 	setting.ModelChannel.DefaultVideoModel = repairDefaultModelForCapability(setting.ModelChannel.DefaultVideoModel, setting.ModelChannel.AvailableModels, channels, model.ModelCapabilityVideo, isVideoModelName)
@@ -444,6 +462,10 @@ func SelectModelChannel(modelName string) (model.ModelChannel, error) {
 }
 
 func SelectModelChannelForModel(modelName string, channelID string, publicOnly ...bool) (model.ModelChannel, error) {
+	return SelectModelChannelForUser(context.Background(), modelName, channelID, publicOnly...)
+}
+
+func SelectModelChannelForUser(ctx context.Context, modelName string, channelID string, publicOnly ...bool) (model.ModelChannel, error) {
 	settings, err := repository.GetSettings()
 	if err != nil {
 		return model.ModelChannel{}, err
@@ -451,18 +473,8 @@ func SelectModelChannelForModel(modelName string, channelID string, publicOnly .
 	settings = normalizeSettings(settings)
 	privateChannels := normalizePrivateSetting(settings.Private).Channels
 	if len(publicOnly) == 0 || publicOnly[0] {
-		allowed := settings.Public.ModelChannel.AvailableModels
-		if len(allowed) > 0 {
-			found := false
-			for _, allowedModel := range allowed {
-				if allowedModel == modelName {
-					found = true
-					break
-				}
-			}
-			if !found {
-				return model.ModelChannel{}, safeMessageError{message: "模型未开放"}
-			}
+		if err := checkUserGroupModelAccess(ctx, settings, modelName); err != nil {
+			return model.ModelChannel{}, err
 		}
 	}
 	channels := modelChannelsForModel(privateChannels, modelName)

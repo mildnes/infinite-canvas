@@ -3976,9 +3976,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 hasSavedImageMetadata && savedImageMetadata
                     ? {
                         ...effectiveConfig,
-                        model: savedImageMetadata.model || effectiveConfig.imageModel || effectiveConfig.model,
+                        model: effectiveConfig.channelMode === "remote" ? resolveModelForCapability(effectiveConfig, savedImageMetadata.model, "image") : savedImageMetadata.model || effectiveConfig.imageModel || effectiveConfig.model,
                         imageChannelId: savedImageMetadata.channelId || effectiveConfig.imageChannelId,
-                        imageModel: savedImageMetadata.model || effectiveConfig.imageModel,
+                        imageModel: effectiveConfig.channelMode === "remote" ? resolveModelForCapability(effectiveConfig, savedImageMetadata.model, "image") : savedImageMetadata.model || effectiveConfig.imageModel,
                         imageWorkflowRef: retryWorkflowRef,
                         activeChannelId: savedImageMetadata.channelId || effectiveConfig.imageChannelId,
                         quality: savedImageMetadata.quality || effectiveConfig.quality,
@@ -6014,10 +6014,11 @@ function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefine
     const textChannelId = mode === "text" ? channelId || config.textChannelId : config.textChannelId;
     const audioChannelId = mode === "audio" ? channelId || config.audioChannelId : config.audioChannelId;
     const activeChannelId = mode === "image" ? imageChannelId : mode === "video" ? videoChannelId : mode === "text" ? textChannelId : mode === "audio" ? audioChannelId || config.activeChannelId : config.activeChannelId;
+    const requestModel = config.channelMode === "remote" || mode === "text" ? resolveModelForCapability(config, node?.metadata?.model, mode) : node?.metadata?.model || defaultModel || (mode === "audio" ? defaultConfig.audioModel : config.model || defaultConfig.model);
     return {
         ...config,
-        model: mode === "text" ? resolveModelForCapability(config, node?.metadata?.model, "text") : node?.metadata?.model || defaultModel || (mode === "audio" ? defaultConfig.audioModel : config.model || defaultConfig.model),
-        imageModel: mode === "image" ? node?.metadata?.model || defaultModel || config.imageModel : config.imageModel,
+        model: requestModel,
+        imageModel: mode === "image" ? requestModel : config.imageModel,
         activeChannelId,
         imageChannelId,
         videoChannelId,

@@ -174,8 +174,8 @@ export default function ImagePage() {
     const logsRef = useRef<GenerationLog[]>([]);
     const effectiveConfigRef = useRef(effectiveConfig);
 
-    const model = effectiveConfig.imageModel || effectiveConfig.model;
-    const canGenerate = Boolean(prompt.trim() || config.imageWorkflowRef);
+    const model = effectiveConfig.channelMode === "remote" ? effectiveConfig.imageModel : effectiveConfig.imageModel || effectiveConfig.model;
+    const canGenerate = Boolean(prompt.trim() || config.imageWorkflowRef) && (effectiveConfig.channelMode !== "remote" || Boolean(config.imageWorkflowRef) || Boolean(model));
     const generationCount = Math.max(1, Math.min(10, Number(config.count) || 1));
     const pendingCount = results.filter((item) => item.status === "pending").length;
     const pendingLogCount = logs.filter((log) => log.status === "生成中" && log.task && !log.images.length).length;

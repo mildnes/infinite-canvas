@@ -24,13 +24,13 @@ export function resolveCanvasAgentImageSelection(config: AiConfig, agentConfig?:
         ? requestedModel
         : defaultIsAvailable
             ? config.imageModel
-            : firstImageModel || config.imageModel;
+            : firstImageModel || (config.channelMode === "remote" ? "" : config.imageModel);
     const modelChannels = channels.filter((channel) => supportsImage(channel, imageModel));
     const requestedChannel = modelChannels.find((channel) => channel.id === agentConfig?.imageChannelId);
     const defaultChannel = modelChannels.find((channel) => channel.id === config.imageChannelId);
     return {
         imageModel,
-        imageChannelId: requestedChannel?.id || defaultChannel?.id || modelChannels[0]?.id || config.imageChannelId,
+        imageChannelId: requestedChannel?.id || defaultChannel?.id || modelChannels[0]?.id || (config.channelMode === "remote" ? "" : config.imageChannelId),
         imageOutputFormat: agentConfig ? agentConfig.imageOutputFormat || "auto" : config.imageOutputFormat || "auto",
     };
 }
@@ -38,8 +38,8 @@ export function resolveCanvasAgentImageSelection(config: AiConfig, agentConfig?:
 export function applyCanvasAgentImageSelection(config: AiConfig, selection: Pick<CanvasAgentConfig, "imageModel" | "imageChannelId" | "imageOutputFormat">): AiConfig {
     return {
         ...config,
-        imageModel: selection.imageModel || config.imageModel,
-        imageChannelId: selection.imageChannelId || config.imageChannelId,
+        imageModel: config.channelMode === "remote" ? selection.imageModel || "" : selection.imageModel || config.imageModel,
+        imageChannelId: config.channelMode === "remote" ? selection.imageChannelId || "" : selection.imageChannelId || config.imageChannelId,
         imageOutputFormat: selection.imageOutputFormat || config.imageOutputFormat || "auto",
     };
 }

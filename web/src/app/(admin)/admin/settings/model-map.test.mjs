@@ -6,6 +6,7 @@ import ts from "typescript";
 import { appendUpstreamModelRows, deriveModelMapping } from "./model-mapping-editor.tsx";
 import { normalizeImageOutputCapabilities } from "./image-output-capabilities.ts";
 import { normalizeImageQualityCapabilities } from "./image-quality-capabilities.ts";
+import { availableUserGroupModels, normalizeUserGroups } from "@/lib/user-groups";
 
 const source = readFileSync(process.env.MODEL_MAPPING_PAGE_SOURCE || new URL("./page.tsx", import.meta.url), "utf8");
 const ast = ts.createSourceFile("page.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -17,6 +18,8 @@ const context = {
     isWorkflowProtocol: () => false,
     modelCapabilityOptions: [{ value: "image" }, { value: "video" }, { value: "text" }, { value: "audio" }],
     deriveModelMapping,
+    normalizeUserGroups,
+    availableUserGroupModels,
     normalizeSettings: value => value,
     collectChannelWorkflows: () => [],
 };

@@ -28,11 +28,11 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     const accountSessionRef = useRef({ token, userId: user?.id || "" });
 
     useEffect(() => {
-        void loadPublicSettings();
-    }, [loadPublicSettings]);
+        void loadPublicSettings().catch(() => {});
+    }, [loadPublicSettings, token, user?.id]);
 
     useEffect(() => {
-        const refresh = () => void loadPublicSettings();
+        const refresh = () => void loadPublicSettings().catch(() => {});
         const handleStorage = (event: StorageEvent) => {
             if (event.key === PUBLIC_SETTINGS_REVISION_KEY) refresh();
         };

@@ -61,6 +61,9 @@ export function ModelPicker({ config, value, channelId, capability, onChange, wo
         return channelOptions.find((item) => item.model === value && item.channelId === channelId) || channelOptions.find((item) => item.model === value);
     }, [channelId, channelOptions, value, workflowEnabled, workflowRef]);
     const options = channelOptions;
+    const emptyRemoteLabel = config.channelMode === "remote" && !options.length
+        ? publicSettings === null ? "正在加载系统模型" : "当前分组没有可用的" + (capability === "image" ? "图片" : capability === "video" ? "视频" : capability === "audio" ? "音频" : capability === "text" ? "文本" : "") + "模型"
+        : "";
     const current = workflowRef && workflowEnabled
         ? (currentOption && isWorkflowOption(currentOption) ? currentOption.label : "")
         : currentOption
@@ -120,7 +123,7 @@ export function ModelPicker({ config, value, channelId, capability, onChange, wo
                 title={workflowRef && workflowEnabled && !currentOption ? "工作流已停用、未公开或删除，请重新选择" : current || placeholder}
             >
                 <ModelIcon model={current} />
-                <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{workflowRef && workflowEnabled ? current || "工作流已停用、未公开或删除，请重新选择" : modelLabel(current, currentOption) || placeholder}</span>
+                <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{workflowRef && workflowEnabled ? current || "工作流已停用、未公开或删除，请重新选择" : modelLabel(current, currentOption) || emptyRemoteLabel || placeholder}</span>
             </SelectTrigger>
             <SelectContent
                 data-canvas-no-zoom

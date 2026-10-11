@@ -17,7 +17,7 @@ import { createCanvasImageTask, requestEdit, requestGeneration, requestImageQues
 import { saveImageGenerationLogs } from "@/services/api/generation-logs";
 import { deleteUserWorkflow, draftUserWorkflow, fetchUserConfig, fetchUserWorkflows, saveUserWorkflow, type CreativeWorkflowRecord } from "@/services/api/user-config";
 import { deleteStoredImages, imageToDataUrl, uploadImage } from "@/services/image-storage";
-import { channelProtocolForConfig, defaultConfig, localChannelForActiveModel, normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { channelProtocolForConfig, defaultConfig, localChannelForActiveModel, normalizeLocalChannels, resolveModelForCapability, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
@@ -267,7 +267,11 @@ export function CreativeWorkflowWorkspace({
     const renderedPrompt = useMemo(() => (runningWorkflow ? renderWorkflowPrompt(runningWorkflow, inputValues) : ""), [inputValues, runningWorkflow]);
     const runningTaskCount = workflowTasks.filter((task) => task.status === "running").length;
     const activeSeriesDrafts = seriesDrafts.filter((item) => item.status !== "success");
-    const agentModel = agentTextModel || effectiveConfig.textModel || "";
+    const agentModel = effectiveConfig.channelMode === "remote" ? resolveModelForCapability(effectiveConfig, agentTextModel, "text") : agentTextModel || effectiveConfig.textModel || "";
+    const runnerImageModel = runningWorkflow ? resolveWorkflowRuntime(runningWorkflow, effectiveConfig).model : "";
+    const runnerTextModel = resolveModelForCapability(effectiveConfig, runningWorkflow?.seriesConfig.promptModel, "text");
+    const remoteImageUnavailable = effectiveConfig.channelMode === "remote" && !runnerImageModel;
+    const remoteTextUnavailable = effectiveConfig.channelMode === "remote" && !runnerTextModel;
     const agentChannelId = agentTextChannelId || effectiveConfig.textChannelId;
     const agentModelInfo = useMemo(() => describeModelSelection(effectiveConfig, agentModel, agentChannelId), [agentChannelId, agentModel, effectiveConfig]);
 
@@ -541,7 +545,7 @@ export function CreativeWorkflowWorkspace({
         }
         setAgentLoading(true);
         try {
-            const textModel = agentTextModel || effectiveConfig.textModel || effectiveConfig.model;
+            const textModel = agentModel;
             const textChannelId = agentTextChannelId || effectiveConfig.textChannelId;
             const textConfig = { ...effectiveConfig, model: textModel, textModel, textChannelId, activeChannelId: textChannelId };
             if (!isAiConfigReady(textConfig, textModel)) {
@@ -592,7 +596,7 @@ export function CreativeWorkflowWorkspace({
 
     const generateSeriesPromptDrafts = async () => {
         if (!runningWorkflow) return;
-        const promptModel = runningWorkflow.seriesConfig.promptModel || effectiveConfig.textModel || effectiveConfig.model;
+        const promptModel = effectiveConfig.channelMode === "remote" ? resolveModelForCapability(effectiveConfig, runningWorkflow.seriesConfig.promptModel, "text") : runningWorkflow.seriesConfig.promptModel || effectiveConfig.textModel || effectiveConfig.model;
         const promptChannelId = runningWorkflow.seriesConfig.promptChannelId || effectiveConfig.textChannelId;
         const textConfig = { ...effectiveConfig, model: promptModel, textModel: promptModel, textChannelId: promptChannelId, activeChannelId: promptChannelId, systemPrompt: effectiveConfig.systemPrompts.workflow || effectiveConfig.systemPrompt };
         if (!isAiConfigReady(textConfig, promptModel)) {
@@ -672,6 +676,10 @@ export function CreativeWorkflowWorkspace({
         const runtime = resolveWorkflowRuntime(workflow, effectiveConfig);
         const model = runtime.model;
         const runConfig = buildRunConfig(effectiveConfig, workflow.config, runtime);
+        if (runConfig.channelMode === "remote" && !model) {
+            message.warning("当前分组没有可用的图片模型");
+            return;
+        }
         if (!isAiConfigReady(runConfig, model)) {
             message.warning("请先完成 API 配置");
             openConfigDialog(true);
@@ -1142,7 +1150,7 @@ export function CreativeWorkflowWorkspace({
                                 </div>
                             ) : null}
                         </div>
-                        <Button block type="primary" loading={agentLoading} icon={<Sparkles className="size-4" />} onClick={() => void runWorkflowAgent()}>
+                        <Button block type="primary" disabled={effectiveConfig.channelMode === "remote" && !agentModel} loading={agentLoading} icon={<Sparkles className="size-4" />} onClick={() => void runWorkflowAgent()}>
                             生成工作流草稿
                         </Button>
                     </div>
@@ -1237,7 +1245,8 @@ export function CreativeWorkflowWorkspace({
                                     <div className="mt-3 rounded-md border border-dashed border-stone-300 py-5 text-center text-xs text-stone-500 dark:border-stone-800">未添加参考图</div>
                                 )}
                             </div>
-                            <Button block type="primary" size="large" loading={seriesDraftLoading} icon={runningWorkflow.mode === "multi_image_series" ? <Layers3 className="size-4" /> : <Play className="size-4" />} onClick={() => void runWorkflow()}>
+                            {(runningWorkflow.mode === "multi_image_series" ? remoteTextUnavailable : remoteImageUnavailable) ? <Typography.Text type="secondary">当前分组没有可用的{runningWorkflow.mode === "multi_image_series" ? "文本" : "图片"}模型</Typography.Text> : null}
+                            <Button block type="primary" size="large" disabled={runningWorkflow.mode === "multi_image_series" ? remoteTextUnavailable : remoteImageUnavailable} loading={seriesDraftLoading} icon={runningWorkflow.mode === "multi_image_series" ? <Layers3 className="size-4" /> : <Play className="size-4" />} onClick={() => void runWorkflow()}>
                                 {runningWorkflow.mode === "multi_image_series" ? "生成提示词" : "启动任务"}
                             </Button>
                         </div>
@@ -1266,10 +1275,10 @@ export function CreativeWorkflowWorkspace({
                                             <Tag className="m-0">{seriesDrafts.length} 条</Tag>
                                         </div>
                                         <div className="flex gap-2">
-                                            <Button size="small" loading={seriesDraftLoading} onClick={() => void generateSeriesPromptDrafts()}>
+                                            <Button size="small" disabled={remoteTextUnavailable} loading={seriesDraftLoading} onClick={() => void generateSeriesPromptDrafts()}>
                                                 重新生成
                                             </Button>
-                                            <Button size="small" type="primary" disabled={!activeSeriesDrafts.length} onClick={() => void runAllSeriesDrafts()}>
+                                            <Button size="small" type="primary" disabled={remoteImageUnavailable || !activeSeriesDrafts.length} onClick={() => void runAllSeriesDrafts()}>
                                                 全部生成
                                             </Button>
                                         </div>
@@ -1288,6 +1297,7 @@ export function CreativeWorkflowWorkspace({
                                                         index={index}
                                                         isFirst={index === 0}
                                                         isLast={index === seriesDrafts.length - 1}
+                                                        generationDisabled={remoteImageUnavailable}
                                                         onChange={(patch) => updateSeriesDraft(draft.id, patch)}
                                                         onGenerate={() => void runSeriesDraft(draft, index)}
                                                         onCopy={() => void navigator.clipboard.writeText(draft.prompt)}
@@ -1432,6 +1442,7 @@ function SeriesPromptDraftCard({
     index,
     isFirst,
     isLast,
+    generationDisabled,
     onChange,
     onGenerate,
     onCopy,
@@ -1443,6 +1454,7 @@ function SeriesPromptDraftCard({
     index: number;
     isFirst: boolean;
     isLast: boolean;
+    generationDisabled: boolean;
     onChange: (patch: Partial<SeriesPromptDraft>) => void;
     onGenerate: () => void;
     onCopy: () => void;
@@ -1466,7 +1478,7 @@ function SeriesPromptDraftCard({
                     <Button size="small" disabled={isFirst} icon={<ArrowUp className="size-3.5" />} onClick={onMoveUp} />
                     <Button size="small" disabled={isLast} icon={<ArrowDown className="size-3.5" />} onClick={onMoveDown} />
                     <Button size="small" danger icon={<Trash2 className="size-3.5" />} onClick={onDelete} />
-                    <Button size="small" type="primary" loading={draft.status === "running"} disabled={draft.status === "success"} icon={<Play className="size-3.5" />} onClick={onGenerate}>
+                    <Button size="small" type="primary" loading={draft.status === "running"} disabled={generationDisabled || draft.status === "success"} icon={<Play className="size-3.5" />} onClick={onGenerate}>
                         生成
                     </Button>
                 </div>
@@ -1776,8 +1788,8 @@ function createStarterSeriesWorkflow(config: AiConfig): CreativeWorkflow {
 
 function createWorkflowConfig(config: AiConfig): WorkflowGenerationConfig {
     return {
-        model: config.model || defaultConfig.model,
-        imageModel: config.imageModel || config.model || defaultConfig.imageModel,
+        model: config.channelMode === "remote" ? resolveModelForCapability(config, config.imageModel, "image") : config.model || defaultConfig.model,
+        imageModel: config.channelMode === "remote" ? resolveModelForCapability(config, config.imageModel, "image") : config.imageModel || config.model || defaultConfig.imageModel,
         imageChannelId: config.imageChannelId || "",
         imageOutputFormat: config.imageOutputFormat || "auto",
         quality: config.quality || defaultConfig.quality,
@@ -1798,7 +1810,7 @@ function createWorkflowConfig(config: AiConfig): WorkflowGenerationConfig {
 function createWorkflowSeriesConfig(config: AiConfig): WorkflowSeriesConfig {
     return {
         targetCount: "4",
-        promptModel: config.textModel || config.model || defaultConfig.textModel,
+        promptModel: config.channelMode === "remote" ? resolveModelForCapability(config, config.textModel, "text") : config.textModel || config.model || defaultConfig.textModel,
         promptChannelId: config.textChannelId || "",
         promptInstruction: "围绕同一主题拆分成封面图、核心信息图、场景图和总结图；每张图需要画面重点不同但视觉风格一致。",
         reviewRequired: true,
@@ -2005,12 +2017,13 @@ function recordToWorkflow(record: CreativeWorkflowRecord<CreativeWorkflow>): Cre
 
 function resolveWorkflowRuntime(workflow: CreativeWorkflow, baseConfig: AiConfig) {
     const workflowModel = workflow.config.imageModel || workflow.config.model;
+    if (baseConfig.channelMode === "remote") {
+        const model = resolveModelForCapability(baseConfig, workflowModel, "image");
+        return { model, apiMode: workflow.config.apiMode || baseConfig.apiMode, channelId: resolveWorkflowImageChannelId(baseConfig, model, workflow.config.imageChannelId, baseConfig.imageChannelId, baseConfig.activeChannelId) };
+    }
     const fallbackModel = baseConfig.imageModel || baseConfig.model;
     const fallbackChannelId = resolveWorkflowImageChannelId(baseConfig, fallbackModel, baseConfig.imageChannelId, baseConfig.activeChannelId);
     if (!workflowModel) return { model: fallbackModel, apiMode: baseConfig.apiMode, channelId: fallbackChannelId };
-    if (baseConfig.channelMode === "remote" && workflowModel !== fallbackModel && (!baseConfig.models.length || !baseConfig.models.includes(workflowModel))) {
-        return { model: fallbackModel, apiMode: baseConfig.apiMode, channelId: fallbackChannelId };
-    }
     return { model: workflowModel, apiMode: workflow.config.apiMode || baseConfig.apiMode, channelId: resolveWorkflowImageChannelId(baseConfig, workflowModel, workflow.config.imageChannelId, baseConfig.imageChannelId, baseConfig.activeChannelId) };
 }
 

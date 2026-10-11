@@ -20,6 +20,8 @@ import { modelMatchesCapability, notifyPublicSettingsUpdated } from "@/stores/us
 import { useUserStore } from "@/stores/use-user-store";
 import { normalizeImageQualityCapabilities } from "./image-quality-capabilities";
 import { normalizeImageOutputCapabilities } from "./image-output-capabilities";
+import { availableUserGroupModels, normalizeUserGroups } from "@/lib/user-groups";
+import { UserGroupEditor } from "./user-group-editor";
 import { appendUpstreamModelRows, buildModelMappingRows, deriveModelMapping, emptyModelMappingRow, ModelMappingEditor, type ModelMappingRow } from "./model-mapping-editor";
 
 const CodeMirror = dynamic(() => import("@uiw/react-codemirror"), { ssr: false });
@@ -76,7 +78,7 @@ export default function AdminSettingsPage() {
     const token = useUserStore((state) => state.token);
     const { message } = App.useApp();
     const [form] = Form.useForm<AdminSettings>();
-    const [activeTab, setActiveTab] = useState<SettingsTabKey>("public");
+    const [activeTab, setActiveTab] = useState<SettingsTabKey | "groups">("public");
     const [editorMode, setEditorMode] = useState<Record<SettingsTabKey, EditorMode>>({ public: "visual", private: "visual" });
     const [jsonText, setJsonText] = useState<Record<SettingsTabKey, string>>({ public: "", private: "" });
     const [channels, setChannels] = useState<AdminModelChannel[]>([]);
@@ -100,10 +102,12 @@ export default function AdminSettingsPage() {
     const [knownModels, setKnownModels] = useState<string[]>([]);
     // Snapshot all saved request names, including same-name passthrough rows.
     const savedRequestModelNamesRef = useRef<string[]>([]);
+    const savedUserGroupsRef = useRef<NonNullable<AdminSettings["public"]["modelChannel"]["userGroups"]>>([]);
     const [modelMappingRows, setModelMappingRows] = useState<ModelMappingRow[]>([]);
     const [channelUpstreamModels, setChannelUpstreamModels] = useState<string[]>([]);
     const committedModelRowsRef = useRef<ModelMappingRow[]>([]);
-    const publicModels = Form.useWatch(["public", "modelChannel", "availableModels"], form) || [];
+    const publicModels = Form.useWatch(["public", "modelChannel", "availableModels"], { form, preserve: true }) || [];
+    const userGroups = Form.useWatch(["public", "modelChannel", "userGroups"], { form, preserve: true }) || [];
     const publicWorkflows = Form.useWatch(["public", "modelChannel", "availableWorkflows"], form) || [];
     const storageProviders = Form.useWatch(["private", "storage", "providers"], form) || [];
     const agentMCPServers = Form.useWatch(["private", "agent", "mcpServers"], form) || [];
@@ -129,8 +133,9 @@ export default function AdminSettingsPage() {
             return Array.isArray(capabilities) && !capabilities.includes("image");
         });
     }, [channels, defaultImageModel]);
-    const activeMode = editorMode[activeTab];
-    const activeJsonText = jsonText[activeTab];
+    const settingsTab = activeTab === "groups" ? "public" : activeTab;
+    const activeMode = editorMode[settingsTab];
+    const activeJsonText = jsonText[settingsTab];
     const jsonError = activeMode === "json" ? getJsonError(activeJsonText) : "";
 
     const loadSettings = async () => {
@@ -138,6 +143,8 @@ export default function AdminSettingsPage() {
         setIsLoading(true);
         try {
             const data = normalizeSettings(await fetchAdminSettings(token));
+            data.public.modelChannel.userGroups = normalizeUserGroups(data.public.modelChannel.userGroups, availableUserGroupModels(data));
+            savedUserGroupsRef.current = data.public.modelChannel.userGroups;
             form.setFieldsValue(data);
             setChannels(data.private.channels);
             savedRequestModelNamesRef.current = collectChannelModels(data.private.channels);
@@ -158,13 +165,18 @@ export default function AdminSettingsPage() {
         void loadSettings();
     }, [token]);
 
-    const changeTab = (nextTab: SettingsTabKey) => {
+    const changeTab = (nextTab: SettingsTabKey | "groups") => {
+        if (nextTab === "groups" && editorMode.public === "json") {
+            const parsed = parseTabJson("public", jsonText.public);
+            if (!parsed) { message.error("请先修正公开配置 JSON"); return; }
+            form.setFieldsValue({ public: parsed });
+        }
         setActiveTab(nextTab);
     };
 
     const saveSettings = async () => {
         if (!token) return;
-        const values = await collectSettings(form, editorMode, jsonText, message, savedRequestModelNamesRef.current);
+        const values = await collectSettings(form, editorMode, jsonText, message, savedRequestModelNamesRef.current, savedUserGroupsRef.current);
         if (!values) {
             return;
         }
@@ -174,6 +186,7 @@ export default function AdminSettingsPage() {
             clearImageStorageConfigCache();
             clearMediaStorageConfigCache();
             const merged = mergeChannelApiKeys(values.private.channels, saved);
+            savedUserGroupsRef.current = merged.public.modelChannel.userGroups || [];
             form.setFieldsValue(merged);
             setChannels(merged.private.channels);
             savedRequestModelNamesRef.current = collectChannelModels(merged.private.channels);
@@ -411,10 +424,12 @@ export default function AdminSettingsPage() {
             public: { ...values.public, modelChannel: { ...values.public.modelChannel, availableModels: resolveAvailableModels(values.public.modelChannel.availableModels, nextChannels, newlyAddedRequestNames), availableWorkflows: filterModels(values.public.modelChannel.availableWorkflows, nextChannelWorkflows.map((item) => item.value)) } },
             private: { ...values.private, channels: nextChannels },
         });
+        nextSettings.public.modelChannel.userGroups = normalizeUserGroups(nextSettings.public.modelChannel.userGroups, availableUserGroupModels(nextSettings), savedUserGroupsRef.current);
         const saved = normalizeSettings(await saveAdminSettings(token, nextSettings));
         clearImageStorageConfigCache();
         clearMediaStorageConfigCache();
         const merged = mergeChannelApiKeys(nextChannels, saved);
+        savedUserGroupsRef.current = merged.public.modelChannel.userGroups || [];
         setChannels(merged.private.channels);
         savedRequestModelNamesRef.current = collectChannelModels(merged.private.channels);
         setModelCosts(merged.public.modelChannel.modelCosts);
@@ -473,10 +488,11 @@ export default function AdminSettingsPage() {
                     <Flex justify="space-between" align="center" gap={16} wrap>
                         <Tabs
                             activeKey={activeTab}
-                            onChange={(key) => changeTab(key as SettingsTabKey)}
+                            onChange={(key) => changeTab(key as SettingsTabKey | "groups")}
                             items={[
                                 { key: "public", label: "公开配置（对外暴露）" },
                                 { key: "private", label: "私有配置（不会对外暴露）" },
+                                { key: "groups", label: "用户分组" },
                             ]}
                         />
                         <Space>
@@ -491,10 +507,10 @@ export default function AdminSettingsPage() {
                 </Card>
 
                 <Card variant="borderless">
-                    <Flex justify="space-between" align="center" gap={16} wrap style={{ marginBottom: 16 }}>
+                    {activeTab !== "groups" ? <Flex justify="space-between" align="center" gap={16} wrap style={{ marginBottom: 16 }}>
                         <Segmented
                             value={activeMode}
-                            onChange={(value) => toggleMode(activeTab, value as EditorMode)}
+                            onChange={(value) => toggleMode(settingsTab, value as EditorMode)}
                             options={[
                                 { label: "可视化编辑", value: "visual" },
                                 { label: "手动编辑 JSON", value: "json" },
@@ -509,16 +525,22 @@ export default function AdminSettingsPage() {
                                         JSON 格式正确
                                     </Tag>
                                 )}
-                                <Button icon={<FormatPainterOutlined />} onClick={() => formatJson(activeTab)}>
+                                <Button icon={<FormatPainterOutlined />} onClick={() => formatJson(settingsTab)}>
                                     格式化
                                 </Button>
                             </Space>
                         ) : (
                             <Typography.Text type="secondary">{activeTab === "public" ? "这些配置会暴露给前端读取" : "这些配置只会在后台保存"}</Typography.Text>
                         )}
-                    </Flex>
+                    </Flex> : null}
 
-                    {activeTab === "public" ? (
+                    {activeTab === "groups" ? <UserGroupEditor groups={userGroups} models={publicModels} onChange={(groups) => {
+                        form.setFieldValue(["public", "modelChannel", "userGroups"], groups);
+                        if (editorMode.public === "json") {
+                            const parsed = parseTabJson("public", jsonText.public);
+                            if (parsed) setJsonText((current) => ({ ...current, public: JSON.stringify({ ...parsed, modelChannel: { ...parsed.modelChannel, userGroups: groups } }, null, 2) }));
+                        }
+                    }} /> : activeTab === "public" ? (
                         activeMode === "visual" ? (
                             <Form form={form} layout="vertical" initialValues={emptySettings} requiredMark={false}>
                                 <Row gutter={16}>
@@ -1748,7 +1770,7 @@ function parseTabJson(tab: SettingsTabKey, value: string): AdminSettings[Setting
     }
 }
 
-async function collectSettings(form: any, editorMode: Record<SettingsTabKey, EditorMode>, jsonText: Record<SettingsTabKey, string>, message: { error: (value: string) => void }, savedRequestNames: string[] = []) {
+async function collectSettings(form: any, editorMode: Record<SettingsTabKey, EditorMode>, jsonText: Record<SettingsTabKey, string>, message: { error: (value: string) => void }, savedRequestNames: string[] = [], savedGroups?: AdminSettings["public"]["modelChannel"]["userGroups"]) {
     const values = normalizeSettings(form.getFieldsValue(true) as AdminSettings);
     if (editorMode.public === "json") {
         const publicSetting = parseTabJson("public", jsonText.public);
@@ -1768,6 +1790,12 @@ async function collectSettings(form: any, editorMode: Record<SettingsTabKey, Edi
     }
     const newlyAddedRequestNames = collectChannelModels(values.private.channels).filter((name) => !savedRequestNames.includes(name));
     values.public.modelChannel.availableModels = resolveAvailableModels(values.public.modelChannel.availableModels, values.private.channels, newlyAddedRequestNames);
+    try {
+        values.public.modelChannel.userGroups = normalizeUserGroups(values.public.modelChannel.userGroups, availableUserGroupModels(values), savedGroups);
+    } catch (error) {
+        message.error(error instanceof Error ? error.message : "用户分组配置错误");
+        return null;
+    }
     values.public.modelChannel.availableWorkflows = filterModels(values.public.modelChannel.availableWorkflows, collectChannelWorkflows(values.private.channels).map((item) => item.value));
     values.public.modelChannel.systemPrompt = values.public.modelChannel.systemPrompts.image || values.public.modelChannel.systemPrompts.text || "";
     return normalizeSettings(values);

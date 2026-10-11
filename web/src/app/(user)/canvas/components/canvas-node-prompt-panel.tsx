@@ -76,7 +76,8 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
         onPromptChange(node.id, value);
     };
 
-    const canSubmit = Boolean(prompt.trim()) || (mode !== "text" && Boolean(node.metadata?.workflowRef)) || (isPanorama && (hasImageContent || mentionReferences.length > 0));
+    const hasModel = config.channelMode !== "remote" || Boolean(config.model) || Boolean(workflowRef);
+    const canSubmit = hasModel && (Boolean(prompt.trim()) || (mode !== "text" && Boolean(node.metadata?.workflowRef)) || (isPanorama && (hasImageContent || mentionReferences.length > 0)));
 
     const submit = () => {
         const text = prompt.trim();
@@ -95,6 +96,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
             onWheel={(event) => event.stopPropagation()}
         >
             <CanvasNodeReferenceBar nodeId={node.id} connectedNodes={connectedNodes} onDisconnect={onDisconnectReference} onStartSelection={onStartReferenceSelection} />
+            {!hasModel ? <div className="mb-2 text-xs" style={{ color: theme.node.muted }}>当前分组没有可用的{mode === "image" ? "图片" : mode === "video" ? "视频" : mode === "audio" ? "音频" : "文本"}模型，或系统模型设置尚未加载</div> : null}
             <CanvasPromptChipInput
                 value={prompt}
                 references={mentionReferences}
@@ -186,10 +188,13 @@ function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: Can
     const textChannelId = mode === "text" ? channelId || globalConfig.textChannelId : globalConfig.textChannelId;
     const audioChannelId = mode === "audio" ? channelId || globalConfig.audioChannelId : globalConfig.audioChannelId;
     const activeChannelId = mode === "image" ? imageChannelId : mode === "video" ? videoChannelId : mode === "text" ? textChannelId : mode === "audio" ? audioChannelId || globalConfig.activeChannelId : globalConfig.activeChannelId;
+    const requestModel = globalConfig.channelMode === "remote" || mode === "text"
+        ? resolveModelForCapability(globalConfig, node.metadata?.model, mode)
+        : node.metadata?.model || defaultModel || (mode === "audio" ? defaultConfig.audioModel : globalConfig.model || defaultConfig.model);
     return {
         ...globalConfig,
-        model: mode === "text" ? resolveModelForCapability(globalConfig, node.metadata?.model, "text") : node.metadata?.model || defaultModel || (mode === "audio" ? defaultConfig.audioModel : globalConfig.model || defaultConfig.model),
-        imageModel: mode === "image" ? node.metadata?.model || defaultModel || globalConfig.imageModel : globalConfig.imageModel,
+        model: requestModel,
+        imageModel: mode === "image" ? requestModel : globalConfig.imageModel,
         imageWorkflowRef: mode === "image" ? node.metadata?.workflowRef : globalConfig.imageWorkflowRef,
         activeChannelId,
         imageChannelId,
