@@ -9,7 +9,7 @@ import (
 
 const defaultUserGroupID = "default"
 
-func normalizeUserGroups(groups []model.UserGroupSetting, available []string) []model.UserGroupSetting {
+func normalizeUserGroups(groups []model.UserGroupSetting, available []string, channels []model.ModelChannel) []model.UserGroupSetting {
 	if len(groups) == 0 {
 		return []model.UserGroupSetting{{ID: defaultUserGroupID, Name: "默认用户", IsDefault: true, Unrestricted: true, Models: []string{}}}
 	}
@@ -25,8 +25,10 @@ func normalizeUserGroups(groups []model.UserGroupSetting, available []string) []
 		}
 		group.Remark = strings.TrimSpace(group.Remark)
 		group.Models = filterEnabledModels(group.Models, available)
+		group.Scopes = normalizeUserGroupScopes(group.Scopes, available, channels)
 		if group.Unrestricted {
 			group.Models = []string{}
+			group.Scopes = nil
 		}
 		result = append(result, group)
 	}
@@ -34,7 +36,7 @@ func normalizeUserGroups(groups []model.UserGroupSetting, available []string) []
 }
 
 // Validate raw input before normalization can hide a deleted default or an empty intersection.
-func validateUserGroups(groups, saved []model.UserGroupSetting, available []string) error {
+func validateUserGroups(groups, saved []model.UserGroupSetting, available []string, channels []model.ModelChannel) error {
 	if len(groups) == 0 && len(saved) == 0 {
 		return nil
 	}
@@ -57,7 +59,23 @@ func validateUserGroups(groups, saved []model.UserGroupSetting, available []stri
 		} else if id == defaultUserGroupID {
 			return safeMessageError{message: "默认分组身份不可修改"}
 		}
-		if !group.Unrestricted && len(uniqueModelNames(group.Models)) > 0 && len(filterEnabledModels(group.Models, available)) == 0 {
+		if group.Unrestricted {
+			continue
+		}
+		hasScopes := false
+		for _, scope := range group.Scopes {
+			if strings.TrimSpace(scope.ChannelID) == "" || strings.TrimSpace(scope.Model) == "" {
+				continue
+			}
+			hasScopes = true
+			if !userGroupScopeChannelExists(strings.TrimSpace(scope.ChannelID), channels) {
+				return safeMessageError{message: "用户分组配置的渠道不存在"}
+			}
+			if len(filterEnabledModels([]string{scope.Model}, available)) == 0 {
+				return safeMessageError{message: "该分组配置的模型均未开放"}
+			}
+		}
+		if (len(uniqueModelNames(group.Models)) > 0 || hasScopes) && len(filterEnabledModels(group.Models, available)) == 0 && len(normalizeUserGroupScopes(group.Scopes, available, channels)) == 0 {
 			return safeMessageError{message: "该分组配置的模型均未开放"}
 		}
 	}
@@ -65,6 +83,43 @@ func validateUserGroups(groups, saved []model.UserGroupSetting, available []stri
 		return safeMessageError{message: "必须保留唯一的默认分组，不可删除或改名 ID"}
 	}
 	return nil
+}
+
+func userGroupScopeChannelExists(id string, channels []model.ModelChannel) bool {
+	for _, channel := range channels {
+		if channel.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeUserGroupScopes(scopes []model.UserGroupModelScope, available []string, channels []model.ModelChannel) []model.UserGroupModelScope {
+	var result []model.UserGroupModelScope
+	seen := map[model.UserGroupModelScope]bool{}
+	for _, scope := range scopes {
+		scope.ChannelID = strings.TrimSpace(scope.ChannelID)
+		scope.Model = strings.TrimSpace(scope.Model)
+		if scope.ChannelID == "" || scope.Model == "" || seen[scope] || !userGroupScopeChannelExists(scope.ChannelID, channels) || len(filterEnabledModels([]string{scope.Model}, available)) == 0 {
+			continue
+		}
+		seen[scope] = true
+		result = append(result, scope)
+	}
+	return result
+}
+
+// The sole group permission predicate; legacy names deliberately allow every channel.
+func userGroupAllowsModel(group model.UserGroupSetting, channelID, modelName string) bool {
+	if group.Unrestricted || len(filterEnabledModels([]string{modelName}, group.Models)) > 0 {
+		return true
+	}
+	for _, scope := range group.Scopes {
+		if scope.ChannelID == channelID && scope.Model == modelName {
+			return true
+		}
+	}
+	return false
 }
 
 func validateUserGroupID(id string, groups []model.UserGroupSetting) error {
@@ -103,10 +158,15 @@ func checkUserGroupModelAccess(ctx context.Context, settings model.Settings, mod
 		return nil
 	}
 	group := groupForUser(settings.Public.ModelChannel.UserGroups, user)
-	if !group.Unrestricted && len(filterEnabledModels([]string{modelName}, group.Models)) == 0 {
-		return safeMessageError{message: "模型未开放"}
+	if userGroupAllowsModel(group, "", modelName) {
+		return nil
 	}
-	return nil
+	for _, channel := range settings.Private.Channels {
+		if userGroupAllowsModel(group, channel.ID, modelName) {
+			return nil
+		}
+	}
+	return safeMessageError{message: "模型未开放"}
 }
 
 func PublicSettingsForUser(user model.AuthUser) (model.PublicSetting, error) {
@@ -128,15 +188,21 @@ func filterPublicSettingsForUser(settings model.PublicSetting, user model.AuthUs
 	if group.Unrestricted {
 		return settings
 	}
-	available := filterEnabledModels(settings.ModelChannel.AvailableModels, group.Models)
-	settings.ModelChannel.AvailableModels = available
+	visibleModels := []string{}
 	channels := []model.PublicModelChannelInfo{}
 	for _, channel := range settings.ModelChannel.Channels {
-		channel.Models = filterEnabledModels(channel.Models, available)
+		models := []string{}
+		for _, name := range filterEnabledModels(channel.Models, settings.ModelChannel.AvailableModels) {
+			if userGroupAllowsModel(group, channel.ID, name) {
+				models = append(models, name)
+			}
+		}
+		channel.Models = models
 		if len(channel.Models) == 0 {
 			continue
 		}
-		channel.ModelMap = filterGroupModelMap(channel.ModelMap, available)
+		visibleModels = append(visibleModels, models...)
+		channel.ModelMap = filterGroupModelMap(channel.ModelMap, models)
 		capabilities := map[string][]model.ModelCapability{}
 		for _, name := range channel.Models {
 			if values, ok := channel.ModelCapabilities[name]; ok {
@@ -155,9 +221,11 @@ func filterPublicSettingsForUser(settings model.PublicSetting, user model.AuthUs
 		channels = append(channels, channel)
 	}
 	settings.ModelChannel.Channels = channels
+	available := filterEnabledModels(settings.ModelChannel.AvailableModels, uniqueModelNames(visibleModels))
+	settings.ModelChannel.AvailableModels = available
 	// Costs are part of the public projection too: a restricted group must not
 	// learn the names or prices of models outside its whitelist.
-	settings.ModelChannel.ModelCosts = filterGroupModelCosts(settings.ModelChannel.ModelCosts, available)
+	settings.ModelChannel.ModelCosts = filterGroupModelCosts(settings.ModelChannel.ModelCosts, channels)
 	private := make([]model.ModelChannel, 0, len(channels))
 	for _, channel := range channels {
 		private = append(private, model.ModelChannel{Models: channel.Models, ModelMap: channel.ModelMap, ModelCapabilities: channel.ModelCapabilities})
@@ -170,11 +238,14 @@ func filterPublicSettingsForUser(settings model.PublicSetting, user model.AuthUs
 	return settings // Never re-enter PublicSettings/publicChannelInfos: [] means deny all here.
 }
 
-func filterGroupModelCosts(costs []model.ModelCost, models []string) []model.ModelCost {
+func filterGroupModelCosts(costs []model.ModelCost, channels []model.PublicModelChannelInfo) []model.ModelCost {
 	result := make([]model.ModelCost, 0, len(costs))
 	for _, cost := range costs {
-		if len(filterEnabledModels([]string{cost.Model}, models)) > 0 {
-			result = append(result, cost)
+		for _, channel := range channels {
+			if cost.ChannelID == channel.ID && len(filterEnabledModels([]string{cost.Model}, channel.Models)) > 0 {
+				result = append(result, cost)
+				break
+			}
 		}
 	}
 	return result

@@ -2,11 +2,84 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
 
 	"github.com/tigerowo/infinite-canvas/model"
 )
+
+func TestUserGroupChannelScopeProjectionAndLegacyNames(t *testing.T) {
+	var group model.UserGroupSetting
+	if err := json.Unmarshal([]byte("{\"id\":\"vip\",\"models\":[\"text\"],\"scopes\":[{\"channelId\":\"Mark\",\"model\":\"gpt-image-2\"}]}"), &group); err != nil {
+		t.Fatal(err)
+	}
+	channel := func(id string) model.PublicModelChannelInfo {
+		return model.PublicModelChannelInfo{ID: id, Models: []string{"gpt-image-2", "text"}, ModelMap: map[string]string{"gpt-image-2": "upstream-image"}, ModelCapabilities: map[string][]model.ModelCapability{"gpt-image-2": {model.ModelCapabilityImage}, "text": {model.ModelCapabilityText}}, ImageQualityCapabilities: map[string]model.ImageQualityCapability{"gpt-image-2": {Values: []string{"high"}}}, ImageOutputCapabilities: map[string]model.ImageOutputCapability{"gpt-image-2": {Formats: []model.ImageOutputFormat{"png"}}}}
+	}
+	setting := model.PublicSetting{ModelChannel: model.PublicModelChannelSetting{
+		AvailableModels: []string{"gpt-image-2", "text"}, Channels: []model.PublicModelChannelInfo{channel("Mark"), channel("4K")}, DefaultImageModel: "gpt-image-2",
+		ModelCosts: []model.ModelCost{{ChannelID: "Mark", Model: "gpt-image-2", Credits: 2}, {ChannelID: "4K", Model: "gpt-image-2", Credits: 9}, {ChannelID: "Mark", Model: "text", Credits: 1}, {ChannelID: "4K", Model: "text", Credits: 3}},
+		UserGroups: []model.UserGroupSetting{{ID: "default", IsDefault: true, Unrestricted: true}, group},
+	}}
+	result := filterPublicSettingsForUser(setting, model.AuthUser{ID: "u", GroupID: "vip"})
+	if len(result.ModelChannel.Channels) != 2 || !reflect.DeepEqual(result.ModelChannel.Channels[0].Models, []string{"gpt-image-2", "text"}) || !reflect.DeepEqual(result.ModelChannel.Channels[1].Models, []string{"text"}) {
+		t.Fatalf("channel scope projection: %+v", result.ModelChannel.Channels)
+	}
+	if len(result.ModelChannel.ModelCosts) != 3 || len(result.ModelChannel.Channels[1].ModelMap) != 0 || len(result.ModelChannel.Channels[1].ImageQualityCapabilities) != 0 || len(result.ModelChannel.Channels[1].ImageOutputCapabilities) != 0 {
+		t.Fatalf("channel-external declaration/cost leaked: %+v", result.ModelChannel)
+	}
+	if result.ModelChannel.DefaultImageModel != "gpt-image-2" {
+		t.Fatal("allowed image default lost")
+	}
+	group.Models = []string{"gpt-image-2"}
+	setting.ModelChannel.UserGroups[1] = group
+	legacy := filterPublicSettingsForUser(setting, model.AuthUser{ID: "u", GroupID: "vip"})
+	if len(legacy.ModelChannel.Channels) != 2 || len(legacy.ModelChannel.ModelCosts) != 2 {
+		t.Fatal("legacy names no longer allow both channels")
+	}
+	group.Models = nil
+	if err := json.Unmarshal([]byte("{\"scopes\":[{\"channelId\":\"missing\",\"model\":\"gpt-image-2\"}]}"), &group); err != nil {
+		t.Fatal(err)
+	}
+	setting.ModelChannel.UserGroups[1] = group
+	empty := filterPublicSettingsForUser(setting, model.AuthUser{ID: "u", GroupID: "vip"})
+	if len(empty.ModelChannel.AvailableModels) != 0 || len(empty.ModelChannel.Channels) != 0 || len(empty.ModelChannel.ModelCosts) != 0 || empty.ModelChannel.DefaultImageModel != "" {
+		t.Fatal("empty scopes restored all models")
+	}
+}
+
+func TestUserGroupScopesNormalizationAndUniquePermissionPredicate(t *testing.T) {
+	channels := []model.ModelChannel{{ID: "Mark", Enabled: true, Models: []string{"gpt-image-2", "text"}}, {ID: "4K", Models: []string{"gpt-image-2"}}}
+	groups := []model.UserGroupSetting{{ID: "default", IsDefault: true, Unrestricted: true}, {ID: "vip", Models: []string{"text"}, Scopes: []model.UserGroupModelScope{
+		{ChannelID: " Mark ", Model: " gpt-image-2 "}, {ChannelID: "Mark", Model: "gpt-image-2"}, {}, {ChannelID: "missing", Model: "gpt-image-2"}, {ChannelID: "4K", Model: "hidden"},
+	}}}
+	available := []string{"gpt-image-2", "text"}
+	normalized := normalizeUserGroups(groups, available, channels)
+	if !reflect.DeepEqual(normalized[1].Scopes, []model.UserGroupModelScope{{ChannelID: "Mark", Model: "gpt-image-2"}}) {
+		t.Fatalf("scopes: %+v", normalized[1].Scopes)
+	}
+	if !reflect.DeepEqual(normalizeUserGroups(normalized, available, channels), normalized) {
+		t.Fatal("scope normalization is not idempotent")
+	}
+	for _, tc := range []struct {
+		channelID, model string
+		allowed          bool
+	}{{"Mark", "gpt-image-2", true}, {"4K", "gpt-image-2", false}, {"Mark", "text", true}, {"4K", "text", true}, {"", "gpt-image-2", false}} {
+		if userGroupAllowsModel(normalized[1], tc.channelID, tc.model) != tc.allowed {
+			t.Fatalf("permission %+v", tc)
+		}
+	}
+	if err := validateUserGroups(groups, groups[:1], available, channels); err == nil {
+		t.Fatal("unknown scope channel accepted")
+	}
+	normalized[0].Models = []string{"text"}
+	normalized[0].Scopes = normalized[1].Scopes
+	unrestricted := normalizeUserGroups(normalized, available, channels)[0]
+	if len(unrestricted.Models) != 0 || len(unrestricted.Scopes) != 0 || !userGroupAllowsModel(unrestricted, "anything", "anything") {
+		t.Fatal("unrestricted scope semantics changed")
+	}
+}
 
 func TestHidePrivateAPIKeysDoesNotMutateChannelInput(t *testing.T) {
 	channels := []model.ModelChannel{
@@ -91,7 +164,7 @@ func TestUserGroupSettingsEmptyAndStrictDefaults(t *testing.T) {
 }
 
 func TestUserGroupSaveValidationAndLegacyDefault(t *testing.T) {
-	legacy := normalizeUserGroups(nil, []string{"text"})
+	legacy := normalizeUserGroups(nil, []string{"text"}, nil)
 	if len(legacy) != 1 || legacy[0].ID != "default" || !legacy[0].Unrestricted || len(legacy[0].Models) != 0 {
 		t.Fatalf("legacy groups: %+v", legacy)
 	}
@@ -102,11 +175,11 @@ func TestUserGroupSaveValidationAndLegacyDefault(t *testing.T) {
 		{{ID: "default", IsDefault: true}, {ID: "default"}},
 		{{ID: "default", IsDefault: true}, {ID: "vip", Models: []string{"hidden"}}},
 	} {
-		if err := validateUserGroups(groups, saved, []string{"text"}); err == nil {
+		if err := validateUserGroups(groups, saved, []string{"text"}, nil); err == nil {
 			t.Fatalf("invalid groups accepted: %+v", groups)
 		}
 	}
-	if err := validateUserGroups(saved, saved, []string{"text"}); err != nil {
+	if err := validateUserGroups(saved, saved, []string{"text"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := validateUserGroupID("", saved); err != nil {
@@ -178,6 +251,7 @@ func TestUserGroupProjectionFiltersModelCosts(t *testing.T) {
 			{ChannelID: "system", Model: "text", Credits: 1},
 		},
 		Channels: []model.PublicModelChannelInfo{{
+			ID:     "system",
 			Models: []string{"outside", "我的高质图", "text"},
 		}},
 		UserGroups: []model.UserGroupSetting{

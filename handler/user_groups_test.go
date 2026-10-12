@@ -190,3 +190,151 @@ func TestUserGroupsHTTPAndAccountLifecycle(t *testing.T) {
 		t.Fatal("group removal was not atomic")
 	}
 }
+
+func TestUserGroupChannelScopesSelectionAndHTTP(t *testing.T) {
+	if os.Getenv("IC_GROUP_SCOPE_FIXTURE") != "1" {
+		command := exec.Command(os.Args[0], "-test.run=^TestUserGroupChannelScopesSelectionAndHTTP$", "-test.v")
+		command.Env = append(os.Environ(), "IC_GROUP_SCOPE_FIXTURE=1")
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("channel scope fixture: %v\n%s", err, output)
+		}
+		return
+	}
+	root := t.TempDir()
+	config.Cfg.StorageDriver = "sqlite"
+	config.Cfg.DatabaseDSN = filepath.Join(root, "scopes.db")
+	config.Cfg.AILogDir = filepath.Join(root, "logs")
+	db, err := repository.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	allow := true
+	var settings model.Settings
+	if err := json.Unmarshal([]byte("{\"public\":{\"modelChannel\":{\"availableModels\":[\"gpt-image-2\",\"text\"],\"userGroups\":[{\"id\":\"default\",\"isDefault\":true,\"unrestricted\":true},{\"id\":\"vip\",\"models\":[],\"scopes\":[{\"channelId\":\"Mark\",\"model\":\"gpt-image-2\"}]}]}}}"), &settings); err != nil {
+		t.Fatal(err)
+	}
+	settings.Public.ModelChannel.AllowUserRemoteChannel = &allow
+	var upstreamChannels []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamChannels = append(upstreamChannels, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("{\"error\":\"local fixture only\"}"))
+	}))
+	defer upstream.Close()
+	for _, id := range []string{"Mark", "4K"} {
+		settings.Private.Channels = append(settings.Private.Channels, model.ModelChannel{ID: id, Name: id, Enabled: true, BaseURL: upstream.URL, APIKey: id, Models: []string{"gpt-image-2", "text"}, Weight: 1})
+		settings.Public.ModelChannel.ModelCosts = append(settings.Public.ModelChannel.ModelCosts, model.ModelCost{ChannelID: id, Model: "gpt-image-2", Credits: 0})
+	}
+	if _, err := service.SaveSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	user := model.AuthUser{ID: "u", Role: model.UserRoleUser, GroupID: "vip"}
+	ctx := service.WithUser(context.Background(), user)
+	if err := db.Create(&model.User{ID: "u", Username: "u", AffCode: "u", Role: model.UserRoleUser, Status: model.UserStatusActive, GroupID: "vip"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"Mark", ""} {
+		for attempt := 0; attempt < 10; attempt++ {
+			channel, err := service.SelectModelChannelForUser(ctx, "gpt-image-2", id, true)
+			if err != nil || channel.ID != "Mark" {
+				t.Fatalf("scoped selection id=%q: %s %v", id, channel.ID, err)
+			}
+		}
+	}
+	if _, err := service.SelectModelChannelForUser(ctx, "gpt-image-2", "4K", true); err == nil || err.Error() != "模型未开放" {
+		t.Fatalf("disallowed duplicate: %v", err)
+	}
+	if _, err := service.SelectModelChannelForUser(ctx, "gpt-image-2", "missing", true); err == nil || err.Error() != "指定模型渠道不可用" {
+		t.Fatalf("unknown channel: %v", err)
+	}
+	for _, id := range []string{"Mark", "4K"} {
+		if _, err := service.SelectModelChannelForUser(ctx, "gpt-image-2", id, false); err != nil {
+			t.Fatal("task continuation changed", err)
+		}
+		if _, err := service.SelectModelChannelForModel("gpt-image-2", id, true); err != nil {
+			t.Fatal("background call changed", err)
+		}
+	}
+	response := httptest.NewRecorder()
+	handler.Settings(response, httptest.NewRequest(http.MethodGet, "/settings", nil).WithContext(ctx))
+	var result struct {
+		Code int
+		Data model.PublicSetting
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || result.Code != 0 || len(result.Data.ModelChannel.Channels) != 1 || result.Data.ModelChannel.Channels[0].ID != "Mark" || len(result.Data.ModelChannel.ModelCosts) != 1 {
+		t.Fatalf("HTTP projection: %s", response.Body.String())
+	}
+	config.Cfg.JWTSecret = "test-only-channel-scope-secret"
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, service.TokenClaims{UserID: user.ID, Role: user.Role}).SignedString([]byte(config.Cfg.JWTSecret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := gin.New()
+	engine.POST("/api/v1/images/generations", middleware.UserAuth, gin.WrapF(handler.AIImagesGenerations))
+	engine.GET("/api/settings", middleware.OptionalAuth, gin.WrapF(handler.Settings))
+	for _, id := range []string{"Mark", "4K", ""} {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/images/generations", strings.NewReader("{\"model\":\"gpt-image-2\",\"prompt\":\"fixture\"}"))
+		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("Content-Type", "application/json")
+		if id != "" {
+			request.Header.Set("X-Model-Channel-ID", id)
+		}
+		before := len(upstreamChannels)
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, request)
+		if id == "4K" {
+			if len(upstreamChannels) != before || !strings.Contains(response.Body.String(), "模型未开放") {
+				t.Fatalf("4K reached upstream: %s", response.Body)
+			}
+		} else if len(upstreamChannels) != before+1 || upstreamChannels[len(upstreamChannels)-1] != "Mark" {
+			t.Fatalf("request id=%q chose wrong upstream: %v %s", id, upstreamChannels, response.Body)
+		}
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	response = httptest.NewRecorder()
+	engine.ServeHTTP(response, request)
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || result.Code != 0 || len(result.Data.ModelChannel.Channels) != 1 || result.Data.ModelChannel.Channels[0].ID != "Mark" || len(result.Data.ModelChannel.ModelCosts) != 1 || result.Data.ModelChannel.ModelCosts[0].ChannelID != "Mark" {
+		t.Fatalf("authenticated projection: %s", response.Body)
+	}
+	settings.Private.Channels[0].Enabled = false
+	if _, err := repository.SaveSettings(settings, "now"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.SelectModelChannelForUser(ctx, "gpt-image-2", "", true); err == nil || err.Error() != "模型未开放" {
+		t.Fatalf("disabled allowed channel: %v", err)
+	}
+	settings.Private.Channels[0].Enabled = true
+	settings.Public.ModelChannel.UserGroups[1].Models = []string{"gpt-image-2"}
+	if _, err := service.SaveSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"Mark", "4K"} {
+		if _, err := service.SelectModelChannelForUser(ctx, "gpt-image-2", id, true); err != nil {
+			t.Fatal("legacy whitelist changed", err)
+		}
+	}
+	settings.Public.ModelChannel.UserGroups[1].Models = []string{"text"}
+	if _, err := service.SaveSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"Mark", "4K"} {
+		if _, err := service.SelectModelChannelForUser(ctx, "text", id, true); err != nil {
+			t.Fatal("mixed legacy permission lost", err)
+		}
+	}
+	if _, err := service.SelectModelChannelForUser(ctx, "gpt-image-2", "4K", true); err == nil {
+		t.Fatal("mixed scoped permission widened")
+	}
+	for _, scopeJSON := range []string{"[{\"channelId\":\"missing\",\"model\":\"gpt-image-2\"}]", "[{\"channelId\":\"Mark\",\"model\":\"hidden\"}]"} {
+		var invalid model.UserGroupSetting
+		if err := json.Unmarshal([]byte("{\"id\":\"vip\",\"models\":[],\"scopes\":"+scopeJSON+"}"), &invalid); err != nil {
+			t.Fatal(err)
+		}
+		settings.Public.ModelChannel.UserGroups[1] = invalid
+		if _, err := service.SaveSettings(settings); err == nil {
+			t.Fatal("invalid scope saved")
+		}
+	}
+}

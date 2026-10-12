@@ -239,7 +239,7 @@ export type AdminPublicModelChannelSettings = {
     allowUserRemoteChannel: boolean;
 };
 
-export type AdminUserGroup = { id: string; name: string; unrestricted: boolean; models: string[]; isDefault: boolean; remark?: string };
+export type AdminUserGroup = { id: string; name: string; unrestricted: boolean; models: string[]; scopes?: { channelId: string; model: string }[]; isDefault: boolean; remark?: string };
 
 export type AdminModelCost = {
     channelId?: string;

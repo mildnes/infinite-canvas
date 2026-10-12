@@ -143,7 +143,7 @@ export default function AdminSettingsPage() {
         setIsLoading(true);
         try {
             const data = normalizeSettings(await fetchAdminSettings(token));
-            data.public.modelChannel.userGroups = normalizeUserGroups(data.public.modelChannel.userGroups, availableUserGroupModels(data));
+            data.public.modelChannel.userGroups = normalizeUserGroups(data.public.modelChannel.userGroups, availableUserGroupModels(data), undefined, data.private.channels);
             savedUserGroupsRef.current = data.public.modelChannel.userGroups;
             form.setFieldsValue(data);
             setChannels(data.private.channels);
@@ -424,7 +424,7 @@ export default function AdminSettingsPage() {
             public: { ...values.public, modelChannel: { ...values.public.modelChannel, availableModels: resolveAvailableModels(values.public.modelChannel.availableModels, nextChannels, newlyAddedRequestNames), availableWorkflows: filterModels(values.public.modelChannel.availableWorkflows, nextChannelWorkflows.map((item) => item.value)) } },
             private: { ...values.private, channels: nextChannels },
         });
-        nextSettings.public.modelChannel.userGroups = normalizeUserGroups(nextSettings.public.modelChannel.userGroups, availableUserGroupModels(nextSettings), savedUserGroupsRef.current);
+        nextSettings.public.modelChannel.userGroups = normalizeUserGroups(nextSettings.public.modelChannel.userGroups, availableUserGroupModels(nextSettings), savedUserGroupsRef.current, nextSettings.private.channels);
         const saved = normalizeSettings(await saveAdminSettings(token, nextSettings));
         clearImageStorageConfigCache();
         clearMediaStorageConfigCache();
@@ -534,7 +534,7 @@ export default function AdminSettingsPage() {
                         )}
                     </Flex> : null}
 
-                    {activeTab === "groups" ? <UserGroupEditor groups={userGroups} models={publicModels} onChange={(groups) => {
+                    {activeTab === "groups" ? <UserGroupEditor groups={userGroups} models={publicModels.length ? publicModels : channelModels} channels={channels} onChange={(groups) => {
                         form.setFieldValue(["public", "modelChannel", "userGroups"], groups);
                         if (editorMode.public === "json") {
                             const parsed = parseTabJson("public", jsonText.public);
@@ -1791,7 +1791,7 @@ async function collectSettings(form: any, editorMode: Record<SettingsTabKey, Edi
     const newlyAddedRequestNames = collectChannelModels(values.private.channels).filter((name) => !savedRequestNames.includes(name));
     values.public.modelChannel.availableModels = resolveAvailableModels(values.public.modelChannel.availableModels, values.private.channels, newlyAddedRequestNames);
     try {
-        values.public.modelChannel.userGroups = normalizeUserGroups(values.public.modelChannel.userGroups, availableUserGroupModels(values), savedGroups);
+        values.public.modelChannel.userGroups = normalizeUserGroups(values.public.modelChannel.userGroups, availableUserGroupModels(values), savedGroups, values.private.channels);
     } catch (error) {
         message.error(error instanceof Error ? error.message : "用户分组配置错误");
         return null;

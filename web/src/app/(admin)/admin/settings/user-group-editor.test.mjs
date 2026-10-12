@@ -4,8 +4,28 @@ import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { JSDOM } from "jsdom";
-import { UserGroupEditor } from "./user-group-editor.tsx";
+import { convertUserGroupNamesToScopes, UserGroupEditor, userGroupScopeRows, userGroupScopesFromRows } from "./user-group-editor.tsx";
 import { normalizeUserGroups } from "@/lib/user-groups";
+
+const channels = [
+    { id: "Mark", name: "Mark", enabled: true, protocol: "openai", models: ["gpt-image-2", "text"] },
+    { id: "4K", name: "4K", enabled: true, protocol: "openai", models: ["gpt-image-2"] },
+    { id: "disabled", name: "停用", enabled: false, protocol: "openai", models: ["gpt-image-2"] },
+    { id: "workflow", name: "工作流", enabled: true, protocol: "comfyui", models: ["gpt-image-2"] },
+];
+
+test("分组表格显示渠道与该渠道模型、删除和添加，旧名称以 chips 与转换入口展示", () => {
+    const groups = [...normalizeUserGroups(undefined, []), { id: "vip", name: "VIP", unrestricted: false, models: ["text"], scopes: [{ channelId: "Mark", model: "gpt-image-2" }], isDefault: false }];
+    const html = renderToStaticMarkup(createElement(UserGroupEditor, { groups, models: ["gpt-image-2", "text"], channels, onChange: () => {} }));
+    const document = new JSDOM(html).window.document;
+    assert.deepEqual([...document.querySelectorAll('thead th')].map(el => el.textContent), ["渠道", "该渠道允许的模型", "操作"]);
+    assert.ok(document.querySelector('[aria-label="分组渠道"]'));
+    assert.ok(document.querySelector('[aria-label="该渠道允许的模型"]'));
+    assert.ok(document.querySelector('button[aria-label="删除渠道范围"]'));
+    assert.ok(document.body.textContent.includes("添加渠道范围"));
+    assert.ok(document.body.textContent.includes("旧格式（按名称，不限渠道）"));
+    assert.ok(document.body.textContent.includes("一键转为按渠道"));
+});
 
 test("真实分组编辑器 DOM：默认组不可删改 ID，白名单、全量开关、添加入口可见", () => {
     const groups = [...normalizeUserGroups(undefined, []), { id: "vip", name: "VIP", unrestricted: false, models: ["allowed"], isDefault: false }];
@@ -40,6 +60,39 @@ test("真实分组编辑器操作回调：新增、编辑、切换不限制及�
 test("设置页第三页签和模型选项使用保留表单值，不另设分组 CRUD 接口", () => {
     const source = readFileSync(new URL("./page.tsx", import.meta.url), "utf8");
     assert.ok(source.includes('key: "groups", label: "用户分组"'));
-    assert.ok(source.includes("<UserGroupEditor groups={userGroups} models={publicModels}"));
+    assert.ok(source.includes("channels={channels}"));
     assert.ok(source.includes('Form.useWatch(["public", "modelChannel", "availableModels"], { form, preserve: true })'));
+});
+
+test("旧格式一键转换展开所有启用同名渠道、保留已有范围，模型选项取全局交集", () => {
+    const group = { id: "vip", models: ["gpt-image-2", "text"], scopes: [{ channelId: "Mark", model: "text" }] };
+    const converted = convertUserGroupNamesToScopes(group, channels, ["gpt-image-2"]);
+    assert.deepEqual(converted.models, []);
+    assert.deepEqual(converted.scopes, [{ channelId: "Mark", model: "text" }, { channelId: "Mark", model: "gpt-image-2" }, { channelId: "4K", model: "gpt-image-2" }]);
+    assert.deepEqual(group.models, ["gpt-image-2", "text"]);
+    assert.deepEqual(convertUserGroupNamesToScopes(converted, channels, ["gpt-image-2"]), converted);
+    assert.deepEqual(userGroupScopeRows(converted.scopes), [{ channelId: "Mark", models: ["text", "gpt-image-2"] }, { channelId: "4K", models: ["gpt-image-2"] }]);
+    assert.deepEqual(userGroupScopesFromRows([{ channelId: "", models: [] }]), [{ channelId: "", model: "" }]);
+});
+
+test("真实表格回调：加行、选渠道、模型多选、换渠道清空旧模型、删除与旧格式转换", () => {
+    let groups = [{ id: "vip", name: "VIP", unrestricted: false, models: ["gpt-image-2"], isDefault: false, scopes: [] }];
+    const render = () => UserGroupEditor({ groups, channels, models: ["gpt-image-2"], onChange: next => { groups = next; } });
+    const whitelist = () => render().props.children[1][0].props.children.props.children[2];
+    whitelist().props.children[1].props.onClick();
+    const table = () => whitelist().props.children[0];
+    const cell = (column, rowIndex = 0) => table().props.columns[column].render(null, table().props.dataSource[rowIndex], rowIndex);
+    assert.equal(table().props.dataSource.length, 1);
+    assert.deepEqual(cell(0).props.options.map(item => item.value), ["Mark", "4K"]);
+    cell(0).props.onChange("Mark");
+    assert.deepEqual(cell(1).props.options.map(item => item.value), ["gpt-image-2"]);
+    cell(1).props.onChange(["gpt-image-2"]);
+    assert.deepEqual(groups[0].scopes, [{ channelId: "Mark", model: "gpt-image-2" }]);
+    cell(0).props.onChange("4K");
+    assert.deepEqual(groups[0].scopes, [{ channelId: "4K", model: "" }]);
+    cell(2).props.onClick();
+    assert.deepEqual(groups[0].scopes, []);
+    whitelist().props.children[2].props.children[0].props.children[1].props.onClick();
+    assert.deepEqual(groups[0].models, []);
+    assert.deepEqual(groups[0].scopes, [{ channelId: "Mark", model: "gpt-image-2" }, { channelId: "4K", model: "gpt-image-2" }]);
 });

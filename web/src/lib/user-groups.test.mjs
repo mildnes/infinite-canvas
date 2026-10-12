@@ -36,3 +36,25 @@ test("全局模型列表旧空值以启用渠道为全集，受限空白名单�
     settings.public.modelChannel.availableModels = ["explicit"];
     assert.deepEqual(availableUserGroupModels(settings), ["explicit"]);
 });
+
+test("渠道范围归一化保序去重，保留旧名称白名单与混合范围", () => {
+    const channels = [{ id: "Mark", enabled: true, protocol: "openai", models: ["gpt-image-2", "text"] }, { id: "4K", enabled: true, protocol: "openai", models: ["gpt-image-2"] }];
+    const defaults = normalizeUserGroups(undefined, ["gpt-image-2", "text"]);
+    const input = [...defaults, { id: "vip", unrestricted: false, models: ["text"], scopes: [{ channelId: " Mark ", model: " gpt-image-2 " }, { channelId: "Mark", model: "gpt-image-2" }, { channelId: "", model: "" }] }];
+    const saved = normalizeUserGroups(input, ["gpt-image-2", "text"], undefined, channels);
+    assert.deepEqual(saved[1].models, ["text"]);
+    assert.deepEqual(saved[1].scopes, [{ channelId: "Mark", model: "gpt-image-2" }]);
+    assert.deepEqual(normalizeUserGroups(JSON.parse(JSON.stringify(saved)), ["gpt-image-2", "text"], saved, channels), saved);
+    assert.deepEqual(normalizeUserGroups([{ ...defaults[0], scopes: input[1].scopes }], ["text"], undefined, channels)[0].scopes || [], []);
+});
+
+test("渠道范围校验拒绝未知渠道、未开放模型及全部失效，空草稿行不扩大权限", () => {
+    const channels = [{ id: "Mark", enabled: true, protocol: "openai", models: ["gpt-image-2"] }];
+    const defaults = normalizeUserGroups(undefined, ["gpt-image-2"]);
+    for (const scope of [{ channelId: "missing", model: "gpt-image-2" }, { channelId: "Mark", model: "hidden" }]) {
+        assert.throws(() => normalizeUserGroups([...defaults, { id: "vip", models: [], scopes: [scope] }], ["gpt-image-2"], defaults, channels), /渠道|未开放/);
+    }
+    const empty = normalizeUserGroups([...defaults, { id: "vip", models: [], scopes: [{ channelId: "", model: "" }] }], ["gpt-image-2"], defaults, channels);
+    assert.deepEqual(empty[1].models, []);
+    assert.deepEqual(empty[1].scopes || [], []);
+});

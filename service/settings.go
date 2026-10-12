@@ -67,7 +67,7 @@ func SaveSettings(settings model.Settings) (model.Settings, error) {
 	if len(groupAvailableModels) == 0 {
 		groupAvailableModels = enabledChannelModels(settings.Private.Channels)
 	}
-	if err := validateUserGroups(rawGroups, saved.Public.ModelChannel.UserGroups, groupAvailableModels); err != nil {
+	if err := validateUserGroups(rawGroups, saved.Public.ModelChannel.UserGroups, groupAvailableModels, settings.Private.Channels); err != nil {
 		return model.Settings{}, err
 	}
 	if err := validateUniqueModelChannelIDs(settings.Private.Channels); err != nil {
@@ -227,7 +227,7 @@ func normalizePublicSettingWithChannels(setting model.PublicSetting, channels []
 	if len(groupAvailableModels) == 0 {
 		groupAvailableModels = enabledChannelModels(channels)
 	}
-	setting.ModelChannel.UserGroups = normalizeUserGroups(setting.ModelChannel.UserGroups, groupAvailableModels)
+	setting.ModelChannel.UserGroups = normalizeUserGroups(setting.ModelChannel.UserGroups, groupAvailableModels, channels)
 	setting.ModelChannel.DefaultTextModel = repairDefaultModelForCapability(setting.ModelChannel.DefaultTextModel, setting.ModelChannel.AvailableModels, channels, model.ModelCapabilityText, isTextModelName)
 	setting.ModelChannel.DefaultImageModel = repairDefaultModelForCapability(setting.ModelChannel.DefaultImageModel, setting.ModelChannel.AvailableModels, channels, model.ModelCapabilityImage, isImageModelName)
 	setting.ModelChannel.DefaultVideoModel = repairDefaultModelForCapability(setting.ModelChannel.DefaultVideoModel, setting.ModelChannel.AvailableModels, channels, model.ModelCapabilityVideo, isVideoModelName)
@@ -484,6 +484,25 @@ func SelectModelChannelForUser(ctx context.Context, modelName string, channelID 
 		}
 	}
 	channels := modelChannelsForModel(privateChannels, modelName)
+	if len(publicOnly) == 0 || publicOnly[0] {
+		if user, ok := UserFromContext(ctx); ok && user.ID != "" && user.Role != model.UserRoleGuest {
+			group := groupForUser(settings.Public.ModelChannel.UserGroups, user)
+			if !group.Unrestricted {
+				allowedChannels := make([]model.ModelChannel, 0, len(channels))
+				for _, channel := range channels {
+					if userGroupAllowsModel(group, channel.ID, modelName) {
+						allowedChannels = append(allowedChannels, channel)
+					} else if channel.ID == channelID {
+						return model.ModelChannel{}, safeMessageError{message: "模型未开放"}
+					}
+				}
+				if len(allowedChannels) == 0 {
+					return model.ModelChannel{}, safeMessageError{message: "模型未开放"}
+				}
+				channels = allowedChannels
+			}
+		}
+	}
 	if len(channels) == 0 {
 		return model.ModelChannel{}, errors.New("没有可用模型渠道")
 	}

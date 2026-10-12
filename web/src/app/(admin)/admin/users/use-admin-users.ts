@@ -29,7 +29,7 @@ export function useAdminUsers() {
         queryKey: ["admin", "user-groups", token],
         queryFn: async () => {
             const settings = await fetchAdminSettings(token);
-            return normalizeUserGroups(settings.public.modelChannel.userGroups, availableUserGroupModels(settings));
+            return normalizeUserGroups(settings.public.modelChannel.userGroups, availableUserGroupModels(settings), undefined, settings.private.channels);
         },
         enabled: Boolean(token), retry: false,
     });
