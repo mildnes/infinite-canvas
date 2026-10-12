@@ -155,6 +155,9 @@ func filterPublicSettingsForUser(settings model.PublicSetting, user model.AuthUs
 		channels = append(channels, channel)
 	}
 	settings.ModelChannel.Channels = channels
+	// Costs are part of the public projection too: a restricted group must not
+	// learn the names or prices of models outside its whitelist.
+	settings.ModelChannel.ModelCosts = filterGroupModelCosts(settings.ModelChannel.ModelCosts, available)
 	private := make([]model.ModelChannel, 0, len(channels))
 	for _, channel := range channels {
 		private = append(private, model.ModelChannel{Models: channel.Models, ModelMap: channel.ModelMap, ModelCapabilities: channel.ModelCapabilities})
@@ -165,6 +168,16 @@ func filterPublicSettingsForUser(settings model.PublicSetting, user model.AuthUs
 	setting.DefaultImageModel = repairGroupDefaultModelForCapability(setting.DefaultImageModel, available, private, model.ModelCapabilityImage, isImageModelName)
 	setting.DefaultVideoModel = repairGroupDefaultModelForCapability(setting.DefaultVideoModel, available, private, model.ModelCapabilityVideo, isVideoModelName)
 	return settings // Never re-enter PublicSettings/publicChannelInfos: [] means deny all here.
+}
+
+func filterGroupModelCosts(costs []model.ModelCost, models []string) []model.ModelCost {
+	result := make([]model.ModelCost, 0, len(costs))
+	for _, cost := range costs {
+		if len(filterEnabledModels([]string{cost.Model}, models)) > 0 {
+			result = append(result, cost)
+		}
+	}
+	return result
 }
 
 func filterGroupModelMap(mapping map[string]string, models []string) map[string]string {

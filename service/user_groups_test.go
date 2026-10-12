@@ -168,3 +168,36 @@ func TestUserGroupProjectionFiltersAllDeclarationsAndSelectsImageDefault(t *test
 		t.Fatal("source settings mutated")
 	}
 }
+
+func TestUserGroupProjectionFiltersModelCosts(t *testing.T) {
+	setting := model.PublicSetting{ModelChannel: model.PublicModelChannelSetting{
+		AvailableModels: []string{"outside", "我的高质图", "text"},
+		ModelCosts: []model.ModelCost{
+			{ChannelID: "system", Model: "outside", Credits: 97},
+			{ChannelID: "system", Model: "我的高质图", Credits: 3},
+			{ChannelID: "system", Model: "text", Credits: 1},
+		},
+		Channels: []model.PublicModelChannelInfo{{
+			Models: []string{"outside", "我的高质图", "text"},
+		}},
+		UserGroups: []model.UserGroupSetting{
+			{ID: "default", IsDefault: true, Unrestricted: true},
+			{ID: "vip", Models: []string{"我的高质图", "text"}},
+		},
+	}}
+	restricted := filterPublicSettingsForUser(setting, model.AuthUser{ID: "u", GroupID: "vip"})
+	if !reflect.DeepEqual(restricted.ModelChannel.ModelCosts, []model.ModelCost{
+		{ChannelID: "system", Model: "我的高质图", Credits: 3},
+		{ChannelID: "system", Model: "text", Credits: 1},
+	}) {
+		t.Fatalf("restricted group leaked costs: %+v", restricted.ModelChannel.ModelCosts)
+	}
+	unrestricted := filterPublicSettingsForUser(setting, model.AuthUser{ID: "a"})
+	if len(unrestricted.ModelChannel.ModelCosts) != 3 {
+		t.Fatalf("unrestricted group lost costs: %+v", unrestricted.ModelChannel.ModelCosts)
+	}
+	// Source settings must stay intact for other users.
+	if len(setting.ModelChannel.ModelCosts) != 3 {
+		t.Fatal("source settings mutated")
+	}
+}
