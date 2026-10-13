@@ -88,7 +88,7 @@ func CreateWorkflowTask(ctx context.Context, user model.AuthUser, input Workflow
 		return prior.result, nil
 	}
 	billingName := workflowBillingName(input.Ref)
-	credits := 0
+	credits := 0.0
 	if input.Ref.Scope == "system" {
 		credits, err = ModelCost(resolved.Channel.ID, billingName)
 		if err != nil {
@@ -294,7 +294,7 @@ func workflowBillingName(ref WorkflowRef) string {
 	return fmt.Sprintf("workflow:%s:%s:%s:%s", ref.Scope, ref.ChannelID, ref.Kind, ref.WorkflowID)
 }
 
-func createWorkflowTaskRecord(user model.AuthUser, id string, resolved ResolvedWorkflow, input WorkflowRunInput, ref, billingName string, credits int) error {
+func createWorkflowTaskRecord(user model.AuthUser, id string, resolved ResolvedWorkflow, input WorkflowRunInput, ref, billingName string, credits float64) error {
 	channelID, userChannelID := "", ""
 	if input.Ref.Scope == "system" {
 		channelID = input.Ref.ChannelID
@@ -472,13 +472,7 @@ func finishWorkflowTask(taskID, status string, urls []string, failure string, ca
 			var ref WorkflowRef
 			_ = json.Unmarshal([]byte(rawRef), &ref)
 			modelName := workflowBillingName(ref)
-			extra, _ := json.Marshal(map[string]string{"channelId": ref.ChannelID, "model": modelName, "path": "/api/v1/workflow-tasks"})
-			return model.CreditLog{
-				ID:        newID("credit"),
-				Remark:    "模型调用失败返还 " + modelName,
-				Extra:     string(extra),
-				CreatedAt: now(),
-			}
+			return newAIRefundLog("", ref.ChannelID, modelName, "/api/v1/workflow-tasks", "模型调用失败返还 ")
 		}
 	}
 	if ctx.Err() != nil {
@@ -562,8 +556,7 @@ func finishWorkflowTaskFailure(taskID, failure string) error {
 		var ref WorkflowRef
 		_ = json.Unmarshal([]byte(rawRef), &ref)
 		modelName := workflowBillingName(ref)
-		extra, _ := json.Marshal(map[string]string{"channelId": ref.ChannelID, "model": modelName, "path": "/api/v1/workflow-tasks"})
-		return model.CreditLog{ID: newID("credit"), Remark: "模型调用失败返还 " + modelName, Extra: string(extra), CreatedAt: now()}
+		return newAIRefundLog("", ref.ChannelID, modelName, "/api/v1/workflow-tasks", "模型调用失败返还 ")
 	}
 	changed, _, rawRef, userID, err := repository.CompleteWorkflowTask(taskID, "failed", nil, nil, failure, newRefundLog)
 	if err != nil || !changed {

@@ -249,6 +249,7 @@ func normalizeModelCosts(costs []model.ModelCost, channels []model.ModelChannel)
 		if item.Credits < 0 {
 			item.Credits = 0
 		}
+		item.Credits = normalizeCredits(item.Credits)
 		if item.ChannelID == "" {
 			legacy = append(legacy, item)
 			continue
@@ -313,7 +314,7 @@ func validateUniqueModelChannelIDs(channels []model.ModelChannel) error {
 	return nil
 }
 
-func ModelCost(channelID string, modelName string) (int, error) {
+func ModelCost(channelID string, modelName string) (float64, error) {
 	settings, err := repository.GetSettings()
 	if err != nil {
 		return 0, err
@@ -321,7 +322,7 @@ func ModelCost(channelID string, modelName string) (int, error) {
 	return modelCostForChannel(normalizeSettings(settings).Public.ModelChannel.ModelCosts, channelID, modelName), nil
 }
 
-func modelCostForChannel(costs []model.ModelCost, channelID string, modelName string) int {
+func modelCostForChannel(costs []model.ModelCost, channelID string, modelName string) float64 {
 	channelID = strings.TrimSpace(channelID)
 	modelName = strings.TrimSpace(modelName)
 	for _, item := range costs {

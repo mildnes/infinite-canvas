@@ -25,7 +25,7 @@ type User struct {
 	AvatarURL   string     `json:"avatarUrl"`
 	Role        UserRole   `json:"role"`
 	GroupID     string     `json:"groupId" gorm:"index"`
-	Credits     int        `json:"credits"`
+	Credits     float64    `json:"credits" gorm:"type:decimal(20,2);size:20"`
 	AffCode     string     `json:"affCode" gorm:"uniqueIndex"`
 	AffCount    int        `json:"affCount"`
 	InviterID   string     `json:"inviterId"`
@@ -53,7 +53,7 @@ type AuthUser struct {
 	AvatarURL   string   `json:"avatarUrl"`
 	Role        UserRole `json:"role"`
 	GroupID     string   `json:"groupId"`
-	Credits     int      `json:"credits"`
+	Credits     float64  `json:"credits"`
 	CreatedAt   string   `json:"createdAt"`
 	UpdatedAt   string   `json:"updatedAt"`
 }
@@ -91,8 +91,8 @@ type CreditLog struct {
 	ID        string        `json:"id" gorm:"primaryKey"`
 	UserID    string        `json:"userId" gorm:"index"`
 	Type      CreditLogType `json:"type"`
-	Amount    int           `json:"amount"`
-	Balance   int           `json:"balance"`
+	Amount    float64       `json:"amount" gorm:"type:decimal(20,2);size:20"`
+	Balance   float64       `json:"balance" gorm:"type:decimal(20,2);size:20"`
 	RelatedID string        `json:"relatedId"`
 	Remark    string        `json:"remark"`
 	Extra     string        `json:"extra" gorm:"type:text"`

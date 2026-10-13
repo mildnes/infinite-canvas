@@ -99,9 +99,9 @@ type WorkflowSummary struct {
 
 // ModelCost 模型算力点配置。
 type ModelCost struct {
-	ChannelID string `json:"channelId,omitempty"`
-	Model     string `json:"model"`
-	Credits   int    `json:"credits"`
+	ChannelID string  `json:"channelId,omitempty"`
+	Model     string  `json:"model"`
+	Credits   float64 `json:"credits"`
 }
 
 type ImageOutputFormat string

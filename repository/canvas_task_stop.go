@@ -31,7 +31,7 @@ func CancelGenerationTaskAndRefund(kind, userID, id, completedAt string, newLog 
 	err = db.Transaction(func(tx *gorm.DB) error {
 		var row struct {
 			Status                                                 string
-			Credits                                                int
+			Credits                                                float64
 			ChannelID, UserChannelID, Model, Endpoint, WorkflowRef string
 		}
 		query := tx.Model(record).Select("status, credits, channel_id, user_channel_id, model, workflow_ref")

@@ -33,7 +33,7 @@ type saveUserRequest struct {
 }
 
 type adjustUserCreditsRequest struct {
-	Credits int `json:"credits"`
+	Credits float64 `json:"credits"`
 }
 
 func Register(w http.ResponseWriter, r *http.Request) {

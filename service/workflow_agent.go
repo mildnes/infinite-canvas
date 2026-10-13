@@ -37,7 +37,7 @@ func DraftCreativeWorkflow(ctx context.Context, request WorkflowAgentDraftReques
 	}
 
 	chargedCredits := request.ChannelMode != "local"
-	credits := 0
+	credits := 0.0
 	if chargedCredits {
 		credits, err = ModelCost(channel.ID, modelName)
 		if err != nil {
@@ -343,4 +343,3 @@ func maxInt(a, b int) int {
 	}
 	return b
 }
-

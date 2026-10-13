@@ -21,7 +21,7 @@ type CanvasImageTask struct {
 	UserChannelID   string                `json:"userChannelId"`
 	ChannelName     string                `json:"channelName"`
 	WorkflowRef     string                `json:"workflowRef,omitempty" gorm:"type:text"`
-	Credits         int                   `json:"credits,omitempty"`
+	Credits         float64               `json:"credits,omitempty" gorm:"type:decimal(20,2);size:20"`
 	Status          string                `json:"status"`
 	Progress        int                   `json:"progress"`
 	Prompt          string                `json:"prompt" gorm:"type:text"`

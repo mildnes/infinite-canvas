@@ -55,13 +55,13 @@ func ListDueRunningHubWorkflowTasks(afterCreatedAt, afterID string, limit int) (
 	return tasks, err
 }
 
-func CompleteWorkflowTask(taskID, status string, urls []string, metadata []model.WorkflowMediaMetadata, failure string, newRefundLog func(string) model.CreditLog) (bool, int, string, string, error) {
+func CompleteWorkflowTask(taskID, status string, urls []string, metadata []model.WorkflowMediaMetadata, failure string, newRefundLog func(string) model.CreditLog) (bool, float64, string, string, error) {
 	db, err := DB()
 	if err != nil {
 		return false, 0, "", "", err
 	}
 	changed := false
-	credits := 0
+	credits := 0.0
 	workflowRef := ""
 	userID := ""
 	err = db.Transaction(func(tx *gorm.DB) error {

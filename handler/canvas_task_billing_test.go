@@ -123,36 +123,37 @@ func TestCanvasTaskBillingSingleAuthority(t *testing.T) {
 		}
 		return model.AuthUser{ID: id, Role: model.UserRoleAdmin}
 	}
-	assertLedger := func(t *testing.T, user model.AuthUser, consumeCount, refundCount, amount int) {
+	assertLedger := func(t *testing.T, user model.AuthUser, consumeCount, refundCount int, amount float64) {
 		t.Helper()
 		var logs []model.CreditLog
 		if err := db.Where("user_id = ?", user.ID).Find(&logs).Error; err != nil {
 			t.Fatal(err)
 		}
-		consumes, refunds, delta := 0, 0, 0
+		consumes, refunds := 0, 0
+		var delta float64
 		for _, entry := range logs {
 			delta += entry.Amount
 			switch entry.Type {
 			case model.CreditLogTypeAIConsume:
 				consumes++
 				if entry.Amount != -amount {
-					t.Errorf("consume amount=%d want=%d", entry.Amount, -amount)
+					t.Errorf("consume amount=%g want=%g", entry.Amount, -amount)
 				}
 			case model.CreditLogTypeAIRefund:
 				refunds++
 				if entry.Amount != amount {
-					t.Errorf("refund amount=%d want=%d", entry.Amount, amount)
+					t.Errorf("refund amount=%g want=%g", entry.Amount, amount)
 				}
 			}
 		}
 		var saved model.User
 		db.First(&saved, "id = ?", user.ID)
-		t.Logf("consume=%d refund=%d delta=%d balance=%d", consumes, refunds, delta, saved.Credits)
-		if consumes != consumeCount || refunds != refundCount || saved.Credits != 1000-consumeCount*amount+refundCount*amount {
-			t.Errorf("ledger: consume=%d refund=%d delta=%d balance=%d; want consume=%d refund=%d balance=%d", consumes, refunds, delta, saved.Credits, consumeCount, refundCount, 1000-consumeCount*amount+refundCount*amount)
+		t.Logf("consume=%d refund=%d delta=%g balance=%g", consumes, refunds, delta, saved.Credits)
+		if consumes != consumeCount || refunds != refundCount || saved.Credits != 1000-float64(consumeCount)*amount+float64(refundCount)*amount {
+			t.Errorf("ledger: consume=%d refund=%d delta=%g balance=%g; want consume=%d refund=%d balance=%g", consumes, refunds, delta, saved.Credits, consumeCount, refundCount, 1000-float64(consumeCount)*amount+float64(refundCount)*amount)
 		}
 	}
-	assertAILog := func(t *testing.T, user model.AuthUser, credits int) {
+	assertAILog := func(t *testing.T, user model.AuthUser, credits float64) {
 		t.Helper()
 		files, err := os.ReadDir(config.Cfg.AILogDir)
 		if err != nil {
@@ -167,7 +168,7 @@ func TestCanvasTaskBillingSingleAuthority(t *testing.T) {
 				var entry model.AICallLog
 				if json.Unmarshal(line, &entry) == nil && entry.UserID == user.ID {
 					if entry.Credits != credits {
-						t.Fatalf("AI log credits=%d want=%d", entry.Credits, credits)
+						t.Fatalf("AI log credits=%g want=%g", entry.Credits, credits)
 					}
 					return
 				}
@@ -192,7 +193,7 @@ func TestCanvasTaskBillingSingleAuthority(t *testing.T) {
 			t.Run(kind+"/"+mode, func(t *testing.T) {
 				user := newUser(t)
 				body, modelName, endpoint := requestBody(kind, mode, 0)
-				credits, userChannelID := 7, ""
+				credits, userChannelID := 7.0, ""
 				if mode == "user-channel" {
 					credits, userChannelID = 0, "own"
 					encoded, _ := json.Marshal(map[string]any{"localChannels": []map[string]any{{"id": "own", "protocol": "openai", "baseUrl": upstream.URL, "apiKey": "fixture", "models": []string{modelName}}}})

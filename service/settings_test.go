@@ -96,19 +96,19 @@ func TestModelCostsExpandLegacyAcrossChannelsAndKeepOverrides(t *testing.T) {
 	})
 	costs := settings.Public.ModelChannel.ModelCosts
 	if got := modelCostForChannel(costs, "channel-a", "shared"); got != 7 {
-		t.Fatalf("first channel price = %d, want 7", got)
+		t.Fatalf("first channel price = %g, want 7", got)
 	}
 	if got := modelCostForChannel(costs, "channel-b", "shared"); got != 18 {
-		t.Fatalf("second channel override = %d, want 18", got)
+		t.Fatalf("second channel override = %g, want 18", got)
 	}
 	if got := modelCostForChannel(costs, "channel-a", "new"); got != 0 {
-		t.Fatalf("unpriced model = %d, want 0", got)
+		t.Fatalf("unpriced model = %g, want 0", got)
 	}
 	if got := modelCostForChannel(costs, "", "shared"); got != 0 {
-		t.Fatalf("missing channel must not inherit legacy price: %d", got)
+		t.Fatalf("missing channel must not inherit legacy price: %g", got)
 	}
 	if got := modelCostForChannel(costs, "channel-c", "removed"); got != 0 {
-		t.Fatalf("unmatched legacy price must not bill a new channel: %d", got)
+		t.Fatalf("unmatched legacy price must not bill a new channel: %g", got)
 	}
 	var orphanFound bool
 	for _, cost := range costs {
@@ -252,13 +252,13 @@ func TestVideoAndWorkflowPricesUseSelectedChannel(t *testing.T) {
 		{ChannelID: "premium", Model: "workflow-model", Credits: 9},
 	}
 	if got := modelCostForChannel(costs, "premium", "shared-video"); got != 86 {
-		t.Fatalf("selected video channel price = %d, want 86", got)
+		t.Fatalf("selected video channel price = %g, want 86", got)
 	}
 	if got := modelCostForChannel(costs, "cheap", "workflow-model"); got != 1 {
-		t.Fatalf("selected workflow channel price = %d, want 1", got)
+		t.Fatalf("selected workflow channel price = %g, want 1", got)
 	}
 	if got := modelCostForChannel(costs, "other", "workflow-model"); got != 0 {
-		t.Fatalf("unpriced workflow channel = %d, want 0", got)
+		t.Fatalf("unpriced workflow channel = %g, want 0", got)
 	}
 }
 
@@ -290,13 +290,13 @@ func TestWorkflowPricingUsesChannelScopedBillingName(t *testing.T) {
 	billingName := workflowBillingName(WorkflowRef{Scope: "system", ChannelID: "runninghub-a", Kind: "workflow", WorkflowID: "wf-a"})
 	costs := normalizeModelCosts([]model.ModelCost{{Model: billingName, Credits: 13}}, channels)
 	if got := modelCostForChannel(costs, "runninghub-a", billingName); got != 13 {
-		t.Fatalf("workflow legacy price = %d, want 13", got)
+		t.Fatalf("workflow legacy price = %g, want 13", got)
 	}
 	if got := modelCostForChannel(costs, "runninghub-b", billingName); got != 0 {
-		t.Fatalf("workflow price must not leak to another channel = %d", got)
+		t.Fatalf("workflow price must not leak to another channel = %g", got)
 	}
 	if got := modelCostForChannel(costs, "runninghub-b", workflowBillingName(WorkflowRef{Scope: "system", ChannelID: "runninghub-b", Kind: "workflow", WorkflowID: "wf-a"})); got != 0 {
-		t.Fatalf("unpriced workflow channel = %d", got)
+		t.Fatalf("unpriced workflow channel = %g", got)
 	}
 }
 

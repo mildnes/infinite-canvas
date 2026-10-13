@@ -50,7 +50,7 @@ type VideoTaskCreateInput struct {
 	ErrorDetail     string
 	RequestBody     string
 	ResponseBody    string
-	Credits         int
+	Credits         float64
 	BillingName     string
 	BillingPath     string
 }
@@ -484,7 +484,7 @@ func persistCompletedVideoTaskContext(ctx context.Context, task *model.VideoTask
 	return stored.ID, nil
 }
 
-func failedVideoTaskRefundAmount(task model.VideoTask, updated bool) int {
+func failedVideoTaskRefundAmount(task model.VideoTask, updated bool) float64 {
 	if updated && (IsFailedVideoTaskStatus(task.Status) || IsCancelledVideoTaskStatus(task.Status)) && task.UserChannelID == "" && task.Credits > 0 {
 		return task.Credits
 	}

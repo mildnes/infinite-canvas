@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -47,7 +48,7 @@ func TestCanvasStopOwnershipRefundAndTerminalGuards(t *testing.T) {
 			t.Fatal(err)
 		}
 		ctx, release := CanvasTaskContext(kind, user.ID, id)
-		if status, stopped, refunded, err := StopCanvasTask(kind, "other", id); err != nil || status != "" || stopped || refunded || ctx.Err() != nil {
+		if status, stopped, refunded, err := StopCanvasTask(kind, "other", id); !errors.Is(err, ErrCanvasTaskNotFound) || status != "" || stopped || refunded || ctx.Err() != nil {
 			t.Fatalf("cross-user stop: %q %v %v %v", status, stopped, refunded, err)
 		}
 		if status, stopped, refunded, err := StopCanvasTask(kind, user.ID, id); err != nil || status != "cancelled" || !stopped || !refunded || ctx.Err() == nil {
@@ -72,7 +73,7 @@ func TestCanvasStopOwnershipRefundAndTerminalGuards(t *testing.T) {
 		t.Fatalf("refund audit count: %d", len(logs))
 	}
 	for _, entry := range logs {
-		if entry.Remark != "用户停止返还 local" && !strings.Contains(entry.Remark, "用户停止返还") {
+		if entry.Remark != "用户停止返还 local" {
 			t.Fatalf("stop refund remark: %q", entry.Remark)
 		}
 	}

@@ -21,7 +21,7 @@ type CanvasImageTaskCreateInput struct {
 	UserChannelID   string
 	ChannelName     string
 	WorkflowRef     string
-	Credits         int
+	Credits         float64
 	BillingName     string
 	BillingPath     string
 	Prompt          string

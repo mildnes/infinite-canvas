@@ -8,16 +8,17 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"github.com/tigerowo/infinite-canvas/config"
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/repository"
-	"github.com/golang-jwt/jwt/v5"
-	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -26,6 +27,10 @@ type TokenClaims struct {
 	Username string         `json:"username"`
 	Role     model.UserRole `json:"role"`
 	jwt.RegisteredClaims
+}
+
+func normalizeCredits(value float64) float64 {
+	return math.Round(value*100) / 100
 }
 
 type userExtra struct {
@@ -324,7 +329,8 @@ func SetUserGroup(id, groupID string) (model.User, error) {
 	return user, err
 }
 
-func AdjustUserCredits(id string, credits int) (model.User, error) {
+func AdjustUserCredits(id string, credits float64) (model.User, error) {
+	credits = normalizeCredits(credits)
 	user, ok, err := repository.GetUserByID(id)
 	if err != nil || !ok {
 		if err != nil {
@@ -351,7 +357,8 @@ func AdjustUserCredits(id string, credits int) (model.User, error) {
 	return user, err
 }
 
-func ConsumeUserCredits(userID string, channelID string, modelName string, credits int, path string, task ...any) error {
+func ConsumeUserCredits(userID string, channelID string, modelName string, credits float64, path string, task ...any) error {
+	credits = normalizeCredits(credits)
 	var workflowTask any
 	if len(task) > 0 {
 		workflowTask = task[0]
@@ -382,7 +389,8 @@ func ConsumeUserCredits(userID string, channelID string, modelName string, credi
 	return nil
 }
 
-func RefundUserCredits(userID string, channelID string, modelName string, credits int, path string) error {
+func RefundUserCredits(userID string, channelID string, modelName string, credits float64, path string) error {
+	credits = normalizeCredits(credits)
 	if credits <= 0 {
 		return nil
 	}
@@ -393,17 +401,9 @@ func RefundUserCredits(userID string, channelID string, modelName string, credit
 	if !ok {
 		return safeMessageError{message: "用户不存在"}
 	}
-	extra, _ := json.Marshal(map[string]string{"channelId": channelID, "model": modelName, "path": path})
-	_, err = repository.SaveCreditLog(model.CreditLog{
-		ID:        newID("credit"),
-		UserID:    userID,
-		Type:      model.CreditLogTypeAIRefund,
-		Amount:    credits,
-		Balance:   user.Credits,
-		Remark:    "模型调用失败返还 " + modelName,
-		Extra:     string(extra),
-		CreatedAt: now(),
-	})
+	entry := newAIRefundLog(userID, channelID, modelName, path, "模型调用失败返还 ")
+	entry.Amount, entry.Balance = credits, user.Credits
+	_, err = repository.SaveCreditLog(entry)
 	return err
 }
 
@@ -416,6 +416,8 @@ func ListCreditLogs(q model.Query) (model.CreditLogList, error) {
 }
 
 func SaveCreditLog(log model.CreditLog) (model.CreditLog, error) {
+	log.Amount = normalizeCredits(log.Amount)
+	log.Balance = normalizeCredits(log.Balance)
 	if log.ID == "" {
 		log.ID = newID("credit")
 		log.CreatedAt = now()

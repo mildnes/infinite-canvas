@@ -113,7 +113,7 @@ func generationTaskStartedBefore(startedAt, createdAt string, cutoff time.Time) 
 	return err == nil && !started.After(cutoff)
 }
 
-func refundInterruptedTask(userID, channelID, modelName string, credits int, path string) {
+func refundInterruptedTask(userID, channelID, modelName string, credits float64, path string) {
 	if credits <= 0 {
 		return
 	}

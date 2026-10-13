@@ -76,14 +76,14 @@ func CreateCanvasImageTask(w http.ResponseWriter, r *http.Request) {
 		Fail(w, "图片质量参数无效")
 		return
 	}
-	credits := 0
+	credits := 0.0
 	if resolvedUserChannelID == "" {
 		credits, err = service.ModelCost(channel.ID, modelName)
 		if err != nil {
 			failAIChannelSelect(w, err, "AI 接口请求失败")
 			return
 		}
-		credits *= readAIRequestCount(body, contentType)
+		credits *= float64(readAIRequestCount(body, contentType, false))
 	}
 	task, err := service.CreateCanvasImageTask(service.CanvasImageTaskCreateInput{
 		UserID:          user.ID,
@@ -268,14 +268,14 @@ func CreateCanvasAudioTask(w http.ResponseWriter, r *http.Request) {
 		failAIChannelSelect(w, err, "AI 接口请求失败")
 		return
 	}
-	credits := 0
+	credits := 0.0
 	if resolvedUserChannelID == "" {
 		credits, err = service.ModelCost(channel.ID, modelName)
 		if err != nil {
 			failAIChannelSelect(w, err, "AI 接口请求失败")
 			return
 		}
-		credits *= readAIRequestCount(body, contentType)
+		credits *= float64(readAIRequestCount(body, contentType, false))
 	}
 	task, err := service.CreateCanvasAudioTask(service.CanvasAudioTaskCreateInput{
 		UserID:          user.ID,

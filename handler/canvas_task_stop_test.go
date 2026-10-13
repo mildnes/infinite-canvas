@@ -45,6 +45,33 @@ func TestCanvasStopCancelsRealUpstreamAndNeverPersistsResult(t *testing.T) {
 	if missingResponse.Code != http.StatusNotFound {
 		t.Fatalf("missing stop status: got %d body=%s", missingResponse.Code, missingResponse.Body.String())
 	}
+	for _, kind := range []string{"image", "audio", "video"} {
+		for _, owner := range []string{user.ID, "other"} {
+			id := kind + "-" + owner
+			var task any = &model.CanvasImageTask{ID: id, UserID: owner, Status: "completed"}
+			if kind == "audio" {
+				task = &model.CanvasAudioTask{ID: id, UserID: owner, Status: "completed"}
+			} else if kind == "video" {
+				task = &model.VideoTask{ID: id, UserID: owner, Status: "completed"}
+			}
+			if err := db.Create(task).Error; err != nil {
+				t.Fatal(err)
+			}
+			payload, _ := json.Marshal(map[string]string{"kind": kind, "taskId": id})
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/canvas/tasks/stop", bytes.NewReader(payload)).WithContext(service.WithUser(context.Background(), user))
+			w := httptest.NewRecorder()
+			StopCanvasTask(w, request)
+			var body response
+			_ = json.Unmarshal(w.Body.Bytes(), &body)
+			if owner != user.ID {
+				if w.Code != http.StatusNotFound || body.Code != 1 || body.Data != nil {
+					t.Fatalf("other owner's %s: %d %s", kind, w.Code, w.Body)
+				}
+			} else if data, ok := body.Data.(map[string]any); w.Code != http.StatusOK || !ok || data["status"] != "completed" || data["stopped"] != false {
+				t.Fatalf("terminal %s: %d %s", kind, w.Code, w.Body)
+			}
+		}
+	}
 	entered, cancelled := make(chan struct{}, 1), make(chan struct{}, 1)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
@@ -107,6 +134,13 @@ func TestCanvasStopCancelsRealUpstreamAndNeverPersistsResult(t *testing.T) {
 		json.Unmarshal(w.Body.Bytes(), &result)
 		if result.Code != 0 || result.Data.Status != "cancelled" || !result.Data.Stopped {
 			t.Fatalf("stop API: %s", w.Body)
+		}
+		payload, _ = json.Marshal(map[string]string{"kind": kind, "taskId": id})
+		repeated := httptest.NewRequest(http.MethodPost, "/api/v1/canvas/tasks/stop", bytes.NewReader(payload)).WithContext(service.WithUser(context.Background(), user))
+		repeatedResponse := httptest.NewRecorder()
+		StopCanvasTask(repeatedResponse, repeated)
+		if json.Unmarshal(repeatedResponse.Body.Bytes(), &result) != nil || repeatedResponse.Code != http.StatusOK || result.Data.Status != "cancelled" || result.Data.Stopped {
+			t.Fatalf("repeat stop API: %d %s", repeatedResponse.Code, repeatedResponse.Body)
 		}
 		select {
 		case <-cancelled:

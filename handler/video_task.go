@@ -81,7 +81,7 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 		failAIChannelSelect(w, err, "AI 接口请求失败")
 		return
 	}
-	credits := 0
+	credits := 0.0
 	if userChannelID == "" {
 		credits, err = service.ModelCost(channel.ID, modelName)
 		if err != nil {
@@ -89,7 +89,7 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 			Fail(w, "AI 接口请求失败")
 			return
 		}
-		credits *= readAIRequestCount(body, contentType)
+		credits *= float64(readAIRequestCount(body, contentType, true))
 	}
 	upstreamModel := upstreamAIModel(channel, modelName)
 	upstreamPath := resolveAIProxyPath(channel, upstreamModel, "/videos")
@@ -670,8 +670,8 @@ func findFirstHTTPURL(value any) string {
 	return ""
 }
 
-func refundVideoCredits(userID string, channelID string, modelName string, credits int, endpoint string) {
+func refundVideoCredits(userID string, channelID string, modelName string, credits float64, endpoint string) {
 	if err := service.RefundUserCredits(userID, channelID, modelName, credits, endpoint); err != nil {
-		log.Printf("AI video refund credits failed: user=%s model=%s credits=%d err=%v", userID, modelName, credits, err)
+		log.Printf("AI video refund credits failed: user=%s model=%s credits=%g err=%v", userID, modelName, credits, err)
 	}
 }

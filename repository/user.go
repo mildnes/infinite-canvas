@@ -98,7 +98,7 @@ func SetUserGroup(id, groupID, now string) (model.User, error) {
 	return user, nil
 }
 
-func ConsumeUserCredits(id string, credits int, now string, log model.CreditLog, task any) (model.User, bool, error) {
+func ConsumeUserCredits(id string, credits float64, now string, log model.CreditLog, task any) (model.User, bool, error) {
 	db, err := DB()
 	if err != nil {
 		return model.User{}, false, err
@@ -110,8 +110,8 @@ func ConsumeUserCredits(id string, credits int, now string, log model.CreditLog,
 	var user model.User
 	consumed := false
 	err = db.Transaction(func(tx *gorm.DB) error {
-		update := tx.Model(&model.User{}).Where("id = ? AND credits >= ?", id, credits).Updates(map[string]any{
-			"credits":    gorm.Expr("credits - ?", credits),
+		update := tx.Model(&model.User{}).Where("id = ? AND credits >= CAST(? AS DECIMAL(20,2))", id, credits).Updates(map[string]any{
+			"credits":    gorm.Expr("ROUND(credits - CAST(? AS DECIMAL(20,2)), 2)", credits),
 			"updated_at": now,
 		})
 		if update.Error != nil || update.RowsAffected == 0 {
@@ -137,7 +137,7 @@ func ConsumeUserCredits(id string, credits int, now string, log model.CreditLog,
 	return user, consumed, err
 }
 
-func RefundUserCredits(id string, credits int, now string) (model.User, bool, error) {
+func RefundUserCredits(id string, credits float64, now string) (model.User, bool, error) {
 	db, err := DB()
 	if err != nil {
 		return model.User{}, false, err
@@ -145,12 +145,12 @@ func RefundUserCredits(id string, credits int, now string) (model.User, bool, er
 	return refundUserCredits(db, id, credits, now)
 }
 
-func refundUserCredits(db *gorm.DB, id string, credits int, now string) (model.User, bool, error) {
+func refundUserCredits(db *gorm.DB, id string, credits float64, now string) (model.User, bool, error) {
 	if credits <= 0 {
 		return findUser(db, "id = ?", id)
 	}
 	tx := db.Model(&model.User{}).Where("id = ?", id).Updates(map[string]any{
-		"credits":    gorm.Expr("credits + ?", credits),
+		"credits":    gorm.Expr("ROUND(credits + CAST(? AS DECIMAL(20,2)), 2)", credits),
 		"updated_at": now,
 	})
 	if tx.Error != nil {
