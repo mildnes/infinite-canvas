@@ -387,6 +387,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const [canvasTool, setCanvasTool] = useState<"select" | "pan">("select");
     const [size, setSize] = useState({ width: 1200, height: 720 });
     const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
+    const [editRequestNonces, setEditRequestNonces] = useState<Record<string, number>>({});
     const [agentReferenceNodeClick, setAgentReferenceNodeClick] = useState<{ nodeId: string | null; version: number }>({ nodeId: null, version: 0 });
     const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
     const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
@@ -439,6 +440,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const [dropTargetGroupId, setDropTargetGroupId] = useState<string | null>(null);
     const [referencePickerNodeId, setReferencePickerNodeId] = useState<string | null>(null);
     const [canvasNow, setCanvasNow] = useState(Date.now());
+    const requestTextEdit = useCallback((node: CanvasNodeData) => {
+        setEditRequestNonces((current) => ({ ...current, [node.id]: (current[node.id] || 0) + 1 }));
+    }, []);
     const warnedImageOutputFallbacksRef = useRef(new Set<string>());
     const resolveCanvasImageOutputFormat = useCallback((config: AiConfig, notifyFallback = true) => {
         const model = config.imageModel || config.model;
@@ -4471,6 +4475,7 @@ const generateAngleNode = useCallback(
                         <CanvasNode
                             key={node.id}
                             data={node}
+                            editRequestNonce={editRequestNonces[node.id] ?? 0}
                             scale={viewport.k}
                             isSelected={selectedNodeIds.has(node.id)}
                             isRelated={relatedHighlight.nodeIds.has(node.id)}
@@ -4620,6 +4625,7 @@ const generateAngleNode = useCallback(
                     onKeep={keepNodeToolbar}
                     onLeave={hideNodeToolbar}
                     onInfo={(node) => setInfoNodeId(node.id)}
+                    onEditText={requestTextEdit}
                     onDecreaseFont={(node) => handleFontSizeChange(node.id, Math.max(10, (node.metadata?.fontSize || 14) - 2))}
                     onIncreaseFont={(node) => handleFontSizeChange(node.id, Math.min(32, (node.metadata?.fontSize || 14) + 2))}
                     onToggleDialog={(node) => setDialogNodeId((current) => (current === node.id ? null : node.id))}
@@ -4909,7 +4915,6 @@ const generateAngleNode = useCallback(
             </section>
             {assistantMounted ? (
                 <CanvasAssistantPanel
-                    canvasId={projectId}
                     nodes={nodes}
                     selectedNodeIds={selectedNodeIds}
                     referenceNodeClick={agentReferenceNodeClick}
@@ -4919,6 +4924,7 @@ const generateAngleNode = useCallback(
                     width={agentPanel.width}
                     onWidthChange={(width) => setAgentPanel((current) => ({ ...current, width }))}
                     onFocusNode={focusNode}
+                    onSelectNodeIds={setSelectedNodeIds}
                     onSessionsChange={handleAssistantSessionsChange}
                     onAgentConfigChange={handleAgentConfigChange}
                     onPasteImage={pasteAssistantImage}
