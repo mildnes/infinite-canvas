@@ -66,7 +66,7 @@ type VideoTaskPollUpdate struct {
 	ResponseBody string
 }
 
-type VideoTaskPollFunc func(model.VideoTask) (VideoTaskPollUpdate, error)
+type VideoTaskPollFunc func(context.Context, model.VideoTask) (VideoTaskPollUpdate, error)
 
 func CreateVideoTask(input VideoTaskCreateInput) (model.VideoTask, error) {
 	current := now()
@@ -101,12 +101,14 @@ func CreateVideoTask(input VideoTaskCreateInput) (model.VideoTask, error) {
 		CreatedAt:       current,
 		UpdatedAt:       current,
 	}
-	if !IsCompletedVideoTaskStatus(task.Status) && !IsFailedVideoTaskStatus(task.Status) {
+	if !IsTerminalGenerationTaskStatus(task.Status) {
 		task.StartedAt = current
 	}
 	if IsCompletedVideoTaskStatus(task.Status) || task.VideoURL != "" {
 		task.Status = "completed"
 		task.Progress = 100
+		task.CompletedAt = current
+	} else if IsCancelledVideoTaskStatus(task.Status) {
 		task.CompletedAt = current
 	} else if IsFailedVideoTaskStatus(task.Status) || task.Error != "" {
 		task.Status = "failed"
@@ -135,7 +137,7 @@ func CreateVideoTask(input VideoTaskCreateInput) (model.VideoTask, error) {
 			log.Printf("sync video media failed (local preserved): task=%s object=%s err=%v", task.ID, persistedObjectID, syncErr)
 		}
 	}
-	if err == nil && input.WorkflowRef == "" && !IsCompletedVideoTaskStatus(saved.Status) && !IsFailedVideoTaskStatus(saved.Status) {
+	if err == nil && input.WorkflowRef == "" && !IsCompletedVideoTaskStatus(saved.Status) && !IsFailedVideoTaskStatus(saved.Status) && !IsCancelledVideoTaskStatus(saved.Status) {
 		WakeVideoTaskPoller()
 	}
 	return saved, err
@@ -318,7 +320,15 @@ func runVideoTaskPoller() {
 					if poll == nil {
 						return
 					}
-					update, err := poll(task)
+					ctx, release := CanvasTaskContext("video", task.UserID, task.ID)
+					defer release()
+					if ctx.Err() != nil {
+						return
+					}
+					update, err := poll(ctx, task)
+					if ctx.Err() != nil {
+						return
+					}
 					if err != nil {
 						update = VideoTaskPollUpdate{Status: task.Status, ErrorDetail: err.Error()}
 					}
@@ -355,6 +365,13 @@ func waitForNextVideoTaskPoll() {
 }
 
 func UpdateVideoTaskFromPoll(task model.VideoTask, update VideoTaskPollUpdate) error {
+	ctx, releaseRun := CanvasTaskContext("video", task.UserID, task.ID)
+	defer releaseRun()
+	releaseResult, active := CanvasTaskResultGuard(ctx, "video", task.UserID, task.ID)
+	if !active {
+		return nil
+	}
+	defer releaseResult()
 	current := now()
 	task.Status = NormalizeVideoTaskStatus(firstVideoTaskValue(update.Status, task.Status))
 	if task.Status == "" {
@@ -387,7 +404,7 @@ func UpdateVideoTaskFromPoll(task model.VideoTask, update VideoTaskPollUpdate) e
 	persistenceFailed := false
 	if (task.VideoURL != "" || IsCompletedVideoTaskStatus(task.Status)) && task.StorageKey == "" {
 		var persistErr error
-		persistedObjectID, persistErr = persistCompletedVideoTask(&task)
+		persistedObjectID, persistErr = persistCompletedVideoTaskContext(ctx, &task)
 		if persistErr != nil {
 			persistenceFailed = true
 			task.Status = "failed"
@@ -401,16 +418,21 @@ func UpdateVideoTaskFromPoll(task model.VideoTask, update VideoTaskPollUpdate) e
 		task.CompletedAt = current
 		task.Error = ""
 		task.ErrorDetail = ""
+	} else if IsCancelledVideoTaskStatus(task.Status) {
+		task.CompletedAt = current
 	} else if task.Error != "" || IsFailedVideoTaskStatus(task.Status) {
 		task.Status = "failed"
 		task.CompletedAt = current
+	}
+	if ctx.Err() != nil {
+		return nil
 	}
 	updated, err := repository.SavePendingVideoTaskPoll(task)
 	if err != nil {
 		return err
 	}
 	if updated && persistedObjectID != "" {
-		if err := SyncGeneratedMediaForUser(context.Background(), task.UserID, persistedObjectID); err != nil {
+		if err := SyncGeneratedMediaForUser(ctx, task.UserID, persistedObjectID); err != nil {
 			log.Printf("sync video media failed (local preserved): task=%s object=%s err=%v", task.ID, persistedObjectID, err)
 		}
 	}
@@ -424,11 +446,15 @@ func UpdateVideoTaskFromPoll(task model.VideoTask, update VideoTaskPollUpdate) e
 }
 
 func persistCompletedVideoTask(task *model.VideoTask) (string, error) {
+	return persistCompletedVideoTaskContext(context.Background(), task)
+}
+
+func persistCompletedVideoTaskContext(ctx context.Context, task *model.VideoTask) (string, error) {
 	sourceURL := strings.TrimSpace(task.VideoURL)
 	if sourceURL == "" {
 		return "", errors.New("视频任务完成但没有媒体地址")
 	}
-	stored, err := PersistTrustedGeneratedMedia(context.Background(), task.UserID, sourceURL)
+	stored, err := PersistTrustedGeneratedMedia(ctx, task.UserID, sourceURL)
 	if err != nil {
 		task.OriginalURL = sourceURL
 		return "", err
@@ -444,7 +470,7 @@ func persistCompletedVideoTask(task *model.VideoTask) (string, error) {
 }
 
 func failedVideoTaskRefundAmount(task model.VideoTask, updated bool) int {
-	if updated && IsFailedVideoTaskStatus(task.Status) && task.UserChannelID == "" && task.Credits > 0 {
+	if updated && (IsFailedVideoTaskStatus(task.Status) || IsCancelledVideoTaskStatus(task.Status)) && task.UserChannelID == "" && task.Credits > 0 {
 		return task.Credits
 	}
 	return 0
@@ -454,7 +480,9 @@ func NormalizeVideoTaskStatus(status string) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "completed", "complete", "done", "succeeded", "success":
 		return "completed"
-	case "failed", "fail", "error", "cancelled", "canceled":
+	case "cancelled", "canceled":
+		return "cancelled"
+	case "failed", "fail", "error":
 		return "failed"
 	case "running", "processing", "in_progress", "in-progress":
 		return "processing"
@@ -471,6 +499,10 @@ func IsCompletedVideoTaskStatus(status string) bool {
 
 func IsFailedVideoTaskStatus(status string) bool {
 	return NormalizeVideoTaskStatus(status) == "failed"
+}
+
+func IsCancelledVideoTaskStatus(status string) bool {
+	return NormalizeVideoTaskStatus(status) == "cancelled"
 }
 
 func videoTaskTime(value time.Time) string {

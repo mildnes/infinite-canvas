@@ -6,6 +6,7 @@ import ts from "typescript";
 import { stripReferenceMetadata } from "./prompt-reference-metadata.ts";
 import { buildNodeGenerationContext, buildNodeChatMessages } from "../components/canvas-node-generation.ts";
 import { CanvasNodeType } from "../types.ts";
+import { beginTaskRun, currentTaskRun, acceptsTaskUpdate, isStoppedTask } from "../../../../lib/generation-task-run.ts";
 
 const page = readFileSync(new URL("../[id]/canvas-client-page.tsx", import.meta.url), "utf8");
 const ast = ts.createSourceFile("canvas.tsx", page, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -21,12 +22,12 @@ function harness() {
     const source = readFileSync(new URL("./canvas-media-requests.ts", import.meta.url), "utf8");
     const module = ts.createSourceFile("requests.ts", source, ts.ScriptTarget.Latest, true);
     const scope = {
-        exports: {}, stripReferenceMetadata, Error,
+        exports: {}, stripReferenceMetadata, Error, run: { controller: new AbortController() },
         createCanvasImageTask: async (...args) => { sent.push(args); return { id: "task", status: "processing" }; },
         createVideoGenerationTask: async (...args) => { sent.push(args); return { task: { id: "task", status: "processing" } }; },
     };
     vm.runInNewContext(compile(module.statements.filter((node) => !ts.isImportDeclaration(node)).map((node) => node.getText(module)).join("\n")), scope);
-    return { ...scope.exports, sent };
+    return { ...scope.exports, sent, run: scope.run };
 }
 
 const dirty = "图片1（用户图片114，左侧 Logo，场景(终版).png）保持不变。";
@@ -111,6 +112,7 @@ function callbackScope(node) {
     const state = { nodes: [node], writes: 0, notices: [], running: [] };
     const scope = {
         ...api, Error, CanvasNodeType, nodesRef: { current: state.nodes }, connectionsRef: { current: [] }, effectiveConfig: config,
+        startNodeTaskRun: () => ({ controller: new AbortController() }), guardNodeTaskResponse: () => {}, nodeRunActive: () => true,
         useUserStore: { getState: () => ({ token: "test" }) },
         isCanvasImageNodeType: (type) => ["image", "panorama"].includes(type), isPanoramaNodeType: (type) => type === "panorama",
         buildGenerationConfig: () => config, resolveCanvasImageOutputFormat: (value) => value, isAiConfigReady: () => true,
@@ -198,6 +200,7 @@ for (const index of [0, 1]) {
         const sent = [];
         await vm.runInNewContext(compile(calls("createCanvasAudioTask")[index].getText(ast)), {
             createCanvasAudioTask: async (...args) => { sent.push(args); },
+            run: { controller: new AbortController() },
             generationConfig: config, effectivePrompt: dirty, prompt: dirty,
             audioId: "node", node: { id: "node" }, projectId: "canvas", clientAudioTaskId: "client", retryAudioTaskId: "client", referenceAudio: undefined,
         });
@@ -222,4 +225,55 @@ test("Agent 生成经 handleGenerateNode 复用画布提交边界", async () => 
         handleGenerateNode: async (...args) => { sent.push(args); }, node: { id: "agent" }, mode: "image", prompt: dirty,
     });
     assert.deepEqual(Array.from(sent[0]), ["agent", "image", dirty]);
+});
+
+test("停止失败可重试：真实画布回调确认后取消 run，旧回包不能复活", async () => {
+    const node = { id: "node", type: "image", metadata: { status: "loading", imageTaskId: "task" } };
+    const state = { nodes: [node] };
+    const runs = new Map();
+    const run = beginTaskRun(runs, node.id, "image", "task", "test");
+    let calls = 0;
+    const scope = {
+        CanvasNodeType, NODE_STATUS_LOADING: "loading", isCanvasImageNodeType: () => true, isStoppedTask,
+        nodeTaskRunsRef: { current: runs }, startNodeTaskRun: () => run,
+        useUserStore: { getState: () => ({ token: "test" }) },
+        setNodes: (update) => { state.nodes = update(state.nodes); },
+        message: { error() {}, warning() {}, success() {} },
+        stopCanvasTask: async () => { calls++; if (calls === 1) throw new Error("network"); return { status: "cancelled", stopped: true }; },
+    };
+    const stop = vm.runInNewContext(compile("(" + callback("stopCanvasNode") + ")"), scope);
+    await stop(state.nodes[0]);
+    assert.equal(state.nodes[0].metadata.status, "loading");
+    assert.equal(state.nodes[0].metadata.stopState, "failed");
+    await stop(state.nodes[0]);
+    assert.equal(calls, 2);
+    assert.equal(state.nodes[0].metadata.status, "cancelled");
+    assert.equal(run.controller.signal.aborted, true);
+    assert.equal(currentTaskRun(runs, node.id, run, "test"), false);
+});
+
+test("真实节点更新函数拒绝终态后的在途响应；刷新不恢复 cancelled", () => {
+    const scope = { acceptsTaskUpdate, isStoppedTask, CanvasNodeType, canvasTaskCompleted: () => false, canvasTaskFailed: () => false, canvasVideoTaskCompleted: () => false, canvasVideoTaskFailed: () => false, parseCanvasTaskTime: () => 0, parseCanvasVideoTaskTime: () => 0, NODE_STATUS_LOADING: "loading" };
+    for (const name of ["applyCanvasVideoTaskUpdate", "applyCanvasImageTaskUpdate", "applyCanvasAudioTaskUpdate", "canvasRecoverableTaskId"]) {
+        const definition = nodes.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name);
+        scope[name] = vm.runInNewContext(compile("(" + definition.getText(ast) + ")"), scope);
+    }
+    for (const status of ["cancelled", "success", "error"]) {
+        const node = { id: "node", metadata: { status, imageTaskId: "old", content: "unchanged" } };
+        for (const name of ["applyCanvasVideoTaskUpdate", "applyCanvasImageTaskUpdate", "applyCanvasAudioTaskUpdate"]) {
+            scope.canvasImageTaskURLs = () => [];
+            const args = name === "applyCanvasVideoTaskUpdate" ? [{}, 0, {}] : name === "applyCanvasImageTaskUpdate" ? [0, {}] : [0];
+            assert.equal(scope[name]([node], "node", { id: "old", status: "processing" }, ...args)[0], node);
+        }
+    }
+    assert.equal(scope.canvasRecoverableTaskId({ type: "image", metadata: { status: "cancelled", imageTaskId: "old" } }), "");
+});
+
+test("已停止重生成：真实 retry 回调使用新 clientTaskId", async () => {
+    const node = { id: "node", type: "image", width: 320, height: 180, metadata: { status: "cancelled", imageTaskId: "old", generationType: "edit", prompt: dirty } };
+    const { scope, api } = callbackScope(node);
+    await vm.runInNewContext(compile("(" + callback("handleRetryNode") + ")"), scope)(node);
+    assert.notEqual(api.sent[0][3].clientTaskId, "old");
+    assert.match(api.sent[0][3].clientTaskId, /^client_image_task_node-/);
+    assert.ok(api.sent[0][3].signal instanceof AbortSignal);
 });

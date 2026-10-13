@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { App, Modal, Segmented, Tooltip } from "antd";
+import { taskStopAction } from "@/lib/generation-task-run";
 import { Download, Ellipsis, FolderPlus, Image as ImageIcon, Info, MessageSquare, Minus, Music2, Pencil, Plus, RefreshCw, Scissors, Settings2, Trash2, Upload, Video } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
@@ -40,6 +41,7 @@ type CanvasNodeHoverToolbarProps = {
     onViewImage: (node: CanvasNodeData) => void;
     onReversePrompt: (node: CanvasNodeData) => void;
     onRetry: (node: CanvasNodeData) => void;
+    onStop?: (node: CanvasNodeData) => void;
     onToggleFreeResize: (node: CanvasNodeData) => void;
     onDelete: (node: CanvasNodeData) => void;
 };
@@ -52,6 +54,7 @@ type ToolbarTool = {
     onClick: () => void;
     active?: boolean;
     danger?: boolean;
+    disabled?: boolean;
 };
 
 export function CanvasNodeHoverToolbar({
@@ -81,6 +84,7 @@ export function CanvasNodeHoverToolbar({
     onViewImage,
     onReversePrompt,
     onRetry,
+    onStop,
     onToggleFreeResize,
     onDelete,
 }: CanvasNodeHoverToolbarProps) {
@@ -139,7 +143,9 @@ export function CanvasNodeHoverToolbar({
     const isText = node.type === CanvasNodeType.Text;
     const isConfig = node.type === CanvasNodeType.Config;
     const canOpenDialog = isText || hasImage || isVideo;
-    const canRetry = node.metadata?.status === "error";
+    const canRetry = node.metadata?.status === "error" || node.metadata?.status === "cancelled";
+    const stopAction = taskStopAction(node.metadata?.status, node.metadata?.stopState);
+    const canStop = node.metadata?.status === "loading" && Boolean(onStop) && (isImage || isVideo || isAudio);
     const quickImageToolIdSet = new Set(quickImageToolIds);
     const copyImagePrompt = (target: CanvasNodeData) => {
         const prompt = (isPanoramaNodeType(target.type) ? target.metadata?.panoramaSourcePrompt : target.metadata?.prompt)?.trim();
@@ -163,7 +169,8 @@ export function CanvasNodeHoverToolbar({
         { id: "delete", title: "移除节点", label: "删除", icon: <Trash2 className="size-4" />, onClick: () => onDelete(node), danger: true },
     ];
     const nodeToolbarTools: ToolbarTool[] = [
-        ...(canRetry ? [{ id: "retry", title: "重新生成", label: "重试", icon: <RefreshCw className="size-4" />, onClick: () => onRetry(node) }] : []),
+        ...(canStop && stopAction ? [{ id: "stop", title: stopAction.label === "停止" ? "停止生成" : stopAction.label, label: stopAction.label, disabled: stopAction.disabled, icon: <RefreshCw className="size-4" />, onClick: () => onStop?.(node) }] : []),
+        ...(canRetry ? [{ id: "retry", title: "重新生成", label: node.metadata?.status === "cancelled" ? "重新生成" : "重试", icon: <RefreshCw className="size-4" />, onClick: () => onRetry(node) }] : []),
         ...(hasImage || hasVideo || isText ? [{ id: "saveAsset", title: "加入我的素材", label: "存素材", icon: <FolderPlus className="size-4" />, onClick: () => onSaveAsset(node) }] : []),
         ...(canUploadMediaToCloud ? [{ id: "uploadMediaToCloud", title: "上传至云存储", label: "上传至云存储", icon: <Upload className="size-4" />, onClick: () => onUploadMediaToCloud(node) }] : []),
         ...(canUploadImageToCloud ? [{ id: "uploadImageToCloud", title: "上传至云存储", label: "上传至云存储", icon: <Upload className="size-4" />, onClick: () => onUploadImageToCloud(node) }] : []),
@@ -317,11 +324,11 @@ export function CanvasNodeInfoModal({ node, open, onClose }: { node: CanvasNodeD
     );
 }
 
-function ToolbarAction({ title, label, icon, onClick, showLabel, active = false, danger = false }: ToolbarTool & { showLabel: boolean }) {
+function ToolbarAction({ title, label, icon, onClick, showLabel, active = false, danger = false, disabled = false }: ToolbarTool & { showLabel: boolean }) {
     const hasText = showLabel && Boolean(label);
     return (
         <Tooltip title={title} placement="top" mouseEnterDelay={0.2} color="#ffffff">
-            <button type="button" className={`group relative flex h-12 items-center whitespace-nowrap ${danger ? "text-[#ef4444]" : ""}`} onClick={onClick} aria-label={title}>
+            <button type="button" disabled={disabled} className={`group relative flex h-12 items-center whitespace-nowrap disabled:opacity-50 ${danger ? "text-[#ef4444]" : ""}`} onClick={onClick} aria-label={title}>
                 <span className={`flex h-8 items-center ${hasText ? "gap-2 px-2.5" : "justify-center px-2"} rounded-lg transition group-hover:bg-white/10 ${active ? "bg-white/10" : ""}`}>
                     {icon}
                     {hasText ? <span>{label}</span> : null}

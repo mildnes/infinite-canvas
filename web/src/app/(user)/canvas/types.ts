@@ -22,7 +22,7 @@ export enum CanvasNodeType {
     Group = "group",
 }
 
-export type CanvasNodeStatus = "idle" | "success" | "loading" | "error";
+export type CanvasNodeStatus = "idle" | "success" | "loading" | "error" | "cancelled";
 export type CanvasGenerationMode = "text" | "image" | "video" | "audio";
 export type CanvasImageGenerationType = "generation" | "edit";
 
@@ -42,6 +42,7 @@ export type CanvasNodeMetadata = {
     prompt?: string;
     excludeUpstreamText?: boolean;
     status?: CanvasNodeStatus;
+    stopState?: "stopping" | "failed";
     errorDetails?: string;
     fontSize?: number;
     generationMode?: CanvasGenerationMode;

@@ -136,7 +136,15 @@ func CreateWorkflowTask(ctx context.Context, user model.AuthUser, input Workflow
 		logInput.RequestBody = string(workflowLogJSON(request.PayloadJSON, ""))
 		return WorkflowTaskResult{ID: taskID, Status: "queued", Progress: 0}, nil
 	}
-	upstreamID, err := SubmitRunningHubTask(ctx, resolved.Channel, resolved.Entry, input, overrides, &logInput)
+	runCtx, releaseRun := CanvasTaskContext("workflow", user.ID, taskID)
+	defer releaseRun()
+	if runCtx.Err() != nil {
+		return WorkflowTaskResult{ID: taskID, Status: "cancelled"}, nil
+	}
+	upstreamID, err := SubmitRunningHubTask(runCtx, resolved.Channel, resolved.Entry, input, overrides, &logInput)
+	if runCtx.Err() != nil {
+		return WorkflowTaskResult{ID: taskID, Status: "cancelled"}, nil
+	}
 	if err != nil {
 		if finishErr := finishWorkflowTask(taskID, "failed", nil, err.Error(), nil); finishErr != nil {
 			return WorkflowTaskResult{}, errors.Join(err, finishErr)
@@ -162,7 +170,7 @@ func GetWorkflowTask(ctx context.Context, user model.AuthUser, taskID string) (W
 	if err != nil {
 		return WorkflowTaskResult{}, err
 	}
-	if snapshot.result.Status == "failed" {
+	if snapshot.result.Status == "failed" || snapshot.result.Status == "cancelled" {
 		return snapshot.result, nil
 	}
 	if !hasBridge && snapshot.result.Status != "succeeded" && snapshot.upstreamID == "" {
@@ -260,6 +268,9 @@ func workflowTaskSnapshot(userID, taskID string) (workflowSnapshot, bool, error)
 }
 
 func workflowPublicStatus(status string) string {
+	if status == "cancelled" {
+		return "cancelled"
+	}
 	if status == "completed" || status == "succeeded" {
 		return "succeeded"
 	}
@@ -361,6 +372,11 @@ func workflowUpstreamID(value string) string {
 }
 
 func pollRunningHubWorkflowTask(task repository.RunningHubWorkflowTask) error {
+	ctx, releaseRun := CanvasTaskContext("workflow", task.UserID, task.ID)
+	defer releaseRun()
+	if ctx.Err() != nil {
+		return nil
+	}
 	if started, parseErr := time.Parse(time.RFC3339Nano, task.CreatedAt); parseErr == nil && time.Since(started) > workflowTaskTimeout {
 		return finishWorkflowTask(task.ID, "failed", nil, "RunningHub 任务超过 1 小时仍未完成")
 	}
@@ -380,7 +396,10 @@ func pollRunningHubWorkflowTask(task repository.RunningHubWorkflowTask) error {
 		return finishWorkflowTask(task.ID, "failed", nil, err.Error())
 	}
 	var capture AICallLogInput
-	urls, done, pollErr := PollRunningHubTask(context.Background(), resolved.Channel, upstreamID, &capture)
+	urls, done, pollErr := PollRunningHubTask(ctx, resolved.Channel, upstreamID, &capture)
+	if ctx.Err() != nil {
+		return nil
+	}
 	if errors.Is(pollErr, errRunningHubTaskTerminal) {
 		failure := strings.TrimSpace(strings.TrimPrefix(pollErr.Error(), errRunningHubTaskTerminal.Error()+":"))
 		if failure == "" {
@@ -403,7 +422,12 @@ func finishWorkflowTask(taskID, status string, urls []string, failure string, ca
 	}
 	if current, found, err := workflowTaskSnapshot(ownerID, taskID); err != nil {
 		return err
-	} else if found && (current.result.Status == "succeeded" || current.result.Status == "failed") {
+	} else if found && (current.result.Status == "succeeded" || current.result.Status == "failed" || current.result.Status == "cancelled") {
+		return nil
+	}
+	ctx, releaseRun := CanvasTaskContext("workflow", ownerID, taskID)
+	defer releaseRun()
+	if ctx.Err() != nil {
 		return nil
 	}
 	created := make([]string, 0, len(urls))
@@ -424,7 +448,7 @@ func finishWorkflowTask(taskID, status string, urls []string, failure string, ca
 				return finishWorkflowTaskFailure(taskID, "工作流媒体引用无效："+err.Error())
 			}
 			if !alreadyStored {
-				stored, err = PersistWorkflowResultMediaStable(context.Background(), ownerID, rawURL, fmt.Sprintf("workflow:%s:%d", taskID, index))
+				stored, err = PersistWorkflowResultMediaStable(ctx, ownerID, rawURL, fmt.Sprintf("workflow:%s:%d", taskID, index))
 				if err != nil {
 					for _, objectID := range created {
 						DiscardGeneratedMedia(objectID)
@@ -456,6 +480,9 @@ func finishWorkflowTask(taskID, status string, urls []string, failure string, ca
 				CreatedAt: now(),
 			}
 		}
+	}
+	if ctx.Err() != nil {
+		return nil
 	}
 	changed, _, rawRef, userID, err := repository.CompleteWorkflowTask(taskID, status, urls, metadata, failure, newRefundLog)
 	finishedAt := time.Now()

@@ -72,7 +72,7 @@ func CompleteWorkflowTask(taskID, status string, urls []string, metadata []model
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&task, "id = ?", taskID).Error; err != nil {
 				return err
 			}
-			if task.Status == "completed" || task.Status == "failed" {
+			if task.Status == "completed" || task.Status == "failed" || task.Status == "cancelled" {
 				return nil
 			}
 			task.Status, task.Error, task.UpdatedAt, task.CompletedAt = status, failure, current, current
@@ -93,7 +93,7 @@ func CompleteWorkflowTask(taskID, status string, urls []string, metadata []model
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&task, "id = ?", taskID).Error; err != nil {
 				return err
 			}
-			if task.Status == "completed" || task.Status == "failed" {
+			if task.Status == "completed" || task.Status == "failed" || task.Status == "cancelled" {
 				return nil
 			}
 			task.Status, task.Error, task.UpdatedAt, task.CompletedAt = status, failure, current, current
@@ -113,7 +113,7 @@ func CompleteWorkflowTask(taskID, status string, urls []string, metadata []model
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&task, "id = ?", taskID).Error; err != nil {
 				return err
 			}
-			if task.Status == "completed" || task.Status == "failed" {
+			if task.Status == "completed" || task.Status == "failed" || task.Status == "cancelled" {
 				return nil
 			}
 			task.Status, task.Error, task.UpdatedAt, task.CompletedAt = status, failure, current, current

@@ -79,7 +79,7 @@ export type CanvasImageTask = {
     imageOutputNotice?: string;
     imageOutputNoticeCode?: string;
 };
-export type CanvasImageTaskOptions = { nodeId?: string; source?: "canvas" | "image-workbench" | "workflow"; sourceId?: string; clientTaskId?: string };
+export type CanvasImageTaskOptions = { nodeId?: string; source?: "canvas" | "image-workbench" | "workflow"; sourceId?: string; clientTaskId?: string; signal?: AbortSignal };
 
 type ParsedImageResponse = {
     images: GeneratedImage[];
@@ -97,6 +97,7 @@ export class ImageRequestError extends Error {
 }
 
 type ImageRequestParams = {
+    signal?: AbortSignal;
     n: number;
     quality: string;
     size?: string;
@@ -879,7 +880,7 @@ async function requestImageGenerationSingle(config: AiConfig & { seedIndex?: num
                             method: "POST",
                             headers: aiHeaders(config, "application/json"),
                             body: JSON.stringify(body),
-                            signal,
+                            signal: params.signal ? AbortSignal.any([signal, params.signal]) : signal,
                         }),
                     ),
                 ),
@@ -905,7 +906,7 @@ async function requestImageGenerationSingle(config: AiConfig & { seedIndex?: num
     const directProvider = !usesAccountProxy(config) ? directAIProviderForConfig(config) : null;
     if (directProvider) {
         const { requestDirectImages } = await import("@/services/api/direct-ai");
-        return parseImagePayload(await requestDirectImages(config, directProvider, "/images/generations", body, params.timeoutSeconds), mime);
+        return parseImagePayload(await requestDirectImages(config, directProvider, "/images/generations", body, params.timeoutSeconds, params.signal), mime);
     }
 
     return requestAndParseImages(
@@ -920,7 +921,7 @@ async function requestImageGenerationSingle(config: AiConfig & { seedIndex?: num
                         method: "POST",
                         headers: aiHeaders(config, "application/json"),
                         body: JSON.stringify(body),
-                        signal,
+                        signal: params.signal ? AbortSignal.any([signal, params.signal]) : signal,
                     }),
                 ),
             ),
@@ -965,7 +966,7 @@ async function requestGrokImageEditSingle(config: AiConfig, prompt: string, refe
                         method: "POST",
                         headers: aiHeaders(config, "application/json"),
                         body: JSON.stringify(body),
-                        signal,
+                        signal: params.signal ? AbortSignal.any([signal, params.signal]) : signal,
                     }),
                 ),
             ),
@@ -1005,7 +1006,7 @@ async function requestImageEditSingle(config: AiConfig, prompt: string, referenc
     const directProvider = !usesAccountProxy(config) ? directAIProviderForConfig(config) : null;
     if (directProvider) {
         const { requestDirectImages } = await import("@/services/api/direct-ai");
-        return parseImagePayload(await requestDirectImages(config, directProvider, "/images/edits", formData, params.timeoutSeconds), mime);
+        return parseImagePayload(await requestDirectImages(config, directProvider, "/images/edits", formData, params.timeoutSeconds, params.signal), mime);
     }
 
     return requestAndParseImages(
@@ -1020,7 +1021,7 @@ async function requestImageEditSingle(config: AiConfig, prompt: string, referenc
                         method: "POST",
                         headers: aiHeaders(config),
                         body: formData,
-                        signal,
+                        signal: params.signal ? AbortSignal.any([signal, params.signal]) : signal,
                     }),
                 ),
             ),
@@ -1109,7 +1110,7 @@ async function requestResponsesSingle(config: AiConfig, prompt: string, inputIma
                         method: "POST",
                         headers: aiHeaders(config, "application/json"),
                         body: JSON.stringify(body),
-                        signal,
+                        signal: params.signal ? AbortSignal.any([signal, params.signal]) : signal,
                     }),
                 ),
             ),
@@ -1136,7 +1137,7 @@ async function requestChatImagesSingle(config: AiConfig, prompt: string, inputIm
             method: "POST",
             headers: aiHeaders(config, "application/json"),
             body: JSON.stringify(body),
-            signal,
+            signal: params.signal ? AbortSignal.any([signal, params.signal]) : signal,
         }))),
         async (response, responseMime) => {
             const payload = await response.json() as ChatImagesApiResponse;
@@ -1172,13 +1173,15 @@ async function requestAndParseImages(config: AiConfig, endpoint: string, request
     }
 }
 
-async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[]): Promise<GeneratedImage[]> {
+async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[], signal?: AbortSignal): Promise<GeneratedImage[]> {
+    signal?.throwIfAborted();
     assertImageReferencesSupported(config.model, references);
     const params = createImageRequestParams(config);
+    params.signal = signal;
     const inputImageDataUrls = references.length ? await Promise.all(references.map((image) => imageToDataUrl(image))) : [];
     const useConcurrentSingleRequests = isGeminiConfig(config) || config.apiMode === "responses" || config.apiMode === "chat" || config.codexCli || config.streamImages || isZhipuImageModel(config.model);
     if (params.n > 1 && useConcurrentSingleRequests) {
-        const results = await Promise.allSettled(Array.from({ length: params.n }, () => requestImages({ ...config, count: "1" }, prompt, references)));
+        const results = await Promise.allSettled(Array.from({ length: params.n }, () => requestImages({ ...config, count: "1" }, prompt, references, signal)));
         const images = results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
         if (images.length) return images;
         const firstError = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
@@ -1260,7 +1263,8 @@ export async function requestEdit(config: AiConfig & { seedIndex?: number; seedC
 
 export async function createCanvasImageTask(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[], options: CanvasImageTaskOptions = {}): Promise<CanvasImageTask> {
     if (!usesAccountProxy(config)) {
-        const images = await requestImages({ ...config, count: "1" }, prompt, references);
+        const images = await requestImages({ ...config, count: "1" }, prompt, references, options.signal);
+        options.signal?.throwIfAborted();
         const [image] = images;
         if (!image) throw new Error("接口没有返回图片");
         return syncCanvasImageTask({
@@ -1279,7 +1283,8 @@ export async function createCanvasImageTask(config: AiConfig & { seedIndex?: num
     const requestOwner = captureImageRequestOwner();
     const params = createImageRequestParams({ ...config, count: "1" });
     const request = await createCanvasImageTaskRequest({ ...config, count: "1" }, prompt, references, params, options);
-    const response = await fetch("/api/v1/canvas/image-tasks", request);
+    options.signal?.throwIfAborted();
+    const response = await fetch("/api/v1/canvas/image-tasks", { ...request, signal: options.signal });
     if (!response.ok) {
         const error = await fetchErrorDetail(response, "图片任务创建失败");
         throw new ImageRequestError(error.message, error.detail);
@@ -1293,11 +1298,12 @@ export async function createCanvasImageTask(config: AiConfig & { seedIndex?: num
     return syncCanvasImageTask(normalizeCanvasTaskOutputMime(payload.data, responseMime));
 }
 
-export async function pollCanvasImageTaskStatus(taskId: string): Promise<CanvasImageTask> {
+export async function pollCanvasImageTaskStatus(taskId: string, signal?: AbortSignal): Promise<CanvasImageTask> {
     const requestOwner = captureImageRequestOwner();
     const token = useUserStore.getState().token;
     if (!token) throw new Error("请先登录后再使用云端渠道");
     const response = await fetch(`/api/v1/canvas/image-tasks/${encodeURIComponent(taskId)}`, {
+        signal,
         headers: { Authorization: `Bearer ${token}` },
     });
     if (!response.ok) {
@@ -1530,7 +1536,7 @@ async function requestGeminiImageSingle(config: AiConfig, prompt: string, refere
         params.timeoutSeconds,
         () => requestWithTransientRetry(() => withTimeout(params.timeoutSeconds, (signal) => fetch(
             proxy ? `/api/v1${references.length ? "/images/edits" : "/images/generations"}` : geminiActionUrl(channel?.baseUrl || config.baseUrl, config.model, "generateContent"),
-            { method: "POST", headers: proxy ? aiHeaders(config, "application/json") : geminiDirectHeaders(config), body: JSON.stringify(nativeBody), signal },
+            { method: "POST", headers: proxy ? aiHeaders(config, "application/json") : geminiDirectHeaders(config), body: JSON.stringify(nativeBody), signal: params.signal ? AbortSignal.any([signal, params.signal]) : signal },
         ))),
         async (response) => {
             const payload = await response.json() as Record<string, unknown>;
@@ -1758,7 +1764,7 @@ async function requestAgnesImageEdit(config: AiConfig & { seedIndex?: number; se
                         method: "POST",
                         headers: aiHeaders(config, "application/json"),
                         body: JSON.stringify(body),
-                        signal,
+                        signal: params.signal ? AbortSignal.any([signal, params.signal]) : signal,
                     }),
                 ),
             ),

@@ -42,6 +42,12 @@ export async function deleteCanvasTasks(sourceId: string, nodeIds: string[] = []
     );
 }
 
+export async function stopCanvasTask(kind: "image" | "audio" | "video" | "workflow", taskId: string) {
+    const token = useUserStore.getState().token;
+    if (!token || !taskId.trim()) return;
+    return apiPost<{ status: string; stopped: boolean; creditsRefunded: boolean }>("/api/v1/canvas/tasks/stop", { kind, taskId: taskId.trim() }, token);
+}
+
 export async function deleteCanvasProjects(ids: string[]) {
     const token = useUserStore.getState().token;
     const projectIds = Array.from(

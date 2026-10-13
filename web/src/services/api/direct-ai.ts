@@ -19,10 +19,11 @@ type SerializedDirectBody = { body: unknown; references: DirectReference[] };
 const DIRECT_REFERENCE_HOST = "direct-reference.invalid";
 const DIRECT_IMAGE_POLL_INTERVAL_MS = 2000;
 
-export async function requestDirectImages(config: AiConfig, provider: DirectAIProvider, endpoint: "/images/generations" | "/images/edits", body: DirectRequestBody, timeoutSeconds: number): Promise<DirectImageResponse> {
+export async function requestDirectImages(config: AiConfig, provider: DirectAIProvider, endpoint: "/images/generations" | "/images/edits", body: DirectRequestBody, timeoutSeconds: number, signal?: AbortSignal): Promise<DirectImageResponse> {
     const startedAt = Date.now();
     const { plan, requestBody, apiKey, protocol } = await prepareDirectRequest(config, provider, endpoint, body);
-    const created = await requestDirectJSON(protocol, plan.url, apiKey, plan.contentType, requestBody, remainingTimeoutMs(startedAt, timeoutSeconds));
+    signal?.throwIfAborted();
+    const created = await requestDirectJSON(protocol, plan.url, apiKey, plan.contentType, requestBody, remainingTimeoutMs(startedAt, timeoutSeconds), signal);
     const directUrls = protocol.readCreatedImageURLs?.(created) || [];
     if (directUrls.length) return directImageResponse(directUrls);
     const taskId = protocol.readTaskId(created);
@@ -31,7 +32,8 @@ export async function requestDirectImages(config: AiConfig, provider: DirectAIPr
     for (;;) {
         const waitMs = Math.min(DIRECT_IMAGE_POLL_INTERVAL_MS, remainingTimeoutMs(startedAt, timeoutSeconds));
         await delay(waitMs);
-        const payload = await requestDirectJSON(protocol, directPollURL(config, protocol, taskId), apiKey, "", undefined, remainingTimeoutMs(startedAt, timeoutSeconds));
+        signal?.throwIfAborted();
+        const payload = await requestDirectJSON(protocol, directPollURL(config, protocol, taskId), apiKey, "", undefined, remainingTimeoutMs(startedAt, timeoutSeconds), signal);
         const result = protocol.readImagePoll(payload);
         if (result.error) throw new Error(result.error);
         if (result.urls.length) return directImageResponse(result.urls);
@@ -39,9 +41,10 @@ export async function requestDirectImages(config: AiConfig, provider: DirectAIPr
     }
 }
 
-export async function createDirectVideoTask(config: AiConfig, provider: DirectAIProvider, body: DirectRequestBody): Promise<DirectVideoResponse> {
+export async function createDirectVideoTask(config: AiConfig, provider: DirectAIProvider, body: DirectRequestBody, signal?: AbortSignal): Promise<DirectVideoResponse> {
     const { plan, requestBody, apiKey, protocol } = await prepareDirectRequest(config, provider, "/videos", body);
-    const payload = await requestDirectJSON(protocol, plan.url, apiKey, plan.contentType, requestBody);
+    signal?.throwIfAborted();
+    const payload = await requestDirectJSON(protocol, plan.url, apiKey, plan.contentType, requestBody, undefined, signal);
     const taskId = protocol.readTaskId(payload);
     if (!taskId) throw new Error(protocol.readError(payload) || "视频接口没有返回任务 ID");
     return {
@@ -52,10 +55,10 @@ export async function createDirectVideoTask(config: AiConfig, provider: DirectAI
     };
 }
 
-export async function pollDirectVideoTask(config: AiConfig, provider: DirectAIProvider, pollId: string): Promise<DirectVideoResponse> {
+export async function pollDirectVideoTask(config: AiConfig, provider: DirectAIProvider, pollId: string, signal?: AbortSignal): Promise<DirectVideoResponse> {
     const channel = requireDirectChannel(config);
     const protocol = directProtocolAdapters[provider];
-    const payload = await requestDirectJSON(protocol, directPollURL(config, protocol, pollId), channel.apiKey, "", undefined);
+    const payload = await requestDirectJSON(protocol, directPollURL(config, protocol, pollId), channel.apiKey, "", undefined, undefined, signal);
     return protocol.readVideoPoll(payload, pollId, config.model || config.videoModel);
 }
 
@@ -265,7 +268,7 @@ function replaceDirectMarkers(value: unknown, uploaded: Map<string, string>): un
     return value;
 }
 
-async function requestDirectJSON(protocol: DirectProtocolAdapter, url: string, apiKey: string, contentType: string, body?: unknown, timeoutMs?: number) {
+async function requestDirectJSON(protocol: DirectProtocolAdapter, url: string, apiKey: string, contentType: string, body?: unknown, timeoutMs?: number, signal?: AbortSignal) {
     const controller = new AbortController();
     const timeout = timeoutMs ? window.setTimeout(() => controller.abort(), timeoutMs) : 0;
     try {
@@ -276,7 +279,7 @@ async function requestDirectJSON(protocol: DirectProtocolAdapter, url: string, a
                 ...(body === undefined ? {} : { "Content-Type": contentType || "application/json" }),
             },
             ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-            signal: controller.signal,
+            signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
         });
         const payload = await readDirectResponse(response);
         if (!response.ok) throw new Error(protocol.readError(payload) || `上游请求失败：${response.status}`);

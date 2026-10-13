@@ -112,7 +112,7 @@ func TestProxyModelMappingKeepsLocalSelectionBillingAuditAndCanvasTask(t *testin
 	if paths[1] != "/v1/tts/voices?model=upstream" {
 		t.Fatalf("GET query was not mapped: %v", paths)
 	}
-	_, status, _, err := executeCanvasAIRequest(user, "/images/generations", body, "application/json", channel.ID, "")
+	_, status, _, err := executeCanvasAIRequest(context.Background(), user, "/images/generations", body, "application/json", channel.ID, "")
 	if err != nil || status != http.StatusOK || len(outgoing) != 3 || outgoing[2]["model"] != "upstream" {
 		t.Fatalf("canvas request bypassed mapping: status=%d err=%v outgoing=%+v", status, err, outgoing)
 	}
@@ -142,7 +142,7 @@ func TestProxyModelMappingKeepsLocalSelectionBillingAuditAndCanvasTask(t *testin
 	if err != nil || !found || task.Model != "local-video" {
 		t.Fatalf("video task lost local model: %+v %v", task, err)
 	}
-	if _, err = pollVideoTaskFromUpstream(task); err != nil {
+	if _, err = pollVideoTaskFromUpstream(context.Background(), task); err != nil {
 		t.Fatal(err)
 	}
 	if len(paths) != 5 || paths[4] != "/v1/async-result/video-task" {

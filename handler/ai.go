@@ -190,7 +190,7 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		return
 	}
 	body, contentType, upstreamPath = prepared.body, prepared.contentType, prepared.path
-	request, err := http.NewRequest(http.MethodPost, service.BuildModelChannelURL(channel, upstreamPath), bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(r.Context(), http.MethodPost, service.BuildModelChannelURL(channel, upstreamPath), bytes.NewReader(body))
 	if err != nil {
 		log.Printf("AI proxy build request failed: url=%s err=%v", service.BuildModelChannelURL(channel, upstreamPath), err)
 		Fail(w, "AI 接口请求失败")

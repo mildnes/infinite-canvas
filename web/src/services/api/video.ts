@@ -20,7 +20,7 @@ type ApiVideoResponse = VideoResponse | ApiVideoEnvelope;
 export type VideoGenerationResult = { id: string; url: string; durationMs: number; width: number; height: number; bytes: number; mimeType: string; task: VideoResponse };
 export type CreatedVideoGenerationTask = { task: VideoResponse; pollId: string; startedAt: number; requestBody: unknown };
 export type VideoProgressHandler = (progress: number, task: VideoResponse) => void;
-export type VideoTaskCreateOptions = { clientTaskId?: string; source?: "video-workbench" | "canvas"; sourceId?: string };
+export type VideoTaskCreateOptions = { clientTaskId?: string; source?: "video-workbench" | "canvas"; sourceId?: string; signal?: AbortSignal };
 export const VIDEO_POLL_INTERVAL_MS = 5000;
 
 export class VideoRequestError extends Error {
@@ -123,13 +123,15 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
                 : aiApiUrl(config, !accountProxy && (isGrok2APIVideoConfig(config, model) || isCogVideoX3Model(model)) ? "/videos/generations" : "/videos");
         const requestBody = !accountProxy && isGeminiConfig(config, model) ? withoutVideoModel(body) : body;
         const created = directProvider
-            ? await (await import("@/services/api/direct-ai")).createDirectVideoTask(config, directProvider, body)
-            : unwrapVideoResponseForConfig(config, model, (await axios.post<ApiVideoResponse>(createUrl, requestBody, { headers })).data);
+            ? await (await import("@/services/api/direct-ai")).createDirectVideoTask(config, directProvider, body, createOptions.signal)
+            : unwrapVideoResponseForConfig(config, model, (await axios.post<ApiVideoResponse>(createUrl, requestBody, { headers, signal: createOptions.signal })).data);
+        createOptions.signal?.throwIfAborted();
         if (!created.id && !created.video_id) throw new Error("视频接口没有返回任务 ID");
         const task = await syncGeneratedVideo(created, config);
         if (typeof task.progress === "number") onProgress?.(task.progress, task);
         return { task, pollId: videoPollId(model, task), startedAt, requestBody: body };
     } catch (error) {
+        normalizeVideoTaskCreateOptions(options).signal?.throwIfAborted();
         const { message, detail } = readAxiosError(error, "视频生成失败");
         void writeVideoAICallLog(config, model, "/videos", "POST", startedAt, axios.isAxiosError(error) ? error.response?.status || 0 : 0, stringifyLogPayload(summarizeVideoRequestBody(body)), stringifyLogPayload(detail), message);
         throw new VideoRequestError(message, detail);
@@ -176,14 +178,15 @@ export async function pollCreatedVideoGenerationTask(config: AiConfig, task: Vid
     }
 }
 
-export async function pollVideoGenerationTaskStatus(config: AiConfig, task: VideoResponse) {
+export async function pollVideoGenerationTaskStatus(config: AiConfig, task: VideoResponse, signal?: AbortSignal) {
     const model = config.model || config.videoModel;
     const pollId = videoPollId(model, task);
     if (!pollId) throw new VideoRequestError("视频接口没有返回任务 ID", task);
     const directProvider = !usesAccountProxy(config) ? directAIProviderForConfig(config) : null;
     const result = directProvider
-        ? await (await import("@/services/api/direct-ai")).pollDirectVideoTask(config, directProvider, pollId)
-        : unwrapVideoResponseForConfig(config, model, (await axios.get<ApiVideoResponse>(aiVideoPollUrl(config, model, pollId), { headers: aiHeaders(config), params: usesAccountProxy(config) ? { model } : undefined })).data);
+        ? await (await import("@/services/api/direct-ai")).pollDirectVideoTask(config, directProvider, pollId, signal)
+        : unwrapVideoResponseForConfig(config, model, (await axios.get<ApiVideoResponse>(aiVideoPollUrl(config, model, pollId), { headers: aiHeaders(config), params: usesAccountProxy(config) ? { model } : undefined, signal })).data);
+    signal?.throwIfAborted();
     return syncGeneratedVideo(await cacheProtectedGeminiVideo(config, model, await cacheProtectedVideo(config, model, result)), config, true);
 }
 

@@ -59,6 +59,7 @@ func New() *gin.Engine {
 	v1.POST("/tts", gin.WrapF(handler.AITTS))
 	v1.GET("/tts/voices", gin.WrapF(handler.AITTSVoices))
 	v1.POST("/canvas/tasks/delete", gin.WrapF(handler.DeleteUserCanvasTasks))
+	v1.POST("/canvas/tasks/stop", gin.WrapF(handler.StopCanvasTask))
 	v1.POST("/canvas/image-tasks", gin.WrapF(handler.CreateCanvasImageTask))
 	v1.GET("/canvas/image-tasks", gin.WrapF(handler.UserCanvasImageTasks))
 	v1.POST("/canvas/image-tasks/status", gin.WrapF(handler.BatchCanvasImageTasks))

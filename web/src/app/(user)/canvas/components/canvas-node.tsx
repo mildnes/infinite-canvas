@@ -480,6 +480,7 @@ export const CanvasNode = React.memo(function CanvasNode({
 });
 
 function NodeContent(props: NodeContentRendererProps) {
+    if (props.node.metadata?.status === "cancelled") return <div className="flex h-full flex-col items-center justify-center gap-2"><span>已停止</span><button type="button" onClick={(event) => { event.stopPropagation(); props.onRetry?.(props.node); }}>重新生成</button></div>;
     if (props.node.type === CanvasNodeType.Group) return null;
     if ((props.node.type === CanvasNodeType.Config || props.node.type === CanvasNodeType.Director) && props.renderNodeContent) return props.renderNodeContent(props.node);
     if (props.isBatchRoot) return props.node.type === CanvasNodeType.Panorama ? <PanoramaNodeContent {...props} /> : <ImageNodeContent {...props} />;

@@ -1,5 +1,7 @@
 "use client";
 import axios from "axios";
+import { beginTaskRun, currentTaskRun, isStoppedTask, taskStopAction, type TaskRun } from "@/lib/generation-task-run";
+import { stopCanvasTask } from "@/services/api/canvas-tasks";
 
 import { AlertCircle, ArrowLeft, ArrowRight, BookOpen, CheckSquare, ChevronDown, ChevronUp, ClipboardPaste, CloudUpload, Copy, Download, FolderPlus, History, LoaderCircle, Music2, PanelBottom, PanelLeft, Plus, RotateCcw, SlidersHorizontal, Sparkles, Trash2, Upload, VideoIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -46,7 +48,8 @@ type GeneratedVideo = {
 
 type GenerationResult = {
     id: string;
-    status: "pending" | "success" | "failed";
+    status: "pending" | "success" | "failed" | "cancelled";
+    stopState?: "stopping" | "failed";
     taskLogId?: string;
     createdAt: number;
     prompt: string;
@@ -88,7 +91,8 @@ type GenerationLog = {
     size: string;
     resolution: string;
     seconds: string;
-    status: "生成中" | "成功" | "失败";
+    status: "生成中" | "成功" | "失败" | "已停止";
+    stopState?: "stopping" | "failed";
     task?: VideoResponse;
     video?: GeneratedVideo;
     error?: string;
@@ -152,6 +156,11 @@ export default function VideoPage() {
     const [taskCount, setTaskCount] = useState(1);
     const [syncingVideoIds, setSyncingVideoIds] = useState<string[]>([]);
     const pollingLogIdsRef = useRef(new Set<string>());
+    const taskRunsRef = useRef(new Map<string, TaskRun>());
+    useEffect(() => () => {
+        taskRunsRef.current.forEach((run) => run.controller.abort());
+        taskRunsRef.current.clear();
+    }, [token]);
     const logsRef = useRef<GenerationLog[]>([]);
     const effectiveConfigRef = useRef(videoConfig);
     const workflowSubmissionRef = useRef(0);
@@ -658,9 +667,9 @@ export default function VideoPage() {
     };
 
     const submitGenerationSnapshot = async (snapshot: { text: string; model: string; config: AiConfig; references: ReferenceImage[]; firstFrame?: ReferenceImage | null; lastFrame?: ReferenceImage | null; videoReferences: ReferenceVideo[]; audioReferences: ReferenceAudio[]; taskCount: number; workflowRef?: WorkflowRef | null }) => {
-        const workflowToken = snapshot.workflowRef ? useUserStore.getState().token : "";
+        const workflowToken = useUserStore.getState().token;
         const submissionId = snapshot.workflowRef ? ++workflowSubmissionRef.current : 0;
-        const active = () => !snapshot.workflowRef || useUserStore.getState().token === workflowToken;
+        const active = () => useUserStore.getState().token === workflowToken;
         setRunning(true);
         setPreviewLog(null);
         setNow(Date.now());
@@ -691,7 +700,9 @@ export default function VideoPage() {
         }
     };
 
-    const runVideoTask = async (pendingLog: GenerationLog, snapshot: { text: string; model: string; config: AiConfig; references: ReferenceImage[]; firstFrame?: ReferenceImage | null; lastFrame?: ReferenceImage | null; videoReferences: ReferenceVideo[]; audioReferences: ReferenceAudio[]; taskCount: number; workflowRef?: WorkflowRef | null }, workflowToken: string, active: () => boolean) => {
+    const runVideoTask = async (pendingLog: GenerationLog, snapshot: { text: string; model: string; config: AiConfig; references: ReferenceImage[]; firstFrame?: ReferenceImage | null; lastFrame?: ReferenceImage | null; videoReferences: ReferenceVideo[]; audioReferences: ReferenceAudio[]; taskCount: number; workflowRef?: WorkflowRef | null }, workflowToken: string, ownerActive: () => boolean) => {
+        const run = beginTaskRun(taskRunsRef.current, pendingLog.id, snapshot.workflowRef ? "workflow" : "video", pendingLog.task?.id || "", workflowToken);
+        const active = () => ownerActive() && currentTaskRun(taskRunsRef.current, pendingLog.id, run, useUserStore.getState().token) && !run.stopping;
         try {
             if (snapshot.workflowRef) {
                 if (!workflowToken) throw new Error("工作流生成需要先登录");
@@ -718,7 +729,8 @@ export default function VideoPage() {
                     source: "video-workbench",
                     sourceId: pendingLog.id,
                     clientTaskId: pendingLog.task?.id,
-                });
+                }, run.controller.signal);
+                if (taskRunsRef.current.get(pendingLog.id)?.id === run.id) run.taskId = submitted.id;
                 if (!active()) throw new Error("登录状态已变化");
                 const task: VideoResponse = { id: submitted.id, task_id: submitted.id, status: submitted.status, progress: submitted.progress, model: snapshot.model, workflowRef: JSON.stringify(snapshot.workflowRef), size: snapshot.config.size, seconds: snapshot.config.videoSeconds };
                 const nextLog = { ...pendingLog, task, lastPolledAt: Date.now() };
@@ -730,10 +742,14 @@ export default function VideoPage() {
                 return nextLog;
             }
             const created = await createVideoGenerationTask(snapshot.config, snapshot.text, { references: snapshot.references, firstFrame: snapshot.firstFrame, lastFrame: snapshot.lastFrame, videoReferences: snapshot.videoReferences, audioReferences: snapshot.audioReferences }, (progress) => {
+                if (!active()) return;
                 setResults((value) => updateResultByLogId(value, pendingLog.id, { progress }));
-            }, { clientTaskId: pendingLog.task?.id, source: "video-workbench" });
+            }, { clientTaskId: pendingLog.task?.id, source: "video-workbench", signal: run.controller.signal });
+            if (taskRunsRef.current.get(pendingLog.id)?.id === run.id) run.taskId = created.task.id || created.task.task_id;
+            if (!active()) throw new DOMException("任务已停止", "AbortError");
             const nextLog = { ...pendingLog, task: created.task, lastPolledAt: Date.now() };
-            await saveGenerationLog(nextLog);
+            await saveGenerationLog(nextLog, active);
+            if (!active()) throw new DOMException("任务已停止", "AbortError");
             setResults((value) => updateResultByLogId(value, pendingLog.id, { progress: created.task.progress, task: created.task, taskLogId: nextLog.id, lastPolledAt: nextLog.lastPolledAt }));
             return nextLog;
         } catch (error) {
@@ -1035,9 +1051,11 @@ export default function VideoPage() {
 
     const saveGenerationLog = async (log: GenerationLog, active: () => boolean = () => true) => {
         if (!active()) return;
+        const previous = logsRef.current.find((item) => item.id === log.id);
+        if (previous && previous.status !== "生成中" && log.status === "生成中") return;
         await logStore.setItem(log.id, serializeLog(log));
         if (!active()) return;
-        setLogs((value) => sortVideoLogs([log, ...value.filter((item) => item.id !== log.id)]));
+        setLogs((value) => !active() || value.some((item) => item.id === log.id && item.status !== "生成中" && log.status === "生成中") ? value : sortVideoLogs([log, ...value.filter((item) => item.id !== log.id)]));
     };
 
     const finalizeGenerationLog = async (log: GenerationLog, active: () => boolean = () => true) => {
@@ -1050,18 +1068,26 @@ export default function VideoPage() {
     };
 
     const pollPendingLogOnce = async (log: GenerationLog, resumeConfig: AiConfig, context: WorkflowPollContext) => {
-        const active = () => !log.providerWorkflowRef || (!context.signal.aborted && useUserStore.getState().token === context.token);
+        const run = taskRunsRef.current.get(log.id) || beginTaskRun(taskRunsRef.current, log.id, log.providerWorkflowRef ? "workflow" : "video", videoLogTaskId(log), context.token);
+        const active = () => !context.signal.aborted && currentTaskRun(taskRunsRef.current, log.id, run, useUserStore.getState().token) && !run.stopping;
         if (!active()) return;
         pollingLogIdsRef.current.add(log.id);
         const startedAt = log.createdAt || Date.now();
         try {
-            const workflowTask = log.providerWorkflowRef ? await getWorkflowTask(context.token, videoLogTaskId(log), context.signal) : null;
+            const workflowTask = log.providerWorkflowRef ? await getWorkflowTask(context.token, run.taskId || videoLogTaskId(log), run.controller.signal) : null;
             if (!active()) return;
             const workflowURL = workflowTask?.urls?.[0] || "";
-            const task = workflowTask ? { ...log.task!, status: workflowTask.status, progress: workflowTask.progress, video_url: workflowURL, url: workflowURL, storageKey: workflowTask.storageKey || workflowMediaStorageKey(workflowURL) || undefined, mimeType: workflowTask.mimeType, bytes: workflowTask.bytes, width: workflowTask.width, height: workflowTask.height, error: workflowTask.error ? { message: workflowTask.error } : undefined } : await pollVideoGenerationTaskStatus(resumeConfig, log.task!);
+            const task = workflowTask ? { ...log.task!, status: workflowTask.status, progress: workflowTask.progress, video_url: workflowURL, url: workflowURL, storageKey: workflowTask.storageKey || workflowMediaStorageKey(workflowURL) || undefined, mimeType: workflowTask.mimeType, bytes: workflowTask.bytes, width: workflowTask.width, height: workflowTask.height, error: workflowTask.error ? { message: workflowTask.error } : undefined } : await pollVideoGenerationTaskStatus(resumeConfig, log.task!, run.controller.signal);
             if (!active()) return;
             const durationMs = Date.now() - startedAt;
             const baseLog = { ...log, task, durationMs, lastPolledAt: Date.now() };
+            if (isStoppedTask(task.status)) {
+                const stoppedLog = { ...baseLog, status: "已停止" as const, stopState: undefined, error: "用户停止" };
+                await finalizeGenerationLog(stoppedLog, active);
+                setResults((value) => updateResultByLogId(value, log.id, { status: "cancelled", task, stopState: undefined, error: "用户停止" }));
+                run.controller.abort();
+                return;
+            }
             if (isFailedVideoTask(task)) {
                 const nextLog = { ...baseLog, status: "失败" as const, error: task.error?.message || "视频生成失败", errorDetail: errorDetail(new VideoRequestError(task.error?.message || "视频生成失败", task)) };
                 await finalizeGenerationLog(nextLog, active);
@@ -1106,6 +1132,46 @@ export default function VideoPage() {
         } finally {
             pollingLogIdsRef.current.delete(log.id);
         }
+    };
+
+    const stopVideoLog = async (log: GenerationLog) => {
+        if (log.status !== "生成中") return;
+        const ownerToken = useUserStore.getState().token;
+        const run = taskRunsRef.current.get(log.id) || beginTaskRun(taskRunsRef.current, log.id, log.providerWorkflowRef ? "workflow" : "video", videoLogTaskId(log), ownerToken);
+        if (run.stopping || !run.taskId) return;
+        run.stopping = true;
+        const current = () => taskRunsRef.current.get(log.id)?.id === run.id && useUserStore.getState().token === ownerToken;
+        const showStop = (stopState: "stopping" | "failed") => {
+            setLogs((value) => current() ? value.map((item) => item.id === log.id && item.status === "生成中" ? { ...item, stopState } : item) : value);
+            setResults((value) => current() ? updateResultByLogId(value, log.id, { stopState }) : value);
+        };
+        showStop("stopping");
+        try {
+            const result = !ownerToken ? { status: "cancelled" } : await stopCanvasTask(run.kind, run.taskId);
+            if (!current()) return;
+            if (!isStoppedTask(result?.status)) {
+                run.stopping = false;
+                showStop("failed");
+                message.warning("停止未确认");
+                return;
+            }
+            const stopped = { ...log, status: "已停止" as const, stopState: undefined, task: { ...log.task!, status: "cancelled" }, error: "用户停止", durationMs: Date.now() - log.createdAt };
+            run.controller.abort();
+            await finalizeGenerationLog(stopped, current);
+            if (!current()) return;
+            setResults((value) => updateResultByLogId(value, log.id, { status: "cancelled", task: stopped.task, stopState: undefined, error: "用户停止" }));
+            message.success("任务已停止");
+        } catch {
+            if (!current()) return;
+            run.stopping = false;
+            showStop("failed");
+            message.error("停止失败，请重试停止");
+        }
+    };
+
+    const stopVideoResult = (result: GenerationResult) => {
+        const log = logsRef.current.find((item) => item.id === result.taskLogId || item.id === result.id);
+        if (log) void stopVideoLog(log);
     };
 
     const previewGenerationLog = (log: GenerationLog) => {
@@ -1252,6 +1318,8 @@ export default function VideoPage() {
                             }}
                             onPreviewLog={previewGenerationLog}
                             onRetryLog={retryGenerationLog}
+                            onStopLog={(log) => void stopVideoLog(log)}
+                            onStopResult={stopVideoResult}
                             onPreviewResult={previewGenerationResult}
                             onRetryResult={retryResult}
                             onDeleteResult={deleteResult}
@@ -1282,6 +1350,8 @@ export default function VideoPage() {
                             }}
                             onPreviewLog={previewGenerationLog}
                             onRetryLog={retryGenerationLog}
+                            onStopLog={(log) => void stopVideoLog(log)}
+                            onStopResult={stopVideoResult}
                             onPreviewResult={previewGenerationResult}
                             onRetryResult={retryResult}
                             onDeleteResult={deleteResult}
@@ -1894,6 +1964,8 @@ function ResultsPanel({
     onDeleteLog,
     onPreviewLog,
     onRetryLog,
+    onStopLog,
+    onStopResult,
     onPreviewResult,
     onRetryResult,
     onDeleteResult,
@@ -1917,6 +1989,8 @@ function ResultsPanel({
     onDeleteLog: (log: GenerationLog) => void;
     onPreviewLog: (log: GenerationLog) => void;
     onRetryLog: (log: GenerationLog) => void;
+    onStopLog: (log: GenerationLog) => void;
+    onStopResult: (result: GenerationResult) => void;
     onPreviewResult: (result: GenerationResult) => void;
     onRetryResult: (result: GenerationResult) => void;
     onDeleteResult: (result: GenerationResult) => void;
@@ -1952,9 +2026,9 @@ function ResultsPanel({
             </div>
             {totalCount ? (
                 <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
-                    {visibleResults.map((result, index) => (result.status === "success" && result.video ? <ResultVideoCard key={result.id} result={result} video={result.video} index={index} syncing={syncingVideoIds.includes(result.video.id)} onCopyPrompt={onCopyPrompt} onDownload={onDownload} onSync={(video) => onSyncResult(result.id, video, index)} onSaveAsset={onSaveAsset} /> : result.status === "failed" ? <FailedVideoCard key={result.id} result={result} error={result.error || "生成失败"} onCopyPrompt={onCopyPrompt} onPreview={() => onPreviewResult(result)} onRetry={() => onRetryResult(result)} onDelete={() => onDeleteResult(result)} /> : <PendingVideoCard key={result.id} result={result} now={now} onCopyPrompt={onCopyPrompt} />))}
+                    {visibleResults.map((result, index) => (result.status === "success" && result.video ? <ResultVideoCard key={result.id} result={result} video={result.video} index={index} syncing={syncingVideoIds.includes(result.video.id)} onCopyPrompt={onCopyPrompt} onDownload={onDownload} onSync={(video) => onSyncResult(result.id, video, index)} onSaveAsset={onSaveAsset} /> : result.status === "cancelled" ? <div key={result.id} className="flex aspect-video flex-col items-center justify-center gap-3 rounded-lg border bg-card"><span>已停止</span><Button size="small" onClick={() => onRetryResult(result)}>重新生成</Button></div> : result.status === "failed" ? <FailedVideoCard key={result.id} result={result} error={result.error || "生成失败"} onCopyPrompt={onCopyPrompt} onPreview={() => onPreviewResult(result)} onRetry={() => onRetryResult(result)} onDelete={() => onDeleteResult(result)} /> : <PendingVideoCard key={result.id} result={result} now={now} onCopyPrompt={onCopyPrompt} onStop={() => onStopResult(result)} />))}
                     {visibleLogs.map((log, index) => (
-                        <HistoryLogCard key={log.id} log={log} index={index} selected={selectedLogIds.includes(log.id)} active={activeLogId === log.id} syncing={Boolean(log.video && syncingVideoIds.includes(log.video.id))} onSelectedChange={(checked) => onSelectedLogIdsChange(checked ? [...selectedLogIds, log.id] : selectedLogIds.filter((id) => id !== log.id))} onDelete={() => onDeleteLog(log)} onPreview={() => onPreviewLog(log)} onRetry={() => onRetryLog(log)} onCopyPrompt={onCopyPrompt} onDownload={onDownload} onSync={(video) => onSyncLog(log, video, index)} onSaveAsset={onSaveAsset} />
+                        <HistoryLogCard key={log.id} log={log} index={index} selected={selectedLogIds.includes(log.id)} active={activeLogId === log.id} syncing={Boolean(log.video && syncingVideoIds.includes(log.video.id))} onSelectedChange={(checked) => onSelectedLogIdsChange(checked ? [...selectedLogIds, log.id] : selectedLogIds.filter((id) => id !== log.id))} onDelete={() => onDeleteLog(log)} onPreview={() => onPreviewLog(log)} onRetry={() => onRetryLog(log)} onStop={() => onStopLog(log)} onCopyPrompt={onCopyPrompt} onDownload={onDownload} onSync={(video) => onSyncLog(log, video, index)} onSaveAsset={onSaveAsset} />
                     ))}
                 </div>
             ) : (
@@ -1988,7 +2062,7 @@ function ResultVideoCard({ result, video, index, syncing, onCopyPrompt, onDownlo
     );
 }
 
-function PendingVideoCard({ result, now, onCopyPrompt }: { result: GenerationResult; now: number; onCopyPrompt: (text: string) => void | Promise<void> }) {
+function PendingVideoCard({ result, now, onCopyPrompt, onStop }: { result: GenerationResult; now: number; onStop: () => void; onCopyPrompt: (text: string) => void | Promise<void> }) {
     const progress = typeof result.progress === "number" ? Math.max(0, Math.min(100, Math.floor(result.progress))) : null;
     const durationMs = Math.max(0, now - result.createdAt);
     return (
@@ -2012,6 +2086,7 @@ function PendingVideoCard({ result, now, onCopyPrompt }: { result: GenerationRes
                     </div>
                 ) : null}
             </div>
+            <div className="flex justify-end p-2"><Button size="small" disabled={result.stopState === "stopping"} onClick={onStop}>{taskStopAction("loading", result.stopState)?.label}</Button></div>
             <TaskInfo item={{ ...result, durationMs }} onCopyPrompt={onCopyPrompt} />
         </div>
     );
@@ -2045,7 +2120,7 @@ function FailedVideoCard({ result, error, onCopyPrompt, onPreview, onRetry, onDe
     );
 }
 
-function HistoryLogCard({ log, index, selected, active, syncing, onSelectedChange, onDelete, onPreview, onRetry, onCopyPrompt, onDownload, onSync, onSaveAsset }: { log: GenerationLog; index: number; selected: boolean; active: boolean; syncing: boolean; onSelectedChange: (checked: boolean) => void; onDelete: () => void; onPreview: () => void; onRetry: () => void; onCopyPrompt: (text: string) => void | Promise<void>; onDownload: (video: GeneratedVideo) => void; onSync: (video: GeneratedVideo) => void; onSaveAsset: (video: GeneratedVideo) => void }) {
+function HistoryLogCard({ log, index, selected, active, syncing, onSelectedChange, onDelete, onPreview, onRetry, onStop, onCopyPrompt, onDownload, onSync, onSaveAsset }: { log: GenerationLog; index: number; selected: boolean; active: boolean; syncing: boolean; onSelectedChange: (checked: boolean) => void; onDelete: () => void; onPreview: () => void; onRetry: () => void; onStop: () => void; onCopyPrompt: (text: string) => void | Promise<void>; onDownload: (video: GeneratedVideo) => void; onSync: (video: GeneratedVideo) => void; onSaveAsset: (video: GeneratedVideo) => void }) {
     const [expanded, setExpanded] = useState(false);
     const [detailOpen, setDetailOpen] = useState(false);
     const interrupted = Boolean(log.error?.includes("已中断"));
@@ -2083,7 +2158,7 @@ function HistoryLogCard({ log, index, selected, active, syncing, onSelectedChang
             <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 border-t border-stone-200 px-2.5 py-2 dark:border-stone-800">
                 <div className="flex flex-wrap gap-1">
                     <Button size="small" onClick={onPreview}>载入</Button>
-                    <Button size="small" icon={<RotateCcw className="size-3.5" />} onClick={onRetry}>重试</Button>
+                    {log.status === "生成中" ? <Button size="small" disabled={log.stopState === "stopping"} onClick={onStop}>{taskStopAction("loading", log.stopState)?.label}</Button> : <Button size="small" icon={<RotateCcw className="size-3.5" />} onClick={onRetry}>{log.status === "已停止" ? "重新生成" : "重试"}</Button>}
                 </div>
                 {log.video ? <div className="flex shrink-0 gap-1"><Button size="small" title="同步到云端存储" icon={<CloudUpload className="size-3.5" />} loading={syncing} disabled={isCloudVideo(log.video)} onClick={() => onSync(log.video!)} /><Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => onSaveAsset(log.video!)} /><Button size="small" icon={<Download className="size-3.5" />} onClick={() => onDownload(log.video!)} /></div> : null}
             </div>
@@ -2354,7 +2429,7 @@ function backendTaskToLog(task: VideoResponse, fallbackConfig: AiConfig): Genera
     const taskChannelId = videoTaskChannelId(task);
     const config = buildVideoConfig({ ...fallbackConfig, model, videoModel: model, activeChannelId: taskChannelId || fallbackConfig.activeChannelId, videoChannelId: taskChannelId || fallbackConfig.videoChannelId, size: request.size || fallbackConfig.size, vquality: request.resolution || fallbackConfig.vquality, videoSeconds: request.seconds || fallbackConfig.videoSeconds, videoMode: request.mode || fallbackConfig.videoMode, videoNegativePrompt: request.negativePrompt || fallbackConfig.videoNegativePrompt, videoCharacterOrientation: request.characterOrientation || fallbackConfig.videoCharacterOrientation, videoMultiShot: request.multiShot || fallbackConfig.videoMultiShot, videoShotType: request.shotType || fallbackConfig.videoShotType, videoMultiPrompt: request.multiPrompt.length ? request.multiPrompt : fallbackConfig.videoMultiPrompt, videoElementList: request.elementList.length ? request.elementList : fallbackConfig.videoElementList }, model);
     const createdAt = parseTaskTimestamp(task.createdAt ?? task.created_at) || Date.now();
-    const status = isFailedVideoTask(task) ? "失败" : isCompletedVideoTask(task) ? "成功" : "生成中";
+    const status = isStoppedTask(task.status) ? "已停止" : isFailedVideoTask(task) ? "失败" : isCompletedVideoTask(task) ? "成功" : "生成中";
     const interrupted = Boolean(task.error?.message?.includes("已中断"));
     const durationMs = interrupted ? Math.min(Math.max(0, Date.now() - createdAt), GENERATION_TASK_INTERRUPTED_AFTER_MS) : Math.max(0, Date.now() - createdAt);
     const video = status === "成功" && (task.video_url || task.url) ? videoFromTaskResponse(task, durationMs) : undefined;
@@ -2387,11 +2462,13 @@ function backendTaskToLog(task: VideoResponse, fallbackConfig: AiConfig): Genera
 
 function mergeBackendTaskIntoLog(existing: GenerationLog | undefined, incoming: GenerationLog, task: VideoResponse): GenerationLog {
     if (!existing) return incoming;
+    if (existing.status !== "生成中") return existing;
+    if (incoming.status === "已停止") return { ...existing, ...incoming, status: "已停止" };
     const durationMs = incoming.error?.includes("已中断") ? incoming.durationMs : Math.max(existing.durationMs || 0, incoming.durationMs || 0);
     const baseConfig = { ...existing.config, videoChannelId: incoming.config.videoChannelId || existing.config.videoChannelId, activeChannelId: incoming.config.activeChannelId || existing.config.activeChannelId };
     const providerWorkflowRef = existing.providerWorkflowRef || incoming.providerWorkflowRef;
     const base = { ...existing, providerWorkflowRef, task, config: baseConfig, durationMs, lastPolledAt: Date.now() };
-    if (existing.status === "成功" || existing.video) {
+    if (existing.video) {
         return { ...base, status: "成功", video: existing.video || incoming.video, error: undefined, errorDetail: undefined };
     }
     if (incoming.status === "失败") {
@@ -2580,7 +2657,7 @@ function updateResult(results: GenerationResult[], id: string, next: Partial<Gen
 }
 
 function updateResultByLogId(results: GenerationResult[], logId: string, next: Partial<GenerationResult>) {
-    return results.map((item) => (item.taskLogId === logId || item.id === logId ? { ...item, ...next } : item));
+    return results.map((item) => ((item.taskLogId === logId || item.id === logId) && item.status === "pending" ? { ...item, ...next } : item));
 }
 
 function mergePendingLogResults(results: GenerationResult[], logs: GenerationLog[]) {
@@ -2632,7 +2709,7 @@ function isCompletedVideoTask(task: VideoResponse) {
 }
 
 function isFailedVideoTask(task: VideoResponse) {
-    return ["failed", "fail", "error", "cancelled", "canceled"].includes((task.status || "").toLowerCase());
+    return ["failed", "fail", "error"].includes((task.status || "").toLowerCase());
 }
 
 function isTransientVideoPollError(error: unknown) {
@@ -2643,7 +2720,7 @@ function isTransientVideoPollError(error: unknown) {
 }
 
 function isRecoverableBackendVideoTask(task: VideoResponse) {
-    return !isCompletedVideoTask(task) && !isFailedVideoTask(task);
+    return !isCompletedVideoTask(task) && !isFailedVideoTask(task) && !isStoppedTask(task.status);
 }
 
 function isCloudVideo(video: GeneratedVideo) {

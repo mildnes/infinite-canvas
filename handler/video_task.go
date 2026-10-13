@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tigerowo/infinite-canvas/model"
+	"github.com/tigerowo/infinite-canvas/repository"
 	"github.com/tigerowo/infinite-canvas/service"
 )
 
@@ -124,76 +126,74 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	payload, status, err := doAIRequest(request, channel)
+	pending, err := service.CreateVideoTask(service.VideoTaskCreateInput{UserID: user.ID, UserDisplayName: firstNonEmpty(user.DisplayName, user.Username), Model: modelName, ChannelID: channel.ID, UserChannelID: userChannelID, ChannelName: channel.Name, Source: readVideoTaskSource(r), SourceID: readVideoTaskSourceID(r), ClientTaskID: clientTaskID, Status: "queued", Credits: credits, RequestBody: logContext.RequestBody})
 	if err != nil {
 		if credits > 0 {
 			refundVideoCredits(user.ID, channel.ID, modelName, credits, upstreamPath)
 		}
+		Fail(w, "AI 接口请求失败")
+		return
+	}
+	ctx, releaseRun := service.CanvasTaskContext("video", user.ID, pending.ID)
+	defer releaseRun()
+	request = request.WithContext(ctx)
+	failPending := func(message string) {
+		_ = service.UpdateVideoTaskFromPoll(pending, service.VideoTaskPollUpdate{Status: "failed", Error: message})
+	}
+	payload, status, err := doAIRequest(request, channel)
+	if ctx.Err() != nil {
+		current, _, _ := service.GetUserVideoTask(user.ID, pending.ID)
+		OK(w, service.VideoTaskResponse(current))
+		return
+	}
+	if err != nil {
+		failPending(err.Error())
 		saveAIProxyLog(logContext, 0, "", err.Error())
 		Fail(w, "AI 接口请求失败")
 		return
 	}
 	if status >= http.StatusBadRequest {
 		message := readUpstreamAIErrorMessage(payload, status)
-		if credits > 0 {
-			refundVideoCredits(user.ID, channel.ID, modelName, credits, upstreamPath)
-		}
+		failPending(message)
 		saveAIProxyLog(logContext, status, string(payload), strings.TrimSpace(string(payload)))
 		Fail(w, message)
 		return
 	}
 	transformed := transformVideoCreatePayload(payload, request, channel, modelName)
 	if message := readVideoCreateErrorMessage(payload, transformed, channel, modelName); message != "" {
-		if credits > 0 {
-			refundVideoCredits(user.ID, channel.ID, modelName, credits, upstreamPath)
-		}
+		failPending(message)
 		saveAIProxyLog(logContext, status, string(payload), message)
 		Fail(w, message)
 		return
 	}
 	parsed := parseVideoTaskPayload(transformed, modelName)
 	if parsed.UpstreamTaskID == "" && parsed.UpstreamVideoID == "" {
-		if credits > 0 {
-			refundVideoCredits(user.ID, channel.ID, modelName, credits, upstreamPath)
-		}
+		failPending("视频接口没有返回任务 ID")
 		saveAIProxyLog(logContext, status, string(transformed), "视频接口没有返回任务 ID")
 		Fail(w, "视频接口没有返回任务 ID")
 		return
 	}
-	task, err := service.CreateVideoTask(service.VideoTaskCreateInput{
-		UserID:          user.ID,
-		UserDisplayName: firstNonEmpty(user.DisplayName, user.Username),
-		Model:           modelName,
-		ChannelID:       channel.ID,
-		UserChannelID:   userChannelID,
-		ChannelName:     channel.Name,
-		Source:          readVideoTaskSource(r),
-		SourceID:        readVideoTaskSourceID(r),
-		ClientTaskID:    clientTaskID,
-		UpstreamTaskID:  parsed.UpstreamTaskID,
-		UpstreamVideoID: parsed.UpstreamVideoID,
-		Status:          parsed.Status,
-		Progress:        parsed.Progress,
-		Seconds:         parsed.Seconds,
-		Size:            parsed.Size,
-		VideoURL:        parsed.VideoURL,
-		Error:           parsed.Error,
-		ErrorDetail:     parsed.ErrorDetail,
-		RequestBody:     logContext.RequestBody,
-		ResponseBody:    string(transformed),
-		Credits:         credits,
-	})
-	if err != nil {
-		log.Printf("save video task failed: model=%s err=%v", modelName, err)
-		if credits > 0 {
-			refundVideoCredits(user.ID, channel.ID, modelName, credits, upstreamPath)
-		}
+	if ctx.Err() != nil {
+		current, _, _ := service.GetUserVideoTask(user.ID, pending.ID)
+		OK(w, service.VideoTaskResponse(current))
+		return
+	}
+	pending.UpstreamTaskID, pending.UpstreamVideoID = parsed.UpstreamTaskID, parsed.UpstreamVideoID
+	if _, err = repository.SavePendingVideoTaskPoll(pending); err != nil {
+		failPending(err.Error())
 		Fail(w, "AI 接口请求失败")
 		return
 	}
-	if credits > 0 && service.IsFailedVideoTaskStatus(task.Status) {
-		refundVideoCredits(user.ID, channel.ID, modelName, credits, upstreamPath)
+	if err = service.UpdateVideoTaskFromPoll(pending, service.VideoTaskPollUpdate{Status: parsed.Status, Progress: parsed.Progress, Seconds: parsed.Seconds, Size: parsed.Size, VideoURL: parsed.VideoURL, Error: parsed.Error, ErrorDetail: parsed.ErrorDetail, ResponseBody: string(transformed)}); err != nil {
+		Fail(w, "AI 接口请求失败")
+		return
 	}
+	task, _, err := service.GetUserVideoTask(user.ID, pending.ID)
+	if err != nil {
+		Fail(w, "AI 接口请求失败")
+		return
+	}
+	service.WakeVideoTaskPoller()
 	saveAIProxyLog(logContext, status, string(transformed), "")
 	OK(w, service.VideoTaskResponse(task))
 }
@@ -282,7 +282,7 @@ func serveGeminiVideoTaskContent(w http.ResponseWriter, r *http.Request, id stri
 	return true
 }
 
-func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdate, error) {
+func pollVideoTaskFromUpstream(ctx context.Context, task model.VideoTask) (service.VideoTaskPollUpdate, error) {
 	var channel model.ModelChannel
 	var err error
 	if strings.TrimSpace(task.UserChannelID) != "" {
@@ -303,7 +303,7 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 	}
 	endpoint := "/videos/" + pollID
 	upstreamPath := resolveAIProxyPath(channel, upstreamModel, endpoint)
-	request, err := http.NewRequest(http.MethodGet, resolveAIProxyURL(channel, upstreamModel, upstreamPath), nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, resolveAIProxyURL(channel, upstreamModel, upstreamPath), nil)
 	if err != nil {
 		return service.VideoTaskPollUpdate{}, err
 	}
@@ -346,7 +346,15 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 		parsed.Status = "failed"
 	}
 	if service.IsCompletedVideoTaskStatus(parsed.Status) && strings.HasPrefix(parsed.VideoURL, "http") {
-		if persisted, persistErr := persistChannelVideoResult(task.UserID, parsed.VideoURL, channel); persistErr != nil {
+		releaseResult, active := service.CanvasTaskResultGuard(ctx, "video", task.UserID, task.ID)
+		if !active {
+			return service.VideoTaskPollUpdate{}, context.Canceled
+		}
+		defer releaseResult()
+		if ctx.Err() != nil {
+			return service.VideoTaskPollUpdate{}, ctx.Err()
+		}
+		if persisted, persistErr := persistChannelVideoResultContext(ctx, task.UserID, parsed.VideoURL, channel); persistErr != nil {
 			parsed.Status = "failed"
 			parsed.Error = "保存生成视频失败"
 			parsed.ErrorDetail = persistErr.Error()
@@ -373,7 +381,11 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 }
 
 func persistChannelVideoResult(userID, sourceURL string, channel model.ModelChannel) (string, error) {
-	request, err := http.NewRequest(http.MethodGet, sourceURL, nil)
+	return persistChannelVideoResultContext(context.Background(), userID, sourceURL, channel)
+}
+
+func persistChannelVideoResultContext(ctx context.Context, userID, sourceURL string, channel model.ModelChannel) (string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
 	if err != nil {
 		return "", err
 	}
@@ -399,6 +411,9 @@ func persistChannelVideoResult(userID, sourceURL string, channel model.ModelChan
 	}
 	if err := service.ValidateGeneratedMediaBytes(data, mimeType); err != nil {
 		return "", err
+	}
+	if ctx.Err() != nil {
+		return "", ctx.Err()
 	}
 	stored, err := service.SaveGeneratedMediaDeduplicated(userID, mimeType, data, sourceURL)
 	if err != nil {

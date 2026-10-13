@@ -322,20 +322,34 @@ func GetCanvasAudioTask(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []byte, contentType string, channelID string, userChannelID string, protocolModel string) {
+	ctx, release := service.CanvasTaskContext("image", user.ID, task.ID)
+	defer release()
 	current := taskTime()
 	task.Status = "processing"
 	task.Progress = 10
 	task.StartedAt = current
 	task, _ = service.SaveCanvasImageTask(task)
+	if ctx.Err() != nil || service.IsTerminalGenerationTaskStatus(task.Status) {
+		return
+	}
 
-	payload, status, responseContentType, err := executeCanvasAIRequest(user, task.Endpoint, body, contentType, channelID, userChannelID)
+	payload, status, responseContentType, err := executeCanvasAIRequest(ctx, user, task.Endpoint, body, contentType, channelID, userChannelID)
+	if ctx.Err() != nil {
+		return
+	}
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		saveFailedCanvasImageTask(task, err.Error(), err.Error())
 		return
 	}
 	if status >= http.StatusBadRequest {
 		message := readUpstreamAIErrorMessage(payload, status)
 		saveFailedCanvasImageTask(task, message, string(payload))
+		return
+	}
+	if ctx.Err() != nil {
 		return
 	}
 	if message := readWrappedTaskError(payload); message != "" {
@@ -350,12 +364,20 @@ func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []
 		return
 	}
 	imageStorage := make([]*model.CanvasImageStorage, len(imageURLs))
+	releaseResult, active := service.CanvasTaskResultGuard(ctx, "image", user.ID, task.ID)
+	if !active {
+		return
+	}
+	defer releaseResult()
 	created := make([]string, 0, len(imageURLs))
 	originalURLs := append([]string(nil), imageURLs...)
 	task.OriginalURL = originalURLs[0]
 	task.OriginalURLs = originalURLs
 	for index, sourceURL := range originalURLs {
-		stored, saveErr := service.PersistTrustedGeneratedMedia(context.Background(), user.ID, sourceURL)
+		if ctx.Err() != nil {
+			return
+		}
+		stored, saveErr := service.PersistTrustedGeneratedMedia(ctx, user.ID, sourceURL)
 		if saveErr != nil {
 			err = saveErr
 			break
@@ -381,6 +403,9 @@ func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []
 		}
 	}
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		task.ImageURL = imageURLs[0]
 		task.ImageURLs = imageURLs
 		task.ImageStorage = imageStorage
@@ -405,32 +430,52 @@ func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []
 	task.Bytes = bytes
 	task.Error = ""
 	task.ErrorDetail = ""
-	if _, err = service.SaveCanvasImageTask(task); err != nil {
+	if ctx.Err() != nil {
+		return
+	}
+	if task, err = service.SaveCanvasImageTask(task); err != nil {
 		log.Printf("save completed canvas image task failed: id=%s err=%v", task.ID, err)
 		return
 	}
 	for _, id := range created {
-		if err := service.SyncGeneratedMedia(service.WithUser(context.Background(), user), id); err != nil {
+		if task.Status != "completed" || ctx.Err() != nil {
+			return
+		}
+		if err := service.SyncGeneratedMedia(service.WithUser(ctx, user), id); err != nil {
 			log.Printf("sync canvas image media failed (local preserved): task=%s object=%s err=%v", task.ID, id, err)
 		}
 	}
 }
 
 func runCanvasAudioTask(task model.CanvasAudioTask, user model.AuthUser, body []byte, contentType string, channelID string, userChannelID string) {
+	ctx, release := service.CanvasTaskContext("audio", user.ID, task.ID)
+	defer release()
 	current := taskTime()
 	task.Status = "processing"
 	task.Progress = 10
 	task.StartedAt = current
 	task, _ = service.SaveCanvasAudioTask(task)
+	if ctx.Err() != nil || service.IsTerminalGenerationTaskStatus(task.Status) {
+		return
+	}
 
-	payload, status, responseContentType, err := executeCanvasAIRequest(user, task.Endpoint, body, contentType, channelID, userChannelID)
+	payload, status, responseContentType, err := executeCanvasAIRequest(ctx, user, task.Endpoint, body, contentType, channelID, userChannelID)
+	if ctx.Err() != nil {
+		return
+	}
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		saveFailedCanvasAudioTask(task, err.Error(), err.Error())
 		return
 	}
 	if status >= http.StatusBadRequest {
 		message := readUpstreamAIErrorMessage(payload, status)
 		saveFailedCanvasAudioTask(task, message, string(payload))
+		return
+	}
+	if ctx.Err() != nil {
 		return
 	}
 	if message := readWrappedTaskError(payload); message != "" {
@@ -452,6 +497,11 @@ func runCanvasAudioTask(task model.CanvasAudioTask, user model.AuthUser, body []
 	task.Progress = 100
 	task.CompletedAt = taskTime()
 	task.ResponseBody = "[binary audio]"
+	releaseResult, active := service.CanvasTaskResultGuard(ctx, "audio", user.ID, task.ID)
+	if !active {
+		return
+	}
+	defer releaseResult()
 	stored, err := service.SaveGeneratedMediaDeduplicated(user.ID, mimeType, payload, "")
 	if err != nil {
 		saveFailedCanvasAudioTask(task, "保存生成音频失败", err.Error())
@@ -463,18 +513,24 @@ func runCanvasAudioTask(task model.CanvasAudioTask, user model.AuthUser, body []
 	task.Bytes = int64(len(payload))
 	task.Error = ""
 	task.ErrorDetail = ""
-	if _, err = service.SaveCanvasAudioTask(task); err != nil {
+	if ctx.Err() != nil {
+		return
+	}
+	if task, err = service.SaveCanvasAudioTask(task); err != nil {
 		log.Printf("save completed canvas audio task failed: id=%s err=%v", task.ID, err)
 		return
 	}
-	if err := service.SyncGeneratedMedia(service.WithUser(context.Background(), user), stored.ID); err != nil {
+	if task.Status != "completed" || ctx.Err() != nil {
+		return
+	}
+	if err := service.SyncGeneratedMedia(service.WithUser(ctx, user), stored.ID); err != nil {
 		log.Printf("sync canvas audio media failed (local preserved): task=%s object=%s err=%v", task.ID, stored.ID, err)
 	}
 }
 
-func executeCanvasAIRequest(user model.AuthUser, endpoint string, body []byte, contentType string, channelID string, userChannelID string) ([]byte, int, string, error) {
+func executeCanvasAIRequest(ctx context.Context, user model.AuthUser, endpoint string, body []byte, contentType string, channelID string, userChannelID string) ([]byte, int, string, error) {
 	request := httptest.NewRequest(http.MethodPost, "http://canvas.local/api/v1"+endpoint, bytes.NewReader(body))
-	request = request.WithContext(context.WithValue(service.WithUser(context.Background(), user), imageOutputValidationSkipped{}, true))
+	request = request.WithContext(context.WithValue(service.WithUser(ctx, user), imageOutputValidationSkipped{}, true))
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}
