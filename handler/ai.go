@@ -20,6 +20,14 @@ import (
 
 const userModelChannelHeader = "X-User-Model-Channel-ID"
 
+// Internal task calls have already charged once and own failure/cancel refunds.
+// This is a context-only marker; public proxy requests cannot set it via headers.
+type aiBillingHandledByTask struct{}
+
+func billingHandledByTask(ctx context.Context) bool {
+	return ctx.Value(aiBillingHandledByTask{}) == true
+}
+
 func selectAIRequestChannel(ctx context.Context, user model.AuthUser, modelName string, channelID string, userChannelID string) (model.ModelChannel, string, error) {
 	userChannelID = strings.TrimSpace(userChannelID)
 	if userChannelID != "" {
@@ -200,7 +208,7 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}
-	if credits > 0 {
+	if credits > 0 && !billingHandledByTask(r.Context()) {
 		if err := service.ConsumeUserCredits(user.ID, channel.ID, modelName, credits, upstreamPath); err != nil {
 			FailError(w, err)
 			return
@@ -222,7 +230,7 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		ImageQuality:          imageQuality.Quality,
 		ImageQualityNotice:    imageQuality.Notice,
 	}, func() {
-		if credits > 0 {
+		if credits > 0 && !billingHandledByTask(r.Context()) {
 			if err := service.RefundUserCredits(user.ID, channel.ID, modelName, credits, upstreamPath); err != nil {
 				log.Printf("AI proxy refund credits failed: user=%s model=%s credits=%d err=%v", user.ID, modelName, credits, err)
 			}

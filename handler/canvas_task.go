@@ -83,6 +83,7 @@ func CreateCanvasImageTask(w http.ResponseWriter, r *http.Request) {
 			failAIChannelSelect(w, err, "AI 接口请求失败")
 			return
 		}
+		credits *= readAIRequestCount(body, contentType)
 	}
 	task, err := service.CreateCanvasImageTask(service.CanvasImageTaskCreateInput{
 		UserID:          user.ID,
@@ -274,6 +275,7 @@ func CreateCanvasAudioTask(w http.ResponseWriter, r *http.Request) {
 			failAIChannelSelect(w, err, "AI 接口请求失败")
 			return
 		}
+		credits *= readAIRequestCount(body, contentType)
 	}
 	task, err := service.CreateCanvasAudioTask(service.CanvasAudioTaskCreateInput{
 		UserID:          user.ID,
@@ -531,6 +533,7 @@ func runCanvasAudioTask(task model.CanvasAudioTask, user model.AuthUser, body []
 func executeCanvasAIRequest(ctx context.Context, user model.AuthUser, endpoint string, body []byte, contentType string, channelID string, userChannelID string) ([]byte, int, string, error) {
 	request := httptest.NewRequest(http.MethodPost, "http://canvas.local/api/v1"+endpoint, bytes.NewReader(body))
 	request = request.WithContext(context.WithValue(service.WithUser(ctx, user), imageOutputValidationSkipped{}, true))
+	request = request.WithContext(context.WithValue(request.Context(), aiBillingHandledByTask{}, true))
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}

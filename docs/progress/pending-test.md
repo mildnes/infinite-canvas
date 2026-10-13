@@ -5,6 +5,14 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
+## 画布图片／音频任务双重扣费修复
+
+- [本机先红后绿] 在 49d0c54 独立 worktree 注入真实 SQLite＋localhost 上游夹具：图片／音频成功各 consume=2、refund=0、单价 7 共扣 14；HTTP 失败和停止各 2 扣 2 退，HTTP 200 业务失败 2 扣 1 退；JSON／multipart 的 n=3 为两笔合计 28。新增 18 个场景中 12 失败、6 个公开代理／用户渠道对照通过。修复后 18 场景全过：成功 1 扣、失败／停止 1 扣 1 退，n=3 单笔 21，用户渠道零扣；重复停止不重复退，AI 日志 Credits 仍保留 7／21／0。
+- [实现边界] 仅 executeCanvasAIRequest 写入上下文私有标记，proxyAIRequest 的真实扣费与失败退款读取该标记；不以 HTTP header 控制。图片／音频创建层复用 readAIRequestCount 乘 n，任务 Credits 捕获实际扣款用于失败与停止退款。停止、视频、工作流、草稿、ModelCosts、前端、schema、日志字段与历史退款均未修改。
+- [调用链审计] handler/ai.go 公开 proxy 单扣；service/canvas_image_task.go 与 canvas_audio_task.go 原本和内部 proxy 叠加双扣，本轮修复。handler/video_task.go 单扣且 CreateVideoTask 无 WorkflowRef，不进入 service/video_task.go 的工作流扣费分支；工作流通过 createWorkflowTaskRecord 按用途只选图片／音频／视频之一，其后直调 RunningHub／Comfy，不走 proxy。service/workflow_task.go 的指定位置只是 ModelCost 计算，不是额外 Consume；service/workflow_agent.go 单扣并直接 HTTP 请求上游。未发现其它同类双扣组合，本轮不扩展改动。
+- [本机回归] Go 1.25.0 darwin/arm64 的 go test ./... 通过，计费及停止 handler 用例 -race 通过；Node＋tsx@4.23.15 全部 48 文件 277/277 通过。独立基线补跑 sync:shared 后 tsc 18 项语义集合一致（忽略行列和 N more 诊断计数），本轮修改 Go 文件 gofmt 干净、全仓既有 16 项保持，git diff --check 通过。本机无容器运行时，不称为 Go 1.25 容器验收；不执行本机 Next 构建或生产部署。
+- [Hermes 待验收] 一次性实例＋生产库副本复核图片／音频成功、HTTP／业务失败、停止及 n 倍数的积分流水；公开 proxy 仍单扣／失败单退、用户渠道零扣，视频／工作流／Agent 草稿保持原行为。历史多扣只保留背景数据，不做追溯退款，不触发 deploy-production.yml。
+
 ## v0.8.1 三项回移（本轮待验收）
 
 - [P0 本机测试] 渠道唯一写入点要求设置已成功加载，未加载／加载失败均不发起保存并提示；渠道保存按钮在 loading 或尚未加载成功时禁用。三条新增测试在 4bee6a1 上先失败，修复后验证；成功加载后的原保存载荷与规范化逻辑不改，不新增确认弹窗。待 Hermes 验证慢网及加载失败后的真实界面。
