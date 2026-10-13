@@ -2837,6 +2837,7 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
 function serializeLog(log: GenerationLog): GenerationLog {
     return {
         ...log,
+        stopState: log.stopState === "stopping" ? "failed" : log.stopState,
         references: log.references.map((item) => ({ ...item, dataUrl: item.storageKey ? "" : item.dataUrl })),
         firstFrame: log.firstFrame?.storageKey ? { ...log.firstFrame, dataUrl: "" } : log.firstFrame,
         lastFrame: log.lastFrame?.storageKey ? { ...log.lastFrame, dataUrl: "" } : log.lastFrame,

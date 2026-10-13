@@ -6158,7 +6158,7 @@ function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefine
 }
 
 function resetInterruptedGeneration(nodes: CanvasNodeData[]) {
-    return nodes.map((node) => (node.metadata?.status === "loading" && !canvasRecoverableTaskId(node) ? { ...node, metadata: { ...node.metadata, status: "error" as const, errorDetails: "页面刷新后生成已中断，请重新生成。" } } : node));
+    return nodes.map((node) => (node.metadata?.status === "loading" && !canvasRecoverableTaskId(node) ? { ...node, metadata: { ...node.metadata, status: "error" as const, errorDetails: "页面刷新后生成已中断，请重新生成。" } } : node.metadata?.stopState === "stopping" ? { ...node, metadata: { ...node.metadata, stopState: "failed" as const, errorDetails: "停止未确认" } } : node));
 }
 
 function canvasRecoverableTaskId(node: CanvasNodeData) {

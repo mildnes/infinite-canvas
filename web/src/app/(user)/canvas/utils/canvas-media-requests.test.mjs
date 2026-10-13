@@ -319,3 +319,10 @@ test("普通批量根节点重新生成替换主图任务，根节点停止仍�
     assert.equal(parent.metadata.status, "loading");
     assert.notEqual(parent.metadata.imageTaskId, "old");
 });
+
+test("刷新不会持久化禁用的停止中按钮，未确认停止恢复可重试", () => {
+    const definition = nodes.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "resetInterruptedGeneration");
+    const reset = vm.runInNewContext(compile("(" + definition.getText(ast) + ")"), { canvasRecoverableTaskId: () => "task" });
+    const node = { id: "node", metadata: { status: "loading", stopState: "stopping" } };
+    assert.equal(reset([node])[0].metadata.stopState, "failed");
+});

@@ -55,3 +55,10 @@ test("两个工作台布局均接停止动作；重新生成仍生成 fresh clie
     assert.match(callback("submitGenerationSnapshot"), /client_video_task_.*nanoid/);
     assert.match(callback("retryResult"), /submitGenerationSnapshot/);
 });
+
+test("视频历史不存可永久禁用按钮的停止中瞬态", () => {
+    const definition = nodes.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "serializeLog");
+    const serialize = vm.runInNewContext(compile("(" + definition.getText(ast) + ")"), { serializeKlingElementList: (value) => value });
+    const log = { status: "生成中", stopState: "stopping", references: [], videoReferences: [], audioReferences: [], config: {} };
+    assert.equal(serialize(log).stopState, "failed");
+});
