@@ -432,7 +432,7 @@ function imageMimeFromBase64(value: string) {
 }
 
 export function normalizeBase64Image(value: string, fallbackMime: string) {
-    const match = value.match(/^data:([^;,]+)(?:;[^,]*)?;base64,(.*)$/s);
+    const match = value.match(/^data:([^;,]+)(?:;[^,]*)?;base64,([\s\S]*)$/);
     if (value.startsWith("data:") && !match) return value;
     const declaredMime = match?.[1] || "";
     const base64 = (match?.[2] || value).replace(/\s/g, "");

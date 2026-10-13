@@ -899,7 +899,7 @@ function collectMentionedAssistantReferences(text: string, nodes: CanvasNodeData
         .filter((item) => hitLabels.has(item.label))
         .map((item) => nodeById.get(item.nodeId))
         .filter((node): node is CanvasNodeData => Boolean(node))
-        .map(nodeToReference)
+        .map((node) => nodeToReference(node))
         .filter((item): item is CanvasAssistantReference => Boolean(item));
 }
 

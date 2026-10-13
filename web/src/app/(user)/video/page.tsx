@@ -12,11 +12,13 @@ import { saveAs } from "file-saver";
 
 import { AssetPickerModal, type InsertAssetPayload } from "@/app/(user)/canvas/components/asset-picker-modal";
 import { ModelPicker } from "@/components/model-picker";
+import { CreditSymbol } from "@/constant/credits";
 import { KlingV26WorkbenchPanel } from "@/app/(user)/video/components/kling-v26-workbench-panel";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { VideoSettingsPanel, isKIEKlingV3Config, kieKlingOmniVariant, normalizeVideoResolutionValue, normalizeVideoSizeValue, videoResolutionOptions, videoSizeForResolution, videoSizeOptions } from "@/components/video-settings-panel";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
+import { formatCreditQuote, indexModelCredits, requestCreditQuote } from "@/lib/model-credits";
 import { isMiniMaxH3Config } from "@/lib/minimax-video";
 import { ARK_SEEDANCE_REFERENCE_LIMITS, boolConfig, isSeedanceVideoConfig, normalizeSeedanceRatio, seedanceReferenceLabel, seedanceVideoReferenceError, seedanceVideoReferenceHint, SEEDANCE_REFERENCE_LIMITS } from "@/lib/seedance-video";
 import { COGVIDEOX3_DURATIONS, isAgnesVideoV25Model, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration, supportsVideoFrameReferences } from "@/lib/video-model-capabilities";
@@ -1105,7 +1107,7 @@ export default function VideoPage() {
                 }
                 const workflowVideo = workflowTask && !workflowMediaStorageKey(task.video_url || task.url || "") ? await downloadRemoteMedia(task.video_url || task.url || "") : null;
                 if (!active()) return;
-                const uploaded = workflowVideo ? await uploadMediaFile(workflowVideo, "workflow-video", undefined, context.token) : null;
+                const uploaded = workflowVideo ? await uploadMediaFile(workflowVideo, "workflow-video") : null;
                 if (!active()) return;
                 const video = uploaded ? { ...videoFromTaskResponse(task, durationMs), url: uploaded.url, storageKey: uploaded.storageKey, bytes: uploaded.bytes, mimeType: uploaded.mimeType, width: uploaded.width || 1280, height: uploaded.height || 720 } : videoFromTaskResponse(task, durationMs);
                 const nextLog = { ...baseLog, status: "成功" as const, video, error: undefined, errorDetail: undefined };
@@ -1544,10 +1546,24 @@ function WorkbenchPanel({
     bottomSettingsCollapsed?: boolean;
     setBottomSettingsCollapsed?: (value: boolean) => void;
 }) {
+    const modelCosts = useConfigStore((state) => state.publicSettings?.modelChannel.modelCosts);
+    const costIndex = useMemo(() => indexModelCredits(modelCosts), [modelCosts]);
+    const workflowRef = config.videoWorkflowRef;
+    const billingModel = workflowRef ? `workflow:${workflowRef.scope}:${workflowRef.channelId}:${workflowRef.kind}:${workflowRef.workflowId}` : model;
+    const quote = requestCreditQuote({
+        channelMode: workflowRef?.scope === "personal" ? "local" : config.channelMode,
+        costIndex,
+        channels: config.publicChannels,
+        channelId: workflowRef?.channelId || config.videoChannelId,
+        model: billingModel,
+        mode: "video",
+        seconds: config.videoSeconds,
+    });
+    const creditLabel = <span className="inline-flex items-center gap-1"><CreditSymbol />{formatCreditQuote({ min: quote.min * taskCount, max: quote.max * taskCount }, workflowRef ? undefined : 2)}</span>;
     const frameReferencesEnabled = Boolean(config.videoWorkflowRef) || supportsVideoFrameReferences(model, channelProtocolForConfig({ ...config, model }));
     const referenceLimits = !config.videoWorkflowRef && channelProtocolForConfig({ ...config, model, videoModel: model }) === "ark" && modelKey(model).includes("seedance-2-5") ? ARK_SEEDANCE_REFERENCE_LIMITS : SEEDANCE_REFERENCE_LIMITS;
     const cogVideoX3 = !config.videoWorkflowRef && isCogVideoX3Model(model);
-    const audioGenerationEnabled = supportsVideoAudioGeneration(model, channelProtocolForConfig({ ...config, model, videoModel: model }));
+    const audioGenerationEnabled = supportsVideoAudioGeneration(model);
     const generateAudio = boolConfig(config.videoGenerateAudio, false);
     const klingBottomConfig = config.videoWorkflowRef ? null : resolveKlingWorkbenchConfig(config, model);
     const klingBottomVariant = klingBottomConfig?.variant || "";
@@ -1590,6 +1606,7 @@ function WorkbenchPanel({
                                 <Button title="切换到侧边工作台" icon={<PanelLeft className="size-4" />} onClick={() => onLayoutChange("side")} />
                                 <Button type="primary" className="h-9 rounded-xl px-4 font-medium lg:!hidden" icon={<Sparkles className="size-4" />} disabled={!canGenerate} onClick={onGenerate}>
                                     {pendingCount ? `${pendingCount} 生成中` : "开始创作"}
+                                    {creditLabel}
                                 </Button>
                             </div>
                         </div>
@@ -1622,6 +1639,7 @@ function WorkbenchPanel({
                             <ReferenceQuickActions imageCount={references.length} videoCount={videoReferences.length} audioCount={audioReferences.length} onPasteReferences={onPasteReferences} onUploadReferences={onUploadReferences} />
                             <Button type="primary" className="hidden h-11 min-w-28 items-center justify-center gap-1.5 rounded-xl lg:flex" icon={<Sparkles className="size-4" />} disabled={!canGenerate} onClick={onGenerate}>
                                 {pendingCount ? `${pendingCount} 生成中` : "开始创作"}
+                                {creditLabel}
                             </Button>
                         </div>
                         {firstFrame || lastFrame || references.length || videoReferences.length || audioReferences.length ? (
@@ -1699,6 +1717,7 @@ function WorkbenchPanel({
             <div className="shrink-0 border-t border-stone-200 p-4 dark:border-stone-800">
                 <Button type="primary" size="large" block icon={<Sparkles className="size-4" />} disabled={!canGenerate} onClick={onGenerate}>
                     {pendingCount ? `生成中（${pendingCount}）` : "开始生成"}
+                    {creditLabel}
                 </Button>
             </div>
         </div>

@@ -65,6 +65,8 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
         channelId: workflowRef?.channelId || config.activeChannelId,
         model: billingModel,
         count: workflowRef ? 1 : mode === "image" ? config.count : 1,
+        mode,
+        seconds: config.videoSeconds,
     });
 
     useEffect(() => {
@@ -153,7 +155,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                     <span className="flex items-center gap-1.5">
                         <span className="inline-flex items-center gap-1 text-xs font-medium tabular-nums">
                             <CreditSymbol />
-                            {formatCreditQuote(quote)}
+                            {formatCreditQuote(quote, mode === "video" && !workflowRef ? 2 : undefined)}
                         </span>
                         {isRunning ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
                     </span>

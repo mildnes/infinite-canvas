@@ -3698,7 +3698,7 @@ const generateAngleNode = useCallback(
                         imageCount: 1,
                         videoSeconds: agentEffectiveConfig.videoSeconds,
                         videoGenerateAudio: agentEffectiveConfig.videoGenerateAudio,
-                        videoSupportsAudio: supportsVideoAudioGeneration(videoModel, channelProtocolForConfig({ ...agentEffectiveConfig, model: videoModel, videoModel })),
+                        videoSupportsAudio: supportsVideoAudioGeneration(videoModel),
                         videoDuration: canvasAgentVideoDurationHint(videoModel),
                         audioVoice: isGeminiTtsModel(audioModel) && isGeminiConfig({ ...agentEffectiveConfig, model: audioModel }, audioModel) ? agentEffectiveConfig.geminiTtsVoice : isGlmTtsModel(audioModel) ? agentEffectiveConfig.glmTtsVoice : grokTts ? agentEffectiveConfig.grokTtsVoice : agentEffectiveConfig.audioVoice,
                         audioLanguage: grokTts ? agentEffectiveConfig.grokTtsLanguage : "",
@@ -3925,7 +3925,7 @@ const generateAngleNode = useCallback(
                         const durationError = agentWorkflowRef ? "" : validateCanvasAgentVideoSeconds(generationConfig.model, seconds);
                         if (durationError) return { ok: false, code: "unsupported_duration", message: durationError, supported: canvasAgentVideoDurationHint(generationConfig.model) };
                         const generateAudio = typeof args.generateAudio === "boolean" ? args.generateAudio : generationConfig.videoGenerateAudio === "true";
-                        if (!agentWorkflowRef && generateAudio && !supportsVideoAudioGeneration(generationConfig.model, channelProtocolForConfig(generationConfig))) {
+                        if (!agentWorkflowRef && generateAudio && !supportsVideoAudioGeneration(generationConfig.model)) {
                             return { ok: false, code: "video_audio_not_supported", message: "当前全局视频模型不支持视频原生声音" };
                         }
                         metadata.seconds = String(seconds);
@@ -5574,7 +5574,7 @@ async function hydrateCanvasImages(nodes: CanvasNodeData[]) {
             if ((node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) && node.metadata?.storageKey) return { ...node, metadata: { ...node.metadata, content: await resolveMediaUrl(node.metadata.storageKey, content) } };
             if (!isCanvasImageNodeType(node.type) || (!content && !node.metadata?.storageKey)) return node;
             if (node.metadata?.storageKey) return { ...node, metadata: { ...node.metadata, content: await resolveImageUrl(node.metadata.storageKey, content) } };
-            if (!content.startsWith("data:image/")) return node;
+            if (!content || !content.startsWith("data:image/")) return node;
             return { ...node, metadata: { ...node.metadata, ...imageMetadata(await uploadImage(content, { localOnly: true })) } };
         }),
     );
@@ -6237,7 +6237,7 @@ async function workflowVideoTask(task: WorkflowGenerationTask, token = useUserSt
     if (!token || useUserStore.getState().token !== token) throw new Error("登录状态已变化");
     const url = task.status === "succeeded" ? task.urls?.[0] || "" : "";
     const storageKey = workflowMediaStorageKey(url);
-    const video = url && !storageKey ? await uploadMediaFile(await downloadRemoteMedia(url), "workflow-video", undefined, token) : null;
+    const video = url && !storageKey ? await uploadMediaFile(await downloadRemoteMedia(url), "workflow-video") : null;
     if (useUserStore.getState().token !== token) throw new Error("登录状态已变化");
     return { id: task.id, task_id: task.id, status: task.status === "succeeded" ? "completed" : task.status, progress: task.progress, video_url: video?.url || url, url: video?.url || url, storageKey: video?.storageKey || storageKey, mimeType: task.mimeType || video?.mimeType, bytes: task.bytes || video?.bytes, width: task.width || video?.width, height: task.height || video?.height, error: task.error ? { message: task.error } : undefined };
 }
@@ -6246,7 +6246,7 @@ async function workflowAudioTask(task: WorkflowGenerationTask, token = useUserSt
     if (!token || useUserStore.getState().token !== token) throw new Error("登录状态已变化");
     const url = task.status === "succeeded" ? task.urls?.[0] || "" : "";
     const storageKey = workflowMediaStorageKey(url);
-    const audio = url && !storageKey ? await uploadMediaFile(await downloadRemoteMedia(url), "workflow-audio", undefined, token) : null;
+    const audio = url && !storageKey ? await uploadMediaFile(await downloadRemoteMedia(url), "workflow-audio") : null;
     if (useUserStore.getState().token !== token) throw new Error("登录状态已变化");
     return { id: task.id, status: task.status === "succeeded" ? "completed" : task.status, progress: task.progress, audio_url: audio?.url || url, url: audio?.url || url, storageKey: audio?.storageKey || storageKey, mimeType: task.mimeType || audio?.mimeType || "audio/mpeg", bytes: task.bytes || audio?.bytes || 0, error: task.error ? { message: task.error } : undefined };
 }

@@ -45,6 +45,8 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, videoFram
         channelId: workflowRef?.channelId || modelChannelId(config, mode),
         model: billingModel,
         count: workflowRef ? 1 : mode === "image" ? count : 1,
+        mode,
+        seconds: config.videoSeconds,
     });
     const chipStyle = { background: theme.node.fill, borderColor: theme.node.stroke, color: theme.node.text };
     const hasAnyInput = Boolean(inputSummary.textCount || inputSummary.imageCount || inputSummary.videoCount || inputSummary.audioCount);
@@ -138,7 +140,7 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, videoFram
             >
                 <span className="inline-flex items-center gap-1.5">
                     <span className="inline-flex items-center gap-1">
-                        <CreditSymbol />{formatCreditQuote(quote)}
+                        <CreditSymbol />{formatCreditQuote(quote, mode === "video" && !workflowRef ? 2 : undefined)}
                     </span>
                     {isRunning ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}
                     <span>开始生成</span>
