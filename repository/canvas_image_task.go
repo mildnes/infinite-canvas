@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/tigerowo/infinite-canvas/model"
-	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
@@ -122,37 +121,15 @@ func DeleteFinishedCanvasImageTasksBefore(before string) error {
 		return err
 	}
 	return db.Where("completed_at <> ? AND completed_at < ?", "", before).
-		Where("status IN ?", []string{"completed", "failed"}).
+		Where("status IN ?", []string{"completed", "failed", "cancelled"}).
 		Delete(&model.CanvasImageTask{}).Error
 }
 
 func DeleteUserCanvasTasks(userID string, sourceID string, nodeIDs []string) error {
-	db, err := DB()
-	if err != nil {
-		return err
-	}
-
-	nodeIDs = uniqueTrimmedValues(nodeIDs...)
-
-	return db.Transaction(func(tx *gorm.DB) error {
-		deleteTasks := func(task any) error {
-			query := tx.Where(
-				"user_id = ? AND source = ? AND source_id = ?",
-				userID,
-				"canvas",
-				sourceID,
-			)
-			if len(nodeIDs) > 0 {
-				query = query.Where("node_id IN ?", nodeIDs)
-			}
-			return query.Delete(task).Error
-		}
-
-		if err := deleteTasks(&model.CanvasImageTask{}); err != nil {
-			return err
-		}
-		return deleteTasks(&model.CanvasAudioTask{})
-	})
+	// A node is a UI reference, not task ownership. Keep active runners and
+	// terminal billing/audit records until the shared retention cleaner runs.
+	// Project deletion still uses its own existing scheduled cleanup.
+	return nil
 }
 
 func uniqueTrimmedValues(values ...string) []string {

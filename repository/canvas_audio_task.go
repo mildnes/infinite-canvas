@@ -58,3 +58,21 @@ func GetUserCanvasAudioTask(userID string, id string) (model.CanvasAudioTask, bo
 	}
 	return task, true, nil
 }
+
+func HasActiveCanvasAudioTasks() (bool, error) {
+	db, err := DB()
+	if err != nil {
+		return false, err
+	}
+	var count int64
+	err = db.Model(&model.CanvasAudioTask{}).Where("status IN ?", activeGenerationTaskStatuses).Count(&count).Error
+	return count > 0, err
+}
+
+func DeleteFinishedCanvasAudioTasksBefore(before string) error {
+	db, err := DB()
+	if err != nil {
+		return err
+	}
+	return db.Where("completed_at <> ? AND completed_at < ?", "", before).Where("status IN ?", []string{"completed", "failed", "cancelled"}).Delete(&model.CanvasAudioTask{}).Error
+}

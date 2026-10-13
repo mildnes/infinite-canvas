@@ -53,9 +53,17 @@ func CreateCanvasAudioTask(input CanvasAudioTaskCreateInput) (model.CanvasAudioT
 		UpdatedAt:       current,
 	}
 	if input.WorkflowRef != "" || input.Credits > 0 {
-		return task, ConsumeUserCredits(task.UserID, task.ChannelID, input.BillingName, task.Credits, input.BillingPath, &task)
+		err := ConsumeUserCredits(task.UserID, task.ChannelID, input.BillingName, task.Credits, input.BillingPath, &task)
+		if err == nil {
+			WakeVideoTaskPoller()
+		}
+		return task, err
 	}
-	return repository.SaveCanvasAudioTask(task)
+	saved, err := repository.SaveCanvasAudioTask(task)
+	if err == nil {
+		WakeVideoTaskPoller()
+	}
+	return saved, err
 }
 
 func GetUserCanvasAudioTask(userID string, id string) (model.CanvasAudioTask, bool, error) {

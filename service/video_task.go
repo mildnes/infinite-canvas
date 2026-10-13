@@ -244,6 +244,7 @@ func runVideoTaskPoller() {
 	inFlight := sync.Map{}
 	lastCleanupAt := time.Time{}
 	lastImageCleanupAt := time.Time{}
+	lastAudioCleanupAt := time.Time{}
 	workflowCursorCreatedAt, workflowCursorID := "", ""
 	for range videoTaskPollWake {
 		for {
@@ -283,8 +284,34 @@ func runVideoTaskPoller() {
 			if imageErr != nil {
 				log.Printf("check active canvas image tasks failed err=%v", imageErr)
 			}
-			if len(tasks) == 0 && len(workflowTasks) == 0 && !hasComfyTasks && !hasComfyCleanup && !hasImageTasks {
-				if workflowErr != nil || comfyErr != nil || cleanupErr != nil || imageErr != nil {
+			hasAudioTasks, audioErr := repository.HasActiveCanvasAudioTasks()
+			if audioErr != nil {
+				log.Printf("check active canvas audio tasks failed err=%v", audioErr)
+			}
+			if lastAudioCleanupAt.IsZero() || current.Sub(lastAudioCleanupAt) >= videoTaskCleanupInterval {
+				if err := repository.DeleteFinishedCanvasAudioTasksBefore(videoTaskTime(current.Add(-videoTaskFinishedRetention))); err != nil {
+					log.Printf("cleanup finished canvas audio tasks failed err=%v", err)
+				}
+				lastAudioCleanupAt = current
+			}
+			hasFinishedTasks, finishedErr := repository.HasFinishedGenerationTasks()
+			if finishedErr != nil {
+				log.Printf("check retained generation tasks failed err=%v", finishedErr)
+			}
+			if lastCleanupAt.IsZero() || current.Sub(lastCleanupAt) >= videoTaskCleanupInterval {
+				if err := repository.DeleteFinishedVideoTasksBefore(videoTaskTime(current.Add(-videoTaskFinishedRetention))); err != nil {
+					log.Printf("cleanup finished video tasks failed err=%v", err)
+				}
+				lastCleanupAt = current
+			}
+			if lastImageCleanupAt.IsZero() || current.Sub(lastImageCleanupAt) >= videoTaskCleanupInterval {
+				if err := repository.DeleteFinishedCanvasImageTasksBefore(videoTaskTime(current.Add(-videoTaskFinishedRetention))); err != nil {
+					log.Printf("cleanup finished canvas image tasks failed err=%v", err)
+				}
+				lastImageCleanupAt = current
+			}
+			if len(tasks) == 0 && len(workflowTasks) == 0 && !hasComfyTasks && !hasComfyCleanup && !hasImageTasks && !hasAudioTasks && !hasFinishedTasks {
+				if workflowErr != nil || comfyErr != nil || cleanupErr != nil || imageErr != nil || audioErr != nil || finishedErr != nil {
 					waitForNextVideoTaskPoll()
 					continue
 				}
@@ -297,18 +324,6 @@ func runVideoTaskPoller() {
 				videoTaskRunning = false
 				videoTaskRunningMu.Unlock()
 				break
-			}
-			if (len(tasks) > 0 || len(workflowTasks) > 0) && (lastCleanupAt.IsZero() || current.Sub(lastCleanupAt) >= videoTaskCleanupInterval) {
-				if err := repository.DeleteFinishedVideoTasksBefore(videoTaskTime(current.Add(-videoTaskFinishedRetention))); err != nil {
-					log.Printf("cleanup finished video tasks failed err=%v", err)
-				}
-				lastCleanupAt = current
-			}
-			if hasImageTasks && (lastImageCleanupAt.IsZero() || current.Sub(lastImageCleanupAt) >= videoTaskCleanupInterval) {
-				if err := repository.DeleteFinishedCanvasImageTasksBefore(videoTaskTime(current.Add(-videoTaskFinishedRetention))); err != nil {
-					log.Printf("cleanup finished canvas image tasks failed err=%v", err)
-				}
-				lastImageCleanupAt = current
 			}
 			for _, task := range tasks {
 				if _, loaded := inFlight.LoadOrStore(task.ID, true); loaded {

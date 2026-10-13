@@ -3101,7 +3101,7 @@ const generateAngleNode = useCallback(
                     const rootId = isEmptyPanoramaNode ? nodeId : nanoid();
                     const childIds = count > 1 ? Array.from({ length: count }, () => nanoid()) : [];
                     const targetIds = count > 1 ? childIds : [rootId];
-                    const targetTaskIds = Object.fromEntries(targetIds.map((id) => [id, "client_image_task_" + id]));
+                    const targetTaskIds = Object.fromEntries(targetIds.map((id) => [id, "client_image_task_" + id + "-" + nanoid(6)]));
                     const primaryTargetId = targetIds[0];
                     pendingChildIds = isEmptyPanoramaNode ? childIds : [rootId, ...childIds];
                     const rootNode: CanvasNodeData = {
@@ -3261,7 +3261,7 @@ const generateAngleNode = useCallback(
                     const rootId = isEmptyImageNode ? nodeId : nanoid();
                     const childIds = count > 1 ? Array.from({ length: count }, () => nanoid()) : [];
                     const targetIds = count > 1 ? childIds : [rootId];
-                    const targetTaskIds = Object.fromEntries(targetIds.map((id) => [id, `client_image_task_${id}`]));
+                    const targetTaskIds = Object.fromEntries(targetIds.map((id) => [id, `client_image_task_${id}-${nanoid(6)}`]));
                     const primaryTargetId = targetIds[0];
                     pendingChildIds = isEmptyImageNode ? childIds : [rootId, ...childIds];
                     const rootNode: CanvasNodeData = {
@@ -3418,7 +3418,7 @@ const generateAngleNode = useCallback(
                     const spec = nodeSizeFromRatio(videoGenerationConfig.size, NODE_DEFAULT_SIZE[CanvasNodeType.Video].width, NODE_DEFAULT_SIZE[CanvasNodeType.Video].height) || NODE_DEFAULT_SIZE[CanvasNodeType.Video];
                     const isEmptyVideoNode = sourceNode?.type === CanvasNodeType.Video && !sourceNode.metadata?.content;
                     const videoId = isEmptyVideoNode ? nodeId : nanoid();
-                    const clientTaskId = `client_video_task_${videoId}`;
+                    const clientTaskId = `client_video_task_${videoId}-${nanoid(6)}`;
                     const parent = sourceNode?.position || { x: 0, y: 0 };
                     const videoNode: CanvasNodeData = {
                         id: videoId,
@@ -3447,7 +3447,7 @@ const generateAngleNode = useCallback(
                     const spec = NODE_DEFAULT_SIZE[CanvasNodeType.Audio];
                     const isEmptyAudioNode = sourceNode?.type === CanvasNodeType.Audio && !sourceNode.metadata?.content;
                     const audioId = isEmptyAudioNode ? nodeId : nanoid();
-                    const clientAudioTaskId = `client_audio_task_${audioId}`;
+                    const clientAudioTaskId = `client_audio_task_${audioId}-${nanoid(6)}`;
                     const parent = sourceNode?.position || { x: 0, y: 0 };
                     const audioNode: CanvasNodeData = {
                         id: audioId,

@@ -277,3 +277,10 @@ test("已停止重生成：真实 retry 回调使用新 clientTaskId", async () 
     assert.match(api.sent[0][3].clientTaskId, /^client_image_task_node-/);
     assert.ok(api.sent[0][3].signal instanceof AbortSignal);
 });
+
+test("删节点后的新提交不复用同节点旧结果：普通／全景／视频／音频均生成 fresh clientTaskId", () => {
+    const submit = callback("handleGenerateNode");
+    assert.equal((submit.match(/const targetTaskIds = .*nanoid\(6\)/g) || []).length, 2);
+    assert.match(submit, /const clientTaskId = .*videoId.*nanoid\(6\)/);
+    assert.match(submit, /const clientAudioTaskId = .*audioId.*nanoid\(6\)/);
+});
