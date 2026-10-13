@@ -55,7 +55,7 @@ description: 当前后端主要数据表与字段说明
 | `avatar_url` | string | 头像地址 |
 | `role` | string | 角色：`user`、`admin` |
 | `group_id` | string | 用户分组 ID，带索引；空值表示内置默认分组，未知 ID 也按默认组处理 |
-| `credits` | number | 算力点余额 |
+| `credits` | decimal(20,2) | 算力点余额，API 使用 number，支持两位小数 |
 | `aff_code` | string | 用户自己的邀请码，唯一索引 |
 | `aff_count` | number | 已邀请用户数量，冗余统计字段 |
 | `inviter_id` | string | 邀请人用户 ID |
@@ -219,7 +219,7 @@ Bridge 工作流请求及租约表。队列由 `bridge_id` 和 `status` 索引�
 | `request_body` | text | 创建任务时的请求摘要 |
 | `response_body` | text | 创建任务时的响应摘要 |
 | `last_response` | text | 最近一次状态响应摘要 |
-| `credits` | number | 创建任务时预扣算力点 |
+| `credits` | decimal(20,2) | 创建任务时实际预扣算力点；普通视频按每秒单价乘以请求时长，工作流按次，失败或停止按同值退款 |
 | `created_at` | string | 创建时间 |
 | `updated_at` | string | 更新时间 |
 | `started_at` | string | 上游开始时间 |
@@ -227,6 +227,8 @@ Bridge 工作流请求及租约表。队列由 `bridge_id` 和 `status` 索引�
 | `last_polled_at` | string | 最近轮询时间 |
 
 后台轮询器按 `status + created_at` 查询未完成任务；服务启动时及每 10 分钟会将开始时间超过 30 分钟的活动任务收尾为失败并写入完成时间，旧记录没有 `started_at` 时回退 `created_at`。旧数据库中如果残留废弃列，不再参与代码查询。
+
+普通视频的智能时长 `-1` 按 15 秒计费；无有效时长时尝试由帧数和帧率换算，仍无有效结果时按 1 秒。未配置单价默认不扣除。
 
 ### video_generation_logs
 
@@ -306,7 +308,7 @@ Bridge 工作流请求及租约表。队列由 `bridge_id` 和 `status` 索引�
 | `original_url` | text | 第一张图片的上游原始地址，仅用于审计 |
 | `original_urls` | JSON | 多图逐张上游原始地址，仅用于审计 |
 | `workflow_ref` | text | 工作流任务的归属、渠道和工作流标识 JSON；普通模型任务为空 |
-| `credits` | number | 工作流创建时实际预扣的整数算力点，失败时按此退款 |
+| `credits` | decimal(20,2) | 创建任务时实际预扣算力点；普通图片按张、工作流按次，失败或停止按同值退款 |
 | `storage_key` | string | 存储对象 key |
 | `response_body` | text | 新成功任务不再保存上游二进制/base64；旧任务需单独迁移 |
 | `error` | text | 失败摘要 |
@@ -338,7 +340,7 @@ Bridge 工作流请求及租约表。队列由 `bridge_id` 和 `status` 索引�
 | `prompt` | text | 提示词 |
 | `audio_url` | text | 完成后音频 URL |
 | `workflow_ref` | text | 工作流任务的归属、渠道和工作流标识 JSON；普通模型任务为空 |
-| `credits` | number | 工作流创建时实际预扣的整数算力点，失败时按此退款 |
+| `credits` | decimal(20,2) | 创建任务时实际预扣算力点；音频和工作流按次，失败或停止按同值退款 |
 | `storage_key` | string | 存储对象 key |
 | `response_body` | text | 新任务只保留不含音频二进制的摘要；旧任务需单独迁移 |
 | `error` | text | 失败摘要 |
@@ -442,7 +444,7 @@ Skill 的附属目录与 Markdown/TXT 引用文件。Agent 按需读取，不会
 | --- | --- | --- |
 | `channelId` | string | `private.channels[].id`，同名模型可跨渠道独立定价 |
 | `model` | string | 模型名称 |
-| `credits` | number | 按实际渠道每次调用预扣的算力点；多张图片按张数乘算，未配置默认不扣除 |
+| `credits` | number | 支持两位小数的单价；图片按张、视频按秒、文本和音频按次、工作流按次，视频智能时长 `-1` 按 15 秒计算，未配置默认不扣除 |
 
 `auth.linuxDo` 当前字段：
 
@@ -493,15 +495,15 @@ Skill 的附属目录与 Markdown/TXT 引用文件。Agent 按需读取，不会
 
 ### credit_logs
 
-用户算力点变更流水表。当前记录后台手动调整、模型调用预扣和模型调用失败返还。
+用户算力点变更流水表。当前记录后台手动调整、模型调用预扣以及失败或主动停止返还。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | string | 主键 |
 | `user_id` | string | 关联用户 ID |
 | `type` | string | 类型：`admin_adjust`、`ai_consume`、`ai_refund` |
-| `amount` | number | 本次变动数量，增加为正，扣减为负 |
-| `balance` | number | 变动后的用户算力点余额 |
+| `amount` | decimal(20,2) | 本次变动数量，增加为正，扣减为负；API 使用 number |
+| `balance` | decimal(20,2) | 变动后的用户算力点余额；API 使用 number |
 | `related_id` | string | 关联业务 ID，可为空 |
 | `remark` | string | 备注 |
 | `extra` | json | 模型预扣和退款记录包含实际 `channelId`、`model`、`path` |
@@ -513,4 +515,8 @@ Skill 的附属目录与 Markdown/TXT 引用文件。Agent 按需读取，不会
 | --- | --- |
 | `admin_adjust` | 后台手动调整 |
 | `ai_consume` | 调用后端模型接口消费 |
-| `ai_refund` | 后端模型接口调用失败返还 |
+| `ai_refund` | 后端模型接口调用失败或用户主动停止返还 |
+
+失败退款备注为“模型调用失败返还 <模型名>”，主动停止为“用户停止返还 <模型名>”；二者保留相同的 `extra.channelId`、`model`、`path` 语义。退款金额取任务保存的实际预扣额，不重新按当前价格计算。AI 调用审计表 `ai_call_logs.credits` 同样使用 `decimal(20,2)` 保存实际计费值。
+
+积分字段由 Go 的 `float64` 与 GORM 的 `decimal(20,2)` 声明表示。SQLite 改列类型可能重建表；上线前需在生产库副本核对迁移 DDL、耗时和用户余额、流水、任务逐行数值一致性，历史整数积分必须保持原值。

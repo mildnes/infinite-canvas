@@ -53,7 +53,7 @@ description: settings 表中 public 和 private 配置结构说明
 | --- | --- | --- |
 | `availableModels` | string[] | 系统可用模型；保存设置时会自动合并所有已启用私有渠道的模型 |
 | `availableWorkflows` | string[] | 对普通用户开放的系统工作流标识；仅工作流渠道使用 |
-| `modelCosts` | object[] | 按渠道 ID 和模型分别配置算力点；后端选定渠道后预扣，失败时返还实际预扣额；未配置默认不扣除 |
+| `modelCosts` | object[] | 按渠道 ID 和请求模型名分别配置算力点；图片按张、视频按秒、文本和音频按次预扣，失败或停止时返还实际预扣额；未配置默认不扣除 |
 | `defaultModel` | string | 默认模型，从 `availableModels` 中选择；为空或失效时优先选择文本模型 |
 | `defaultImageModel` | string | 默认图片模型，从 `availableModels` 中选择；为空或失效时优先选择渠道显式声明为 `image` 的模型，再兼容旧的 `seedream`、`image`、`gpt-image` 名称推导 |
 | `defaultVideoModel` | string | 默认视频模型，从 `availableModels` 中选择；为空或失效时优先选择渠道显式声明为 `video` 的模型，再兼容旧的 `seedance`、`video` 名称推导 |
@@ -67,9 +67,13 @@ description: settings 表中 public 和 private 配置结构说明
 | --- | --- | --- |
 | `channelId` | string | `private.channels[].id`，同名模型在不同渠道可分别定价 |
 | `model` | string | 模型名称 |
-| `credits` | number | 每次后端模型接口调用前预扣的算力点；图片多张生成按张数乘算 |
+| `credits` | number | 支持两位小数的算力点单价；图片为每张、视频为每秒、文本和音频为每次，工作流为每次 |
 
 读取旧版仅含 `model` 和 `credits` 的价格时，系统将其复制到当时包含该模型的各渠道；已有渠道专属价格优先。未匹配渠道的旧价格保留在配置中，但不会参与扣费。后台按渠道（含停用渠道）列出全部模型，新模型未定价为 0 点。未指定渠道时，服务端可在可用渠道中选择；画布显示相应的预计点数范围。本地直连不扣点。流水 `extra.channelId` 记录实际调用渠道。
+
+视频预扣额为每秒单价乘以请求时长。按 `seconds`、`duration`、JSON 的 `parameters.durationSeconds` 顺序读取时长；智能时长 `-1` 按 15 秒计费。没有有效时长时尝试 `ceil((num_frames - 1) / frame_rate)`，仍无有效结果时按 1 秒。图片按请求张数乘算；文本和音频继续沿用请求次数语义。任务记录保存实际预扣额，失败或停止按同值退款。
+
+启用视频按秒计费前应检查既有视频价格：例如原来 30 点／次的 5 秒任务，若保持 `credits=30`，会变为 30 点／秒；需要维持约 30 点／5 秒时应由管理员将单价调整为 6 点／秒。`MiniMax-H3` 的现有 30 点单价需在上线前按此口径确认；系统不会自动改价格。
 
 ### 模型能力声明
 
