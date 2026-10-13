@@ -4012,9 +4012,9 @@ const generateAngleNode = useCallback(
         async (node: CanvasNodeData) => {
             const sourceNode = findRetrySourceNode(node.id, nodesRef.current, connectionsRef.current) || node;
             const retryWorkflowRef = node.metadata?.workflowRef;
-            const batchPrimaryId = retryWorkflowRef && isCanvasImageNodeType(node.type) && node.metadata?.isBatchRoot ? node.metadata.primaryImageId : undefined;
+            const batchPrimaryId = isCanvasImageNodeType(node.type) && node.metadata?.isBatchRoot ? node.metadata.primaryImageId : undefined;
             const retryTargetId = batchPrimaryId && nodesRef.current.some((item) => item.id === batchPrimaryId) ? batchPrimaryId : node.id;
-            const retryBatchRootId = retryWorkflowRef && isCanvasImageNodeType(node.type) ? (retryTargetId === node.id ? node.metadata?.batchRootId : node.id) : undefined;
+            const retryBatchRootId = isCanvasImageNodeType(node.type) ? (retryTargetId === node.id ? node.metadata?.batchRootId : node.id) : undefined;
             const retryBatchRoot = retryBatchRootId ? nodesRef.current.find((item) => item.id === retryBatchRootId) : null;
             const retryMirrorsRoot = retryBatchRoot?.metadata?.primaryImageId === retryTargetId;
             const isPanorama = isPanoramaNodeType(node.type);
@@ -4117,7 +4117,7 @@ const generateAngleNode = useCallback(
 
                 const task = retryWorkflowRef
                     ? await workflowImageTask(await submitCanvasWorkflowTask(retryWorkflowRef, generationConfig, "image", requestPrompt, useReferenceImages ? retryImages : [], [], [], retryTargetId, projectId, retryImageTaskId, run.controller.signal))
-                    : await submitCanvasImageRequest({ ...generationConfig, quality: isPanorama && generationConfig.quality === "auto" ? "medium" : generationConfig.quality }, requestPrompt, useReferenceImages ? retryImages : [], { nodeId: node.id, sourceId: projectId, clientTaskId: retryImageTaskId, signal: run.controller.signal });
+                    : await submitCanvasImageRequest({ ...generationConfig, quality: isPanorama && generationConfig.quality === "auto" ? "medium" : generationConfig.quality }, requestPrompt, useReferenceImages ? retryImages : [], { nodeId: retryTargetId, sourceId: projectId, clientTaskId: retryImageTaskId, signal: run.controller.signal });
                 guardNodeTaskResponse(retryTargetId, run, task.id);
                 const generationMetadata = savedImageMetadata?.generationType
                     ? { generationType: savedImageMetadata.generationType, model: generationConfig.model, channelId: generationConfig.imageChannelId || generationConfig.activeChannelId, size: generationConfig.size, quality: generationConfig.quality, imageOutputFormat: generationConfig.imageOutputFormat || "auto", count: savedImageMetadata.count || 1, references: savedImageMetadata.references }
@@ -4142,7 +4142,8 @@ const generateAngleNode = useCallback(
                             }
                             : item,
                     );
-                    return task.source === "workflow" || task.image_url || task.url ? applyCanvasImageTaskUpdate(next, retryTargetId, task, retryStartedAt, { width: node.width, height: node.height }) : next;
+                    const updated = task.source === "workflow" || task.image_url || task.url ? applyCanvasImageTaskUpdate(next, retryTargetId, task, retryStartedAt, { width: node.width, height: node.height }) : next;
+                    return retryMirrorsRoot && retryBatchRootId && task.source !== "workflow" ? applyCanvasImageTaskUpdate(updated, retryBatchRootId, task, retryStartedAt, { width: node.width, height: node.height }) : updated;
                 });
                 if (task.source === "workflow" || task.image_url || task.url) setConnections((prev) => applyCanvasImageTaskConnections(prev, retryTargetId, task, retryBatchRootId));
             } catch (error) {
@@ -4168,12 +4169,13 @@ const generateAngleNode = useCallback(
         const taskId = node.type === CanvasNodeType.Video ? canvasVideoTaskId(node.metadata) : node.type === CanvasNodeType.Audio ? node.metadata?.audioTaskId : node.metadata?.imageTaskId;
         if (!taskId) return;
         const kind = node.metadata?.workflowRef ? "workflow" : node.type === CanvasNodeType.Video ? "video" : node.type === CanvasNodeType.Audio ? "audio" : "image";
-        const run = nodeTaskRunsRef.current.get(node.id) || startNodeTaskRun(node.id, kind, taskId);
+        const runNodeId = node.metadata?.isBatchRoot && node.metadata.primaryImageId ? node.metadata.primaryImageId : node.id;
+        const run = nodeTaskRunsRef.current.get(runNodeId) || startNodeTaskRun(runNodeId, kind, taskId);
         if (run.stopping) return;
         run.stopping = true;
         const ownerToken = useUserStore.getState().token;
-        const current = () => nodeTaskRunsRef.current.get(node.id)?.id === run.id && useUserStore.getState().token === ownerToken;
-        const updateStop = (stopState: "stopping" | "failed" | undefined, cancelled = false) => setNodes((prev) => current() ? prev.map((item) => item.id === node.id && item.metadata?.status === NODE_STATUS_LOADING ? { ...item, metadata: { ...item.metadata, stopState, ...(cancelled ? { status: "cancelled" as const, errorDetails: "用户停止", progress: 0, durationMs: Date.now() - (item.metadata.startedAt || Date.now()) } : { errorDetails: stopState === "failed" ? "停止失败，请重试停止" : "停止中" }) } } : item) : prev);
+        const current = () => nodeTaskRunsRef.current.get(runNodeId)?.id === run.id && useUserStore.getState().token === ownerToken;
+        const updateStop = (stopState: "stopping" | "failed" | undefined, cancelled = false) => setNodes((prev) => current() ? prev.map((item) => (item.id === node.id || item.id === runNodeId || (item.metadata?.isBatchRoot && item.metadata.primaryImageId === runNodeId)) && item.metadata?.status === NODE_STATUS_LOADING ? { ...item, metadata: { ...item.metadata, stopState, ...(cancelled ? { status: "cancelled" as const, errorDetails: "用户停止", progress: 0, durationMs: Date.now() - (item.metadata.startedAt || Date.now()) } : { errorDetails: stopState === "failed" ? "停止失败，请重试停止" : "停止中" }) } } : item) : prev);
         updateStop("stopping");
         try {
             const result = !ownerToken || (run.taskId || taskId).startsWith("local_")

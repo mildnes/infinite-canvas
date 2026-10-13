@@ -51,6 +51,7 @@ for (const [index, name] of ["局部编辑 child", "角度图片编辑 child", "
             prompt: dirty, requestPrompt: dirty, panoramaPrompt: dirty,
             markedReference: references[0], referenceImages: references, retryImages: references, useReferenceImages: true,
             childId: "child", targetId: "child", projectId: "canvas", clientTaskId: "client", targetTaskIds: { child: "client" }, retryImageTaskId: "client", node: { id: "child" }, isPanorama: false,
+            retryTargetId: "child",
         };
         await vm.runInNewContext(compile(calls("submitCanvasImageRequest")[index].getText(ast)), scope);
         assert.equal(api.sent[0][1], clean);
@@ -283,4 +284,38 @@ test("删节点后的新提交不复用同节点旧结果：普通／全景／�
     assert.equal((submit.match(/const targetTaskIds = .*nanoid\(6\)/g) || []).length, 2);
     assert.match(submit, /const clientTaskId = .*videoId.*nanoid\(6\)/);
     assert.match(submit, /const clientAudioTaskId = .*audioId.*nanoid\(6\)/);
+});
+
+test("批量根节点停止同步取消主图 run，根节点与主图均不能被迟到回包复活", async () => {
+    const root = { id: "root", type: "image", metadata: { status: "loading", imageTaskId: "task", isBatchRoot: true, primaryImageId: "primary" } };
+    const primary = { id: "primary", type: "image", metadata: { status: "loading", imageTaskId: "task", batchRootId: "root" } };
+    const state = { nodes: [root, primary] };
+    const runs = new Map();
+    const run = beginTaskRun(runs, "primary", "image", "task", "token");
+    const scope = {
+        CanvasNodeType, NODE_STATUS_LOADING: "loading", isStoppedTask, isCanvasImageNodeType: () => true,
+        nodeTaskRunsRef: { current: runs }, startNodeTaskRun: (id, kind, taskId) => beginTaskRun(runs, id, kind, taskId, "token"),
+        useUserStore: { getState: () => ({ token: "token" }) },
+        setNodes: (update) => { state.nodes = update(state.nodes); },
+        message: { warning() {}, success() {}, error() {} }, stopCanvasTask: async () => ({ status: "cancelled" }),
+    };
+    const stop = vm.runInNewContext(compile("(" + callback("stopCanvasNode") + ")"), scope);
+    await stop(root);
+    assert.equal(run.controller.signal.aborted, true);
+    assert.ok(state.nodes.every((node) => node.metadata.status === "cancelled"));
+});
+
+test("普通批量根节点重新生成替换主图任务，根节点停止仍指向新任务", async () => {
+    const root = { id: "root", type: "image", width: 320, height: 180, metadata: { status: "cancelled", isBatchRoot: true, primaryImageId: "primary", imageTaskId: "old", generationType: "edit", prompt: dirty } };
+    const primary = { ...root, id: "primary", metadata: { ...root.metadata, isBatchRoot: undefined, primaryImageId: undefined, batchRootId: "root" } };
+    const { scope, state, api } = callbackScope(root);
+    scope.applyCanvasImageTaskUpdate = (items, id, task) => items.map((node) => node.id === id ? { ...node, metadata: { ...node.metadata, status: "loading", imageTaskId: task.id } } : node);
+    scope.nodesRef.current = [root, primary]; state.nodes = [root, primary];
+    await vm.runInNewContext(compile("(" + callback("handleRetryNode") + ")"), scope)(root);
+    assert.equal(api.sent[0][3].nodeId, "primary");
+    const child = state.nodes.find((node) => node.id === "primary");
+    const parent = state.nodes.find((node) => node.id === "root");
+    assert.equal(child.metadata.status, "loading");
+    assert.equal(parent.metadata.status, "loading");
+    assert.notEqual(parent.metadata.imageTaskId, "old");
 });
