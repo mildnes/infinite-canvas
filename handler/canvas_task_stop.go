@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -24,6 +25,10 @@ func StopCanvasTask(w http.ResponseWriter, r *http.Request) {
 	}
 	status, stopped, refunded, err := service.StopCanvasTask(request.Kind, user.ID, request.TaskID)
 	if err != nil {
+		if errors.Is(err, service.ErrCanvasTaskNotFound) {
+			FailWithStatus(w, http.StatusNotFound, "任务不存在")
+			return
+		}
 		FailError(w, err)
 		return
 	}

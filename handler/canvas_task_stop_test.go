@@ -38,6 +38,13 @@ func TestCanvasStopCancelsRealUpstreamAndNeverPersistsResult(t *testing.T) {
 	}
 	user := model.AuthUser{ID: "stop-user", Role: model.UserRoleAdmin}
 	db.Create(&model.User{ID: user.ID, Username: user.ID, AffCode: user.ID, Credits: 50})
+	missingPayload := bytes.NewBufferString(`{"kind":"image","taskId":"missing-task"}`)
+	missingRequest := httptest.NewRequest(http.MethodPost, "/api/v1/canvas/tasks/stop", missingPayload).WithContext(service.WithUser(context.Background(), user))
+	missingResponse := httptest.NewRecorder()
+	StopCanvasTask(missingResponse, missingRequest)
+	if missingResponse.Code != http.StatusNotFound {
+		t.Fatalf("missing stop status: got %d body=%s", missingResponse.Code, missingResponse.Body.String())
+	}
 	entered, cancelled := make(chan struct{}, 1), make(chan struct{}, 1)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)

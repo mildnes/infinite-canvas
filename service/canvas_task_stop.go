@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 
@@ -19,12 +20,7 @@ type canvasTaskRun struct {
 var canvasTaskRuns sync.Map
 var canvasTaskRunsMu sync.Mutex
 
-// Match the existing failure-refund audit identity; repository reuses
-// refundUserCredits inside the cancellation transaction.
-func newAIRefundLog(userID, channelID, modelName, path string) model.CreditLog {
-	extra, _ := json.Marshal(map[string]string{"channelId": channelID, "model": modelName, "path": path})
-	return model.CreditLog{ID: newID("credit"), UserID: userID, Type: model.CreditLogTypeAIRefund, Remark: "模型调用失败返还 " + modelName, Extra: string(extra), CreatedAt: now()}
-}
+var ErrCanvasTaskNotFound = errors.New("任务不存在")
 
 func canvasTaskKind(kind, taskID string) string {
 	if kind == "workflow" {
@@ -100,8 +96,11 @@ func StopCanvasTask(kind, userID, taskID string) (status string, stopped bool, r
 	kind = canvasTaskKind(strings.ToLower(strings.TrimSpace(kind)), strings.TrimSpace(taskID))
 	if kind == "video" {
 		task, found, readErr := repository.GetUserVideoTask(userID, taskID)
-		if readErr != nil || !found {
+		if readErr != nil {
 			return "", false, false, readErr
+		}
+		if !found {
+			return "", false, false, ErrCanvasTaskNotFound
 		}
 		taskID = task.ID
 	}
@@ -109,7 +108,9 @@ func StopCanvasTask(kind, userID, taskID string) (status string, stopped bool, r
 	// Never cancel another owner's run or a task already known to be terminal.
 	if current, found, readErr := canvasTaskStatus(kind, userID, taskID); readErr != nil {
 		return "", false, false, readErr
-	} else if found && !IsTerminalGenerationTaskStatus(current) {
+	} else if !found {
+		return "", false, false, ErrCanvasTaskNotFound
+	} else if !IsTerminalGenerationTaskStatus(current) {
 		if value, ok := canvasTaskRuns.Load(kind + ":" + userID + ":" + taskID); ok {
 			value.(*canvasTaskRun).cancel()
 		}
@@ -123,7 +124,7 @@ func StopCanvasTask(kind, userID, taskID string) (status string, stopped bool, r
 			modelName = workflowBillingName(ref)
 			path = "/api/v1/workflow-tasks"
 		}
-		return newAIRefundLog(userID, channelID, modelName, path)
+		return newAIRefundLog(userID, channelID, modelName, path, "用户停止返还 ")
 	})
 	if err == nil && status == "cancelled" {
 		if value, found := canvasTaskRuns.Load(kind + ":" + userID + ":" + taskID); found {

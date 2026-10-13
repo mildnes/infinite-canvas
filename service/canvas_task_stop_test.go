@@ -71,6 +71,11 @@ func TestCanvasStopOwnershipRefundAndTerminalGuards(t *testing.T) {
 	if len(logs) != 3 {
 		t.Fatalf("refund audit count: %d", len(logs))
 	}
+	for _, entry := range logs {
+		if entry.Remark != "用户停止返还 local" && !strings.Contains(entry.Remark, "用户停止返还") {
+			t.Fatalf("stop refund remark: %q", entry.Remark)
+		}
+	}
 	for _, status := range []string{"completed", "failed"} {
 		task := model.CanvasImageTask{ID: status, UserID: user.ID, Status: status, Credits: 5}
 		db.Create(&task)
