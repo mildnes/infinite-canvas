@@ -95,6 +95,8 @@ export default function AdminSettingsPage() {
     const [testResults, setTestResults] = useState<Record<string, { status: "success" | "error"; duration?: string; message: string }>>({});
     const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
+    const [hasLoadedSettings, setHasLoadedSettings] = useState(false);
+    const settingsLoadedRef = useRef(false);
     const [isSaving, setIsSaving] = useState(false);
     const [measuringProviderIndex, setMeasuringProviderIndex] = useState<number | null>(null);
     const [fetchingMCPToolsIndex, setFetchingMCPToolsIndex] = useState<number | null>(null);
@@ -154,6 +156,8 @@ export default function AdminSettingsPage() {
                 public: JSON.stringify(data.public, null, 2),
                 private: JSON.stringify(data.private, null, 2),
             });
+            settingsLoadedRef.current = true;
+            setHasLoadedSettings(true);
         } catch (error) {
             message.error(error instanceof Error ? error.message : "读取设置失败");
         } finally {
@@ -415,6 +419,11 @@ export default function AdminSettingsPage() {
     const testModels = (testChannel?.models || []).filter((model) => `${model} ${modelLabel(model, testChannel)}`.toLowerCase().includes(testKeyword.trim().toLowerCase()));
 
     async function persistChannels(nextChannels: AdminModelChannel[]) {
+        if (!settingsLoadedRef.current) {
+            const error = "设置尚未加载完成，已阻止覆盖保存";
+            message.error(error);
+            throw new Error(error);
+        }
         if (!token) throw new Error("请先登录");
         const values = normalizeSettings(form.getFieldsValue(true) as AdminSettings);
         const nextChannelWorkflows = collectChannelWorkflows(nextChannels);
@@ -1103,7 +1112,7 @@ export default function AdminSettingsPage() {
                     extra={
                         <Space>
                             <Button onClick={closeChannelDrawer}>取消</Button>
-                            <Button type="primary" onClick={() => void saveChannel()}>
+                            <Button type="primary" disabled={isLoading || !hasLoadedSettings} onClick={() => void saveChannel()}>
                                 保存
                             </Button>
                         </Space>
