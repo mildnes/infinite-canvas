@@ -80,7 +80,9 @@ export async function importAnonymousCanvasProjects(
                 blob = await response.blob();
                 assertOwner();
             }
-            const uploaded = blob.type.startsWith("image/") || storageKey.startsWith("image:")
+            const mediaKind = String(reference.__mediaKind || "").trim().toLowerCase();
+            const isImage = mediaKind === "image" || blob.type.startsWith("image/") || storageKey.startsWith("image:");
+            const uploaded = isImage
                 ? await uploadImage(blob, { token })
                 : await uploadMediaBlob(blob, `guest-${storageKey.replace(/[^a-zA-Z0-9_-]/g, "-")}`, token);
             assertOwner();

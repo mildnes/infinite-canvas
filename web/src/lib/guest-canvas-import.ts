@@ -40,17 +40,18 @@ export async function rewriteGuestCanvasReferences<T>(
     resolve: (storageKey: string, reference: Record<string, unknown>) => Promise<{ storageKey: string; url: string }>,
 ): Promise<T> {
     const resolved = new Map<string, Promise<{ storageKey: string; url: string }>>();
-    const walk = async (value: unknown, media = false): Promise<unknown> => {
+    const walk = async (value: unknown, media = false, mediaKind = ""): Promise<unknown> => {
         if (Array.isArray(value)) {
             const items = [];
-            for (const item of value) items.push(await walk(item, media));
+            for (const item of value) items.push(await walk(item, media, mediaKind));
             return items;
         }
         if (!value || typeof value !== "object") return value;
         const record = value as Record<string, unknown>;
         const next: Record<string, unknown> = {};
         const mediaNode = ["image", "panorama", "video", "audio"].includes(String(record.type || ""));
-        for (const [key, item] of Object.entries(record)) next[key] = await walk(item, key === "metadata" && mediaNode);
+        const nodeMediaKind = mediaNode ? (record.type === "video" ? "video" : record.type === "audio" ? "audio" : "image") : mediaKind;
+        for (const [key, item] of Object.entries(record)) next[key] = await walk(item, key === "metadata" && mediaNode ? true : media, key === "metadata" && mediaNode ? nodeMediaKind : mediaKind);
         const storageKey = typeof record.storageKey === "string" ? record.storageKey.trim() : "";
         if (!storageKey) {
             if ((media || "dataUrl" in record || "imageUrl" in record) && [record.content, record.dataUrl, record.originalUrl, record.imageUrl].some(item => typeof item === "string" && /^(blob:|data:)/.test(item.trim()))) {
@@ -58,7 +59,8 @@ export async function rewriteGuestCanvasReferences<T>(
             }
             return next;
         }
-        if (!resolved.has(storageKey)) resolved.set(storageKey, resolve(storageKey, record));
+        const reference = mediaKind ? { ...record, __mediaKind: mediaKind } : record;
+        if (!resolved.has(storageKey)) resolved.set(storageKey, resolve(storageKey, reference));
         const ref = await resolved.get(storageKey)!;
         if (!ref.storageKey.startsWith("server:") || ref.storageKey.startsWith("server:webdav:") || !ref.url.startsWith("/api/files/")) {
             throw new Error("媒体尚未持久化到账号，请检查存储配置后重试");

@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import test from "node:test";
 import ts from "typescript";
 
 const page = readFileSync(new URL("../app/(user)/canvas/[id]/canvas-client-page.tsx", import.meta.url), "utf8");
-const dialog = readFileSync(new URL("../app/(user)/canvas/components/canvas-delete-projects-dialog.tsx", import.meta.url), "utf8");
+const dialog = process.env.CANVAS_STORE_BASELINE
+    ? execFileSync("git", ["show", `${process.env.CANVAS_STORE_BASELINE}:web/src/app/(user)/canvas/components/canvas-delete-projects-dialog.tsx`], { cwd: fileURLToPath(new URL("../../..", import.meta.url)), encoding: "utf8" })
+    : readFileSync(new URL("../app/(user)/canvas/components/canvas-delete-projects-dialog.tsx", import.meta.url), "utf8");
 function callback(source, name, context) {
     const ast = ts.createSourceFile("page.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
     let expression;
@@ -28,10 +32,15 @@ test("pointerup persists the final pointer coordinates even before React commits
 });
 
 test("delete dialog waits for remote deletion and keeps selection and local data after failure", async () => {
-    const calls = []; let resolve;
-    const confirm = callback(dialog, "confirm", { ids: ["p"], deleting: false, setDeleting: state => calls.push(["busy", state]), deleteProjects: () => new Promise(done => { resolve = done; }), deleteCanvasProjects: () => { throw new Error("fire-and-forget must not be used"); }, deleteCanvasTasks: () => calls.push(["tasks"]), cleanupImages: () => calls.push(["cleanup"]), removeSelectedIds: () => calls.push(["selection"]), setDeleteIds: () => calls.push(["close"]), message: { error: text => calls.push(["error", text]) } });
+    const calls = []; let resolveTasks; let resolveProject;
+    const confirm = callback(dialog, "confirm", { ids: ["p"], deleting: false, setDeleting: state => calls.push(["busy", state]), deleteProjects: () => new Promise(done => { calls.push(["project"]); resolveProject = done; }), deleteCanvasProjects: () => { throw new Error("fire-and-forget must not be used"); }, deleteCanvasTasks: () => new Promise(done => { calls.push(["tasks"]); resolveTasks = done; }), cleanupImages: () => calls.push(["cleanup"]), removeSelectedIds: () => calls.push(["selection"]), setDeleteIds: () => calls.push(["close"]), message: { error: text => calls.push(["error", text]) } });
     const pending = confirm();
     assert.ok(!calls.some(([name]) => name === "cleanup" || name === "close"));
-    resolve(); await pending;
+    await new Promise(setImmediate);
+    assert.ok(calls.some(([name]) => name === "tasks"));
+    assert.ok(!calls.some(([name]) => name === "project"));
+    resolveTasks(); await new Promise(setImmediate);
+    assert.ok(typeof resolveProject === "function");
+    resolveProject(); await pending;
     assert.ok(calls.some(([name]) => name === "close"));
 });

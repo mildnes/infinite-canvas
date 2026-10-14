@@ -52,6 +52,14 @@ OAuth 只采用 PUBLIC_BASE_URL 的 http(s) origin，忽略 Host／X-Forwarded-H
 
 完整 provider／model 请求大小、HTTP 拒绝边界、Base64 增量及三条参考链路是否共享上限，必须在获得真实入口后补充。不能把鉴权失败或未知 provider 错误解释成体积上限。
 
+### R8 来源盘点（不等同于 provider 上限结论）
+
+已完成本地代码盘点，但没有发出 provider 请求：图生图的 JSON 分支通常使用 `imageToDataUrl`，multipart 分支把它转回文件；视频的 Grok 使用 data URL、Agnes 需要外部 URL、KIE/Kling 可转文件、MiniMax-H3 将媒体放入 content；工作流对非 HTTPS/data URL 抓取并转 Base64。此前 Canvas／Agnes 保留绝对 URL、Ark Seedance 保留视频／音频原始 `item.url`，均属于来源边界风险。
+
+本批已拒绝当前应用 origin、localhost、回环地址和非 HTTP(S) 作为公网参考；无外部 URL 的 Canvas 图片继续走已有 data URL，Ark 视频／音频与元素媒体改为明确报错。此举只阻止错误外发，没有决定 Base64、签名 URL 或其他最终 R8 方案。
+
+本地体积公式：raw `n` 字节转 Base64 为 `4*ceil(n/3)`，再加 data URL 前缀，约为原始体积 1.3333 倍。正式探测建议按 1/4/8/16/32/64/96/128 MiB，分别记录 JSON data URL、multipart 文件和公网 URL，单图及多图总大小、HTTP 413/400/截断/模型拒绝边界。当前没有凭据或安全校验入口，不能把公式当成 provider 限制。
+
 ## 可靠性修复
 
 | 项目 | 改动文件 | 旧实现失败证据 | 修复与针对验证 |
@@ -65,7 +73,9 @@ OAuth 只采用 PUBLIC_BASE_URL 的 http(s) origin，忽略 Host／X-Forwarded-H
 
 R2 没有新增数据库列；无版本旧请求继续兼容，时间不再由客户端决定。真正的 SQL CAS 冲突会回滚整批事务，其他账号和软删除语义保持。
 
-集成首轮前端 `356/361`：5 个既有真实 callback 的 VM 测试缺少新 canvasTaskRetryMode 依赖。仅修测试环境以导入真实 helper 和页面真实任务 ID 函数，原生成逻辑与断言不变。最终 366/366 包含全部既有用例与媒体代理兼容新例，没有减少或跳过测试。
+后续审查补上两个边界：409 且 `data.currentProject` 明确为 `null` 时，本机草稿进入冲突保留队列、停止自动重试并提示远端已删除；项目任务记录删除改为先 await，失败时不继续清理本地项目，节点删除／清空画布也在远端任务删除失败时保留本地内容。
+
+集成首轮前端 `356/361`：5 个既有真实 callback 的 VM 测试缺少新 canvasTaskRetryMode 依赖。仅修测试环境以导入真实 helper 和页面真实任务 ID 函数，原生成逻辑与断言不变。后续补充远端删除冲突、任务删除等待和外发来源边界用例，最终 **369/369** 包含全部既有用例与新增回归，没有减少或跳过测试。
 
 ## 全量验证与提交
 

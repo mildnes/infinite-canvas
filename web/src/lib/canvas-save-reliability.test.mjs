@@ -74,6 +74,19 @@ test("failed save exposes a recoverable error; CAS conflict restores canonical d
     assert.equal(f.useCanvasStore.getState().syncError, null);
 });
 
+test("deleted remote conflict keeps the local draft without automatic retry", async () => {
+    const f = fixture(); await tick();
+    f.fail(Object.assign(new Error("画布已删除"), { status: 409, data: { currentProject: null } }));
+    f.useCanvasStore.getState().renameProject("p", "local draft"); await f.advance(500);
+    const savesBeforeRetry = f.saves.length;
+    const state = f.useCanvasStore.getState();
+    assert.equal(state.conflictDrafts[0].title, "local draft");
+    assert.equal(state.projects[0].pendingSave, false);
+    assert.match(state.syncError, /远端画布已删除/);
+    await state.retrySaves();
+    assert.equal(f.saves.length, savesBeforeRetry);
+});
+
 test("project deletion awaits remote success and retains the local project on failure", async () => {
     const f = fixture(); await tick(); let release;
     f.deletionGate(new Promise(resolve => { release = resolve; }));

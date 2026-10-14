@@ -1227,13 +1227,13 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
     const deleteCanvasTaskRecords = useCallback(
         (nodeIds?: string[]) => {
-            void deleteCanvasTasks(projectId, nodeIds).catch(() => undefined);
+            return deleteCanvasTasks(projectId, nodeIds);
         },
         [projectId],
     );
 
     const deleteNodes = useCallback(
-        (ids: Set<string>) => {
+        async (ids: Set<string>) => {
             if (!ids.size) return;
             const allIds = new Set(ids);
             nodesRef.current.forEach((node) => {
@@ -1245,7 +1245,12 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     if (allChildrenDeleted) allIds.add(node.id);
                 }
             });
-            deleteCanvasTaskRecords([...allIds]);
+            try {
+                await deleteCanvasTaskRecords([...allIds]);
+            } catch (error) {
+                message.error(error instanceof Error ? error.message : "任务记录删除失败，请检查网络后重试");
+                return;
+            }
             const removedNodes = nodesRef.current.filter((node) => allIds.has(node.id));
             const remainingNodes = nodesRef.current.filter((node) => !allIds.has(node.id));
             const removedKeys = collectImageStorageKeys(removedNodes);
@@ -1307,7 +1312,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             setContextMenu((current) => (current?.type === "node" && allIds.has(current.nodeId) ? null : current));
             cleanupCanvasFiles({ projectId, nodes: nextNodes, chatSessions });
         },
-        [chatSessions, cleanupCanvasFiles, deleteCanvasTaskRecords, projectId],
+        [chatSessions, cleanupCanvasFiles, deleteCanvasTaskRecords, message, projectId],
     );
 
     const deleteConnection = useCallback((connectionId: string) => {
@@ -1329,8 +1334,13 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         setDialogNodeId(null);
     }, [cancelPendingConnectionCreate]);
 
-    const clearCanvas = useCallback(() => {
-        deleteCanvasTaskRecords();
+    const clearCanvas = useCallback(async () => {
+        try {
+            await deleteCanvasTaskRecords();
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "任务记录删除失败，请检查网络后重试");
+            return;
+        }
         setNodes([]);
         setConnections([]);
         setInfoNodeId(null);
@@ -1343,7 +1353,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         deselectCanvas();
         setClearConfirmOpen(false);
         cleanupCanvasFiles({ projectId, nodes: [], chatSessions: [] });
-    }, [cleanupCanvasFiles, deleteCanvasTaskRecords, deselectCanvas, projectId]);
+    }, [cleanupCanvasFiles, deleteCanvasTaskRecords, deselectCanvas, message, projectId]);
 
     const duplicateNode = useCallback((nodeId: string) => {
         const source = nodesRef.current.find((node) => node.id === nodeId);
@@ -1544,8 +1554,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
     const deleteCurrentProject = useCallback(async () => {
         try {
+            await deleteCanvasTaskRecords();
             await deleteProjects([projectId]);
-            deleteCanvasTaskRecords();
             cleanupAssetImages();
             router.push("/canvas");
         } catch (error) { message.error(error instanceof Error ? error.message : "删除失败，请检查网络后重试"); }

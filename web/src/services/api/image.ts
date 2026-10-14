@@ -12,6 +12,7 @@ import { createImageOutputNoticeGate, imageOutputNoticeText, shouldNotifyImageOu
 import { autoSyncImage, imageToDataUrl, resolveImageUrl, type UploadedImage } from "@/services/image-storage";
 import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
+import { externalMediaURL } from "@/lib/external-media-url";
 import type { ReferenceImage } from "@/types/image";
 import { nanoid } from "nanoid";
 
@@ -1718,15 +1719,7 @@ function applyAgnesImageSize(
 }
 
 function publicHttpUrl(value?: string) {
-    if (!value || value.startsWith("blob:") || value.startsWith("data:")) return "";
-    try {
-        const url = new URL(value, typeof window === "undefined" ? undefined : window.location.origin);
-        if (!["http:", "https:"].includes(url.protocol)) return "";
-        if (["localhost", "127.0.0.1", "::1"].includes(url.hostname)) return "";
-        return url.href;
-    } catch {
-        return "";
-    }
+    return externalMediaURL(value);
 }
 
 async function requestAgnesImageEdit(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[], params: ImageRequestParams): Promise<GeneratedImage[]> {

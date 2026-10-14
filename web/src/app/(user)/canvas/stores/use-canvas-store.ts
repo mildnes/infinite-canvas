@@ -78,6 +78,7 @@ const projectMaxTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pendingProjectSaves = new Map<string, CanvasProject>();
 const projectSavesInFlight = new Map<string, Promise<void>>();
 const failedProjectSaves = new Set<string>();
+const remoteDeletedProjectIds = new Set<string>();
 const deletingProjectIds = new Set<string>();
 const MAX_SAVE_WAIT_MS = 2000;
 const sanitizedNodes = new WeakMap<CanvasNodeData[], CanvasNodeData[]>();
@@ -110,12 +111,22 @@ function canonicalProject(project: CanvasProject): CanvasProject {
 
 function recordSaveError(error: unknown, draft?: CanvasProject) {
     const conflict = error as { status?: number; data?: { currentProject?: CanvasProject } };
-    const current = conflict.status === 409 ? conflict.data?.currentProject : null;
+    const hasCanonicalProject = conflict.status === 409 && conflict.data && Object.prototype.hasOwnProperty.call(conflict.data, "currentProject");
+    const current = hasCanonicalProject ? conflict.data?.currentProject : null;
+    if (hasCanonicalProject && !current && draft) {
+        remoteDeletedProjectIds.add(draft.id);
+        failedProjectSaves.delete(draft.id);
+    }
     useCanvasStore.setState((state) => ({
-        syncError: error instanceof Error ? error.message : "画布同步失败，请重试",
+        syncError: hasCanonicalProject && !current ? "远端画布已删除，本机副本已保留，可另存为新画布" : error instanceof Error ? error.message : "画布同步失败，请重试",
         ...(current && draft ? {
             projects: state.projects.map((project) => project.id === current.id ? canonicalProject(current) : project),
             conflictDrafts: [...state.conflictDrafts.filter((project) => project.id !== draft.id), draft],
+            restoreVersion: state.restoreVersion + 1,
+        } : {}),
+        ...(hasCanonicalProject && !current && draft ? {
+            projects: state.projects.map((project) => project.id === draft.id ? { ...project, pendingSave: false } : project),
+            conflictDrafts: [...state.conflictDrafts.filter((project) => project.id !== draft.id), { ...draft, pendingSave: false }],
             restoreVersion: state.restoreVersion + 1,
         } : {}),
     }));
@@ -175,6 +186,7 @@ function resetCanvasOwner(owner: string | null) {
     queuedPersistValue = null;
     cancelProjectSaves([...projectSaveTimers.keys()]);
     failedProjectSaves.clear();
+    remoteDeletedProjectIds.clear();
     deletingProjectIds.clear();
     projectSavesInFlight.clear();
     useCanvasStore.setState({ projects: [], conflictDrafts: [], syncError: null, ownerUserId: owner, hydrated: false });
@@ -486,7 +498,7 @@ export const useCanvasStore = create<CanvasStore>()(
                 }));
                 await flushLocalCanvasSave();
                 projectIds.forEach((id) => deletingProjectIds.delete(id));
-                projectIds.forEach((id) => failedProjectSaves.delete(id));
+                projectIds.forEach((id) => { failedProjectSaves.delete(id); remoteDeletedProjectIds.delete(id); });
                 if (!failedProjectSaves.size && !hydrationFailed) set({ syncError: null });
             },
             updateProject: (id, patch) => {
@@ -561,7 +573,7 @@ export const useCanvasStore = create<CanvasStore>()(
                     }),
                     restoreVersion: state.restoreVersion + 1,
                 }));
-                get().projects.filter((project) => project.pendingSave || failedProjectSaves.has(project.id)).forEach(queueProjectSave);
+                get().projects.filter((project) => !remoteDeletedProjectIds.has(project.id) && (project.pendingSave || failedProjectSaves.has(project.id))).forEach(queueProjectSave);
                 await flushCanvasSaves();
             },
             importAccountProjects: async (projects, expectedOwner, expectedToken) => {

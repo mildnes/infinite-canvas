@@ -11,6 +11,7 @@ import { persistGeneratedMediaBlob, resolveMediaUrl, uploadMediaFile, uploadRemo
 import { autoSyncToCloud, imageToDataUrl, resolveImageUrl } from "@/services/image-storage";
 import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig, type VideoElementReference } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
+import { externalMediaURL } from "@/lib/external-media-url";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
@@ -379,8 +380,18 @@ async function createArkSeedanceVideoRequestBody(config: AiConfig, model: string
         input.firstFrame ? imageToAgnesReference(input.firstFrame) : "",
         input.lastFrame ? imageToAgnesReference(input.lastFrame) : "",
     ]);
-    const videos = input.videoReferences.map((item) => item.url).filter(Boolean);
-    const audios = input.audioReferences.map((item) => item.url).filter(Boolean);
+    const videos = await Promise.all(input.videoReferences.map(async (item) => {
+        const resolved = await resolveMediaUrl(item.storageKey, item.url);
+        const url = publicHttpUrl(item.url) || publicHttpUrl(resolved);
+        if (!url) throw new VideoRequestError("Seedance 参考视频必须具有公网访问地址");
+        return url;
+    }));
+    const audios = await Promise.all(input.audioReferences.map(async (item) => {
+        const resolved = await resolveMediaUrl(item.storageKey, item.url);
+        const url = publicHttpUrl(item.url) || publicHttpUrl(resolved);
+        if (!url) throw new VideoRequestError("Seedance 参考音频必须具有公网访问地址");
+        return url;
+    }));
     return {
         model,
         prompt,
@@ -580,7 +591,9 @@ async function elementReferenceToInputUrl(reference: VideoElementReference) {
         return imageToDataUrl({ dataUrl: reference.dataUrl || reference.url || resolvedUrl, storageKey: reference.storageKey });
     }
     const resolvedUrl = await resolveMediaUrl(reference.storageKey, reference.url || "");
-    return publicHttpUrl(resolvedUrl) || publicHttpUrl(reference.url) || resolvedUrl || reference.url || "";
+    const url = publicHttpUrl(resolvedUrl) || publicHttpUrl(reference.url);
+    if (!url) throw new VideoRequestError("视频元素参考素材必须具有公网访问地址");
+    return url;
 }
 
 function normalizeKlingV26AspectRatio(value: string) {
@@ -642,15 +655,7 @@ async function agnesVideoV25ReferenceUrl(reference: ReferenceImage | ReferenceVi
 }
 
 function publicHttpUrl(value?: string) {
-    if (!value || value.startsWith("blob:") || value.startsWith("data:")) return "";
-    try {
-        const url = new URL(value, typeof window === "undefined" ? undefined : window.location.origin);
-        if (!["http:", "https:"].includes(url.protocol)) return "";
-        if (["localhost", "127.0.0.1", "::1"].includes(url.hostname)) return "";
-        return url.href;
-    } catch {
-        return "";
-    }
+    return externalMediaURL(value);
 }
 
 function agnesFrameRate(secondsValue: string) {

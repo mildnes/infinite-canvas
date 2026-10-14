@@ -219,17 +219,9 @@ export function buildNodeChatMessages(context: NodeGenerationContext): ChatCompl
 
 export async function hydrateNodeGenerationContext(context: NodeGenerationContext) {
     const { imageToDataUrl } = await import("@/services/image-storage");
-    const isAbsoluteHttpUrl = (value?: string) => {
-        if (!value) return false;
-        try {
-            const url = new URL(value);
-            return url.protocol === "http:" || url.protocol === "https:";
-        } catch {
-            return false;
-        }
-    };
+    const { externalMediaURL } = await import("@/lib/external-media-url");
     const hydrateImage = async (image: ReferenceImage) => {
-        const remoteUrl = [image.url, image.dataUrl].find(isAbsoluteHttpUrl);
+        const remoteUrl = [image.url, image.dataUrl].map((value) => externalMediaURL(value)).find(Boolean);
         return remoteUrl ? { ...image, url: remoteUrl, dataUrl: remoteUrl } : { ...image, dataUrl: await imageToDataUrl(image) };
     };
     return {

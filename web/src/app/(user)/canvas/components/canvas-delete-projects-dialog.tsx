@@ -20,8 +20,8 @@ export function CanvasDeleteProjectsDialog() {
         if (deleting) return;
         setDeleting(true);
         try {
+            await Promise.all(ids.map((id) => deleteCanvasTasks(id)));
             await deleteProjects(ids);
-            void Promise.all(ids.map((id) => deleteCanvasTasks(id))).catch(() => undefined);
             cleanupImages();
             removeSelectedIds(ids);
             setDeleteIds([]);
