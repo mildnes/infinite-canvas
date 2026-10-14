@@ -26,7 +26,7 @@ import {
     WandSparkles,
 } from "lucide-react";
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Segmented, Tag, Typography } from "antd";
+import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Segmented, Select, Tag, Typography } from "antd";
 import localforage from "localforage";
 import { saveAs } from "file-saver";
 
@@ -35,6 +35,7 @@ import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/app/(user)/canvas/components/asset-picker-modal";
 import { canvasThemes } from "@/lib/canvas-theme";
+import { addCategoryIds, resolveCategoryByName } from "@/lib/image-log-categories";
 import { resolveMissingTaskOutcome, WORKBENCH_TASK_INTERRUPTED_AFTER_MS } from "@/lib/workbench-task-sync";
 import { imageOutputCapabilityForConfig, normalizeImageOutputFormat, resolveImageOutputFormat } from "@/lib/image-output-format";
 import {
@@ -165,6 +166,10 @@ export default function ImagePage() {
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
     const [workflowDrawerOpen, setWorkflowDrawerOpen] = useState(false);
     const [selectedLogIds, setSelectedLogIds] = useState<string[]>([]);
+    const [categoryAssignmentOpen, setCategoryAssignmentOpen] = useState(false);
+    const [assignmentCategoryId, setAssignmentCategoryId] = useState<string | undefined>();
+    const [assignmentCategoryName, setAssignmentCategoryName] = useState("");
+    const [assigningCategory, setAssigningCategory] = useState(false);
     const [previewLog, setPreviewLog] = useState<GenerationLog | null>(null);
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
     const [now, setNow] = useState(Date.now());
@@ -1041,7 +1046,7 @@ export default function ImagePage() {
             message.error("请输入分类名称");
             return null;
         }
-        const existing = categories.find((item) => item.name === trimmedName);
+        const existing = resolveCategoryByName(categories, trimmedName);
         if (existing) return existing;
         const nextCategory = { id: nanoid(), name: trimmedName, createdAt: Date.now() };
         const nextCategories = [...categories, nextCategory];
@@ -1097,6 +1102,46 @@ export default function ImagePage() {
     const toggleLogCategory = async (log: GenerationLog, categoryId: string) => {
         const nextCategoryIds = log.categoryIds.includes(categoryId) ? log.categoryIds.filter((id) => id !== categoryId) : [...log.categoryIds, categoryId];
         await updateLogCategories(log, nextCategoryIds);
+    };
+
+    const addSelectedLogsToCategory = async (categoryIds: string[]) => {
+        const selected = new Set(selectedLogIds);
+        const changed: GenerationLog[] = [];
+        const nextLogs = logs.map((log) => {
+            if (!selected.has(log.id)) return log;
+            const nextCategoryIds = addCategoryIds(log.categoryIds, categoryIds);
+            if (nextCategoryIds.length === log.categoryIds.length && nextCategoryIds.every((id, index) => id === log.categoryIds[index])) return log;
+            const nextLog = { ...log, categoryIds: nextCategoryIds };
+            changed.push(nextLog);
+            return nextLog;
+        });
+        if (!changed.length) return 0;
+        setLogs(nextLogs);
+        await Promise.all(changed.map((log) => logStore.setItem(log.id, serializeLog(log))));
+        await persistImageHistory(nextLogs, categories);
+        await refreshLogs();
+        return changed.length;
+    };
+
+    const applySelectedLogCategory = async () => {
+        if (assigningCategory || !selectedLogIds.length) return;
+        setAssigningCategory(true);
+        try {
+            const category = assignmentCategoryName.trim()
+                ? await createCategory(assignmentCategoryName)
+                : categories.find((item) => item.id === assignmentCategoryId);
+            if (!category) {
+                message.error("请选择分类或输入新分类名称");
+                return;
+            }
+            const count = await addSelectedLogsToCategory([category.id]);
+            message.success("已添加 " + count + " 条到「" + category.name + "」");
+            setCategoryAssignmentOpen(false);
+        } catch {
+            message.error("添加至分类失败，请重试");
+        } finally {
+            setAssigningCategory(false);
+        }
     };
 
     const previewGenerationLog = async (log: GenerationLog) => {
@@ -1337,6 +1382,11 @@ export default function ImagePage() {
                             onToggleLogCategory={(log, categoryId) => void toggleLogCategory(log, categoryId)}
                             onClearLogCategories={(log) => void updateLogCategories(log, [])}
                             onDeleteSelected={() => setDeleteConfirmOpen(true)}
+                            onAddSelectedToCategory={() => {
+                                setAssignmentCategoryId(undefined);
+                                setAssignmentCategoryName("");
+                                setCategoryAssignmentOpen(true);
+                            }}
                             onDeleteLog={deleteLog}
                             onPreviewLog={(log) => void previewGenerationLog(log)}
                             onRetryLog={(log) => void retryLog(log)}
@@ -1377,6 +1427,11 @@ export default function ImagePage() {
                             onToggleLogCategory={(log, categoryId) => void toggleLogCategory(log, categoryId)}
                             onClearLogCategories={(log) => void updateLogCategories(log, [])}
                             onDeleteSelected={() => setDeleteConfirmOpen(true)}
+                            onAddSelectedToCategory={() => {
+                                setAssignmentCategoryId(undefined);
+                                setAssignmentCategoryName("");
+                                setCategoryAssignmentOpen(true);
+                            }}
                             onDeleteLog={deleteLog}
                             onPreviewLog={(log) => void previewGenerationLog(log)}
                             onRetryLog={(log) => void retryLog(log)}
@@ -1474,6 +1529,50 @@ export default function ImagePage() {
             />
             <PromptSelectDialog open={promptDialogOpen} onOpenChange={setPromptDialogOpen} onSelect={setPrompt} />
             <AssetPickerModal open={assetPickerOpen} defaultTab="my-assets" onInsert={(payload) => void insertPickedAsset(payload)} onClose={() => setAssetPickerOpen(false)} />
+            <Modal
+                title="添加至分类"
+                open={categoryAssignmentOpen}
+                onCancel={() => setCategoryAssignmentOpen(false)}
+                onOk={() => void applySelectedLogCategory()}
+                okText="添加"
+                cancelText="取消"
+                confirmLoading={assigningCategory}
+                okButtonProps={{ disabled: !selectedLogIds.length || (!assignmentCategoryId && !assignmentCategoryName.trim()) }}
+                destroyOnHidden
+            >
+                <div className="space-y-3">
+                    {categories.length ? (
+                        <div>
+                            <div className="mb-1 text-sm">目标分类（单选，保留原有分类）</div>
+                            <Select
+                                className="w-full"
+                                aria-label="目标分类"
+                                placeholder="请选择分类"
+                                value={assignmentCategoryId}
+                                options={categories.map((category) => ({ value: category.id, label: category.name }))}
+                                onChange={(id) => {
+                                    setAssignmentCategoryId(id);
+                                    setAssignmentCategoryName("");
+                                }}
+                            />
+                        </div>
+                    ) : null}
+                    <div>
+                        <div className="mb-1 text-sm">{categories.length ? "或新建分类（同名复用）" : "新建分类"}</div>
+                        <Input
+                            autoFocus={!categories.length}
+                            aria-label="新分类名称"
+                            placeholder="输入新分类名称"
+                            value={assignmentCategoryName}
+                            onChange={(event) => {
+                                setAssignmentCategoryName(event.target.value);
+                                setAssignmentCategoryId(undefined);
+                            }}
+                            onPressEnter={() => void applySelectedLogCategory()}
+                        />
+                    </div>
+                </div>
+            </Modal>
             <Modal title="删除生成记录" open={deleteConfirmOpen} onCancel={() => setDeleteConfirmOpen(false)} onOk={deleteSelectedLogs} okText="删除" okButtonProps={{ danger: true }} cancelText="取消">
                 确定删除选中的 {selectedLogIds.length} 条生成记录吗？
             </Modal>
@@ -1793,6 +1892,7 @@ function ResultsPanel({
     onToggleLogCategory,
     onClearLogCategories,
     onDeleteSelected,
+    onAddSelectedToCategory,
     onDeleteLog,
     onPreviewLog,
     onRetryLog,
@@ -1829,6 +1929,7 @@ function ResultsPanel({
     onToggleLogCategory: (log: GenerationLog, categoryId: string) => void;
     onClearLogCategories: (log: GenerationLog) => void;
     onDeleteSelected: () => void;
+    onAddSelectedToCategory: () => void;
     onDeleteLog: (log: GenerationLog) => void;
     onPreviewLog: (log: GenerationLog) => void;
     onRetryLog: (log: GenerationLog) => void;
@@ -1912,6 +2013,9 @@ function ResultsPanel({
                     </Button>
                     <Button size="small" danger icon={<Trash2 className="size-3.5" />} disabled={!selectedLogIds.length} onClick={onDeleteSelected}>
                         删除
+                    </Button>
+                    <Button size="small" icon={<FolderPlus className="size-3.5" />} disabled={!selectedLogIds.length} onClick={onAddSelectedToCategory}>
+                        添加至分类
                     </Button>
                 </div>
             </div>
