@@ -30,6 +30,7 @@
 - 列表接口优先沿用 `model.Query`、`Normalize`、分页和标签筛选方式。
 - 业务接口保持 `{ code, data, msg }` 的响应结构。
 - 新增数据表时同步更新 `docs/backend/backend-database.md`。
+- `settings.private.channels` 是**有序数组**，其顺序即前端模型选择器的显示顺序：`enabledChannelModels`、`publicChannelInfos` 必须按传入顺序处理（跨渠道重名去重时**保留首次出现的位置**），**不要对渠道或模型做任何排序/重排**；守卫见 `service/channel_order_test.go`，说明见 `docs/backend/system-settings.md` 的「渠道顺序」。
 
 ## 前端规范
 
@@ -54,6 +55,7 @@
 - 全局 CSS 只放基础变量、全局重置、跨页面通用样式和少量第三方组件必要覆盖；不要在 `globals.css` 堆页面私有样式。
 - 代码尽量短小直接，少拆不必要组件，少做多层 props 传递，避免为了抽象堆出更多代码。
 - 前端业务数据需要浏览器本地持久化时，默认使用 `localforage`；`localStorage` 只用于极小的简单配置，不要用来保存业务列表、生成记录、图片、base64 或大 JSON。
+- 模型选择器（`web/src/components/model-picker.tsx`）必须按 `publicChannels` 的数组顺序、渠道内按 `models` 数组顺序渲染，**不要加 `.sort()` 或字母序**：后台 `settings.private.channels` 的顺序就是前端显示顺序；渠道排序入口只在管理端渠道表操作列的 ↑↓（`web/src/lib/channel-order.ts` 的 `moveChannel`），前端只负责按序渲染。守卫见 `web/src/components/model-picker-order.test.mjs`。
 
 ## 画布 UI 规范
 
