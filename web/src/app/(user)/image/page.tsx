@@ -50,7 +50,7 @@ import { formatBytes, formatDuration, getDataUrlByteSize, readImageMeta } from "
 import { ImageRequestError, batchCanvasImageTaskStatus, createCanvasImageTask, deleteCanvasImageTask, listCanvasImageTasks, requestEdit, requestGeneration, type CanvasImageTask } from "@/services/api/image";
 import { getWorkflowTask, isRetryableWorkflowError, submitWorkflowTask, workflowMediaStorageKey } from "@/services/api/workflow-generation";
 import { parseWorkflowRef, type WorkflowRef } from "@/lib/workflow-channel";
-import { deleteImageGenerationLogs, fetchImageGenerationLogs, saveImageGenerationLogs } from "@/services/api/generation-logs";
+import { deleteImageGenerationLogs, fetchImageGenerationLog, fetchImageGenerationLogsPage, upsertImageGenerationLogs } from "@/services/api/generation-logs";
 import { deleteStoredImages, imageToDataUrl, resolveImageUrl, uploadImage, uploadRemoteImageToServer } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useUserStore } from "@/stores/use-user-store";
@@ -92,6 +92,7 @@ type GenerationResult = {
 
 type GenerationLog = {
     id: string;
+    summaryOnly?: boolean;
     createdAt: number;
     title: string;
     prompt: string;
@@ -153,6 +154,8 @@ export default function ImagePage() {
     const [uploadingCount, setUploadingCount] = useState(0);
     const [results, setResults] = useState<GenerationResult[]>([]);
     const [logs, setLogs] = useState<GenerationLog[]>([]);
+    const [historyCursor, setHistoryCursor] = useState<string | null>(null);
+    const [historyLoading, setHistoryLoading] = useState(false);
     const [syncingImageIds, setSyncingImageIds] = useState<string[]>([]);
     const [categories, setCategories] = useState<GenerationCategory[]>([]);
     const [resultViewMode, setResultViewModeState] = useState<ResultViewMode>("all");
@@ -169,6 +172,7 @@ export default function ImagePage() {
     const workflowButtonRef = useRef<HTMLButtonElement>(null);
     const workflowButtonDragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number; moved: boolean } | null>(null);
     const accountHistorySyncEnabledRef = useRef(false);
+    const historyPageRequestRef = useRef<{ token: string; loading: boolean } | null>(null);
     const saveLogChainRef = useRef<Promise<void>>(Promise.resolve());
     const pollingLogIdsRef = useRef(new Set<string>());
     const logsRef = useRef<GenerationLog[]>([]);
@@ -432,6 +436,12 @@ export default function ImagePage() {
     };
 
     const retryLog = async (log: GenerationLog) => {
+        try {
+            log = await loadCompleteImageLog(log);
+        } catch {
+            message.error("读取完整记录失败，请重试");
+            return;
+        }
         const retryChannelId = imageTaskChannelId(log.task);
         const snapshot = buildRequestSnapshot({ promptText: log.prompt, referenceItems: log.references, taskCount: Number(log.config.count) || 1, configOverride: { ...log.config, ...(retryChannelId ? { imageChannelId: retryChannelId, activeChannelId: retryChannelId } : {}) }, workflowRef: log.providerWorkflowRef || null });
         if (!snapshot) return;
@@ -862,29 +872,72 @@ export default function ImagePage() {
     };
     const refreshCategories = async () => setCategories(await readStoredCategories());
 
-    const loadAccountImageHistory = async () => {
+    const loadAccountImageHistory = async (cursor?: string | null) => {
+        if (historyPageRequestRef.current?.token === token && historyPageRequestRef.current.loading) return;
+        const request = { token, loading: true };
+        historyPageRequestRef.current = request;
+        const active = () => historyPageRequestRef.current === request && useUserStore.getState().token === token;
+        setHistoryLoading(true);
+        if (!cursor) setHistoryCursor(null);
         try {
             accountHistorySyncEnabledRef.current = true;
-            const localLogs = await readStoredLogs();
-            const storedCategories = await readStoredCategories();
-            const remoteLogs = await fetchImageGenerationLogs<GenerationLog>(token);
-            const mergedLogs = await mergeGenerationLogs(remoteLogs, localLogs);
-            const categorized = withWorkflowLogCategories(mergedLogs, storedCategories);
-            await replaceStoredImageHistory(categorized.logs, categorized.categories);
-            setCategories(categorized.categories);
-            setLogs(categorized.logs);
-            return categorized.logs;
+            const page = await fetchImageGenerationLogsPage<GenerationLog>(token, 40, cursor);
+            if (!active()) return;
+            let mergedLogs: GenerationLog[] | undefined;
+            const previous = saveLogChainRef.current;
+            const next = (async () => {
+                await previous.catch(() => undefined);
+                if (!active()) return;
+                const [localLogs, storedCategories] = await Promise.all([readStoredLogs(), readStoredCategories()]);
+                if (!active()) return;
+                const merged = await mergeGenerationLogs(page.items.map((log) => ({ ...log, summaryOnly: true })), localLogs, true);
+                const categorized = withWorkflowLogCategories(merged, storedCategories);
+                if (!active()) return;
+                await replaceStoredImageHistory(categorized.logs, categorized.categories);
+                if (!active()) return;
+                mergedLogs = categorized.logs;
+                setCategories(categorized.categories);
+                setLogs(categorized.logs);
+                setHistoryCursor(page.nextCursor || null);
+            })();
+            saveLogChainRef.current = next;
+            await next;
+            return mergedLogs;
         } catch {
             // Keep local history available when account sync fails.
+            if (cursor && active()) message.error("加载更多记录失败，请重试");
             return undefined;
+        } finally {
+            request.loading = false;
+            if (active()) setHistoryLoading(false);
         }
     };
 
     const persistImageHistory = async (nextLogs: GenerationLog[], _nextCategories: GenerationCategory[]) => {
         if (!token || !accountHistorySyncEnabledRef.current) return;
-        await saveImageGenerationLogs(token, nextLogs.map(serializeLog)).catch(() => {
+        const ownerToken = token;
+        await (async () => {
+            const complete = await Promise.all(nextLogs.map(async (log) => {
+                if (!log.summaryOnly) return serializeLog(log);
+                const full = await fetchImageGenerationLog<GenerationLog>(ownerToken, log.id);
+                return serializeLog({
+                    ...full, ...log, summaryOnly: undefined,
+                    prompt: full.prompt, references: full.references || [], errorDetails: full.errorDetails,
+                    task: full.task || log.task ? { ...full.task, ...log.task } as CanvasImageTask : undefined,
+                });
+            }));
+            if (useUserStore.getState().token !== ownerToken) return;
+            await upsertImageGenerationLogs(token, complete);
+        })().catch(() => {
             accountHistorySyncEnabledRef.current = false;
         });
+    };
+
+    const loadCompleteImageLog = async (log: GenerationLog) => {
+        if (!log.summaryOnly || !token) return log;
+        const full = await fetchImageGenerationLog<GenerationLog>(token, log.id);
+        if (useUserStore.getState().token !== token) throw new Error("登录状态已变化");
+        return normalizeLog({ ...full, categoryIds: log.categoryIds });
     };
 
     const syncBackendImageTasks = async (baseLogs?: GenerationLog[]) => {
@@ -1047,6 +1100,12 @@ export default function ImagePage() {
     };
 
     const previewGenerationLog = async (log: GenerationLog) => {
+        try {
+            log = await loadCompleteImageLog(log);
+        } catch {
+            message.error("读取完整记录失败，请重试");
+            return;
+        }
         setPreviewLog(log);
         setPrompt(log.prompt);
         setReferences(log.references || []);
@@ -1290,6 +1349,9 @@ export default function ImagePage() {
                             onSyncLog={syncLogImage}
                             onRetry={retryResult}
                             onDeleteResult={deleteResult}
+                            hasMoreHistory={Boolean(historyCursor)}
+                            historyLoading={historyLoading}
+                            onLoadMore={() => void loadAccountImageHistory(historyCursor)}
                         />
                     </>
                 ) : (
@@ -1327,6 +1389,9 @@ export default function ImagePage() {
                             onSyncLog={syncLogImage}
                             onRetry={retryResult}
                             onDeleteResult={deleteResult}
+                            hasMoreHistory={Boolean(historyCursor)}
+                            historyLoading={historyLoading}
+                            onLoadMore={() => void loadAccountImageHistory(historyCursor)}
                         />
                         <WorkbenchPanel
                             layout="bottom"
@@ -1740,6 +1805,9 @@ function ResultsPanel({
     onSyncLog,
     onRetry,
     onDeleteResult,
+    hasMoreHistory,
+    historyLoading,
+    onLoadMore,
 }: {
     className?: string;
     results: GenerationResult[];
@@ -1773,6 +1841,9 @@ function ResultsPanel({
     onSyncLog: (log: GenerationLog, image: GeneratedImage, index: number) => void;
     onRetry: (result: GenerationResult) => void;
     onDeleteResult: (result: GenerationResult) => void;
+    hasMoreHistory: boolean;
+    historyLoading: boolean;
+    onLoadMore: () => void;
 }) {
     const { message } = App.useApp();
     const [creatingCategory, setCreatingCategory] = useState(false);
@@ -1894,6 +1965,11 @@ function ResultsPanel({
                     <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有生成图片" />
                 </div>
             )}
+            {hasMoreHistory || historyLoading ? (
+                <div className="mt-4 flex justify-center">
+                    <Button loading={historyLoading} onClick={onLoadMore}>加载更多</Button>
+                </div>
+            ) : null}
             <Modal title="新建分类" open={creatingCategory} onCancel={() => setCreatingCategory(false)} onOk={() => void createCategory()} okText="创建" cancelText="取消" destroyOnHidden>
                 <Input value={categoryName} autoFocus placeholder="输入分类名称" onChange={(event) => setCategoryName(event.target.value)} onPressEnter={() => void createCategory()} />
             </Modal>
@@ -2776,11 +2852,11 @@ function shouldPreserveLocalImageLogDuringRemoteMerge(log: GenerationLog, remote
     return !keys.length || !keys.some((key) => remoteKeys.has(key));
 }
 
-async function mergeGenerationLogs(remoteLogs: GenerationLog[], localLogs: GenerationLog[]) {
+async function mergeGenerationLogs(remoteLogs: GenerationLog[], localLogs: GenerationLog[], partial = false) {
     const normalizedRemote = await Promise.all(remoteLogs.map(normalizeLog));
     const normalizedLocal = await Promise.all(localLogs.map(normalizeLog));
     const remoteKeys = new Set(normalizedRemote.flatMap(imageLogIdentityKeys));
-    const preservedLocal = normalizedLocal.filter((log) => shouldPreserveLocalImageLogDuringRemoteMerge(log, remoteKeys));
+    const preservedLocal = normalizedLocal.filter((log) => partial ? !imageLogIdentityKeys(log).some((key) => remoteKeys.has(key)) : shouldPreserveLocalImageLogDuringRemoteMerge(log, remoteKeys));
     return dedupeGenerationLogs([...normalizedRemote, ...preservedLocal]);
 }
 
@@ -2825,6 +2901,7 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
     const config = normalizeLogConfig(log);
     return {
         id: log.id || nanoid(),
+        summaryOnly: log.summaryOnly,
         createdAt: log.createdAt || Date.now(),
         title: log.title || log.model || "未命名",
         prompt: log.prompt || log.title || "",

@@ -74,7 +74,7 @@ func imageGenerationSummary(raw json.RawMessage) string {
 	if json.Unmarshal(raw, &record) != nil || record == nil {
 		return ""
 	}
-	fields := []string{"id", "createdAt", "title", "prompt", "time", "model", "config", "references", "durationMs", "successCount", "failCount", "imageCount", "size", "quality", "status", "images", "errors", "categoryIds", "workflowId", "workflowName", "workflowTaskId", "lastPolledAt"}
+	fields := []string{"id", "createdAt", "title", "prompt", "time", "model", "config", "references", "durationMs", "successCount", "failCount", "imageCount", "size", "quality", "status", "images", "errors", "categoryIds", "workflowId", "workflowName", "workflowTaskId", "providerWorkflowRef", "lastPolledAt"}
 	summary := make(map[string]any, len(fields)+2)
 	for _, key := range fields {
 		if value, ok := record[key]; ok {

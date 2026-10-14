@@ -78,7 +78,11 @@ func CurrentUserImageGenerationLogs(ctx context.Context) ([]json.RawMessage, err
 	if err != nil {
 		return nil, err
 	}
-	return imageGenerationPayloads(logs), nil
+	raws := imageGenerationPayloads(logs)
+	for i, raw := range raws {
+		raws[i] = compactImageLogOriginalURLs(user.ID, raw)
+	}
+	return raws, nil
 }
 
 func SaveCurrentUserImageGenerationLogs(ctx context.Context, raws []json.RawMessage) ([]json.RawMessage, error) {
@@ -96,6 +100,7 @@ func UpsertCurrentUserImageGenerationLogs(ctx context.Context, raws []json.RawMe
 	cleanupGenerationLogs()
 	logs := make([]model.ImageGenerationLog, 0, len(raws))
 	for _, raw := range raws {
+		raw = compactImageLogOriginalURLs(user.ID, raw)
 		log := imageGenerationLogFromPayload(raw)
 		if log.ID != "" {
 			log.SummaryJSON = imageGenerationSummary(raw)

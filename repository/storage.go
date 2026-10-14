@@ -101,6 +101,21 @@ func ListStorageObjectsByFingerprint(createdBy, checksum string, bytes int64) ([
 	return objects, err
 }
 
+// ListStorageObjectsByFingerprintAnyOwner finds non-deleted objects across
+// accounts; callers must verify ownership before exposing a reference.
+func ListStorageObjectsByFingerprintAnyOwner(checksum string, bytes int64) ([]model.StorageObject, error) {
+	db, err := DB()
+	if err != nil {
+		return nil, err
+	}
+	var objects []model.StorageObject
+	err = db.Where(
+		"LOWER(sha256) = LOWER(?) AND bytes = ? AND deleted_at = ?",
+		checksum, bytes, "",
+	).Order("created_at, id").Find(&objects).Error
+	return objects, err
+}
+
 // Updates never resurrect a deleted object or overwrite a different provider/content/lease.
 func storageObjectSnapshot(db *gorm.DB, object model.StorageObject) *gorm.DB {
 	return db.Model(&model.StorageObject{}).Where("id = ? AND created_by = ? AND provider_id = ? AND bucket = ? AND object_key = ? AND sha256 = ? AND bytes = ? AND mime_type = ? AND deleted_at = ? AND COALESCE(cloud_sync_lease_token, '') = ? AND COALESCE(cloud_sync_status, '') = ? AND COALESCE(cloud_sync_attempts, 0) = ? AND COALESCE(cloud_sync_next_retry_at, '') = ? AND COALESCE(cloud_target_provider_id, '') = ? AND COALESCE(cloud_target_bucket, '') = ? AND COALESCE(cloud_target_key, '') = ? AND COALESCE(cloud_target_config_hash, '') = ?", object.ID, object.CreatedBy, object.ProviderID, object.Bucket, object.ObjectKey, object.SHA256, object.Bytes, object.MimeType, "", object.CloudSyncLeaseToken, object.CloudSyncStatus, object.CloudSyncAttempts, object.CloudSyncNextRetryAt, object.CloudTargetProviderID, object.CloudTargetBucket, object.CloudTargetKey, object.CloudTargetConfigHash)
