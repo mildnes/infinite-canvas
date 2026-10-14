@@ -122,6 +122,7 @@ func DeleteFinishedCanvasImageTasksBefore(before string) error {
 	}
 	return db.Where("completed_at <> ? AND completed_at < ?", "", before).
 		Where("status IN ?", []string{"completed", "failed", "cancelled"}).
+		Where("source NOT IN ?", []string{"image-workbench", "workflow"}).
 		Delete(&model.CanvasImageTask{}).Error
 }
 

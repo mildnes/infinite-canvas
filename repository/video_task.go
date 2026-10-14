@@ -120,5 +120,6 @@ func DeleteFinishedVideoTasksBefore(before string) error {
 	return db.
 		Where("completed_at <> ? AND completed_at < ?", "", before).
 		Where("status IN ?", []string{"completed", "failed", "cancelled", "canceled"}).
+		Where("source NOT IN ?", []string{"video-workbench"}).
 		Delete(&model.VideoTask{}).Error
 }

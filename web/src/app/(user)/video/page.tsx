@@ -17,6 +17,7 @@ import { KlingV26WorkbenchPanel } from "@/app/(user)/video/components/kling-v26-
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { VideoSettingsPanel, isKIEKlingV3Config, kieKlingOmniVariant, normalizeVideoResolutionValue, normalizeVideoSizeValue, videoResolutionOptions, videoSizeForResolution, videoSizeOptions } from "@/components/video-settings-panel";
 import { canvasThemes } from "@/lib/canvas-theme";
+import { resolveMissingTaskOutcome, WORKBENCH_TASK_INTERRUPTED_AFTER_MS } from "@/lib/workbench-task-sync";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
 import { formatCreditQuote, indexModelCredits, requestCreditQuote } from "@/lib/model-credits";
 import { isMiniMaxH3Config } from "@/lib/minimax-video";
@@ -110,7 +111,6 @@ type AssetPickerTarget = "general" | "image" | "video" | "audio" | "firstFrame" 
 type WorkflowPollContext = { token: string; signal: AbortSignal };
 
 const WORKBENCH_LAYOUT_KEY = "infinite-canvas:video-workbench-layout";
-const GENERATION_TASK_INTERRUPTED_AFTER_MS = 30 * 60 * 1000;
 const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" });
 export default function VideoPage() {
     const { message } = App.useApp();
@@ -212,9 +212,17 @@ export default function VideoPage() {
         setResults((current) => {
             let changed = false;
             const next = current.map((item) => {
-                if (item.status !== "pending" || now - item.createdAt < GENERATION_TASK_INTERRUPTED_AFTER_MS) return item;
+                if (item.status !== "pending") return item;
+                const outcome = resolveMissingTaskOutcome({ hasImages: hasPersistedVideoResult(item), createdAt: item.createdAt, now });
+                if (outcome.status !== "failed") {
+                    if (outcome.status === "success") {
+                        changed = true;
+                        return { ...item, status: "success" as const, error: undefined, errorDetail: undefined };
+                    }
+                    return item;
+                }
                 changed = true;
-                return { ...item, status: "failed" as const, durationMs: GENERATION_TASK_INTERRUPTED_AFTER_MS, error: "任务已中断（超过 30 分钟未完成）" };
+                return { ...item, status: "failed" as const, durationMs: WORKBENCH_TASK_INTERRUPTED_AFTER_MS, error: outcome.error };
             });
             return changed ? next : current;
         });
@@ -1122,6 +1130,22 @@ export default function VideoPage() {
         } catch (error) {
             if (!active() || error instanceof Error && error.name === "AbortError") return;
             const nextLog = { ...log, durationMs: Date.now() - startedAt, lastPolledAt: Date.now(), error: errorMessage(error), errorDetail: errorDetail(error) };
+            if (isMissingVideoTaskError(error)) {
+                const outcome = resolveMissingTaskOutcome({ hasImages: hasPersistedVideoLog(log), createdAt: log.createdAt, now: Date.now() });
+                if (outcome.status === "pending") {
+                    await saveGenerationLog({ ...nextLog, status: "生成中" }, active);
+                    if (!active()) return;
+                    setResults((value) => updateResultByLogId(value, log.id, { error: nextLog.error, errorDetail: nextLog.errorDetail, durationMs: nextLog.durationMs, lastPolledAt: nextLog.lastPolledAt }));
+                    return;
+                }
+                const expiredLog = outcome.status === "success"
+                    ? { ...log, status: "成功" as const, error: undefined, errorDetail: undefined, lastPolledAt: Date.now() }
+                    : { ...nextLog, status: "失败" as const, error: outcome.error, errorDetail: outcome.error };
+                await finalizeGenerationLog(expiredLog, active);
+                if (!active()) return;
+                setResults((value) => updateResultByLogId(value, log.id, { status: outcome.status === "success" ? "success" : "failed", error: expiredLog.error, errorDetail: expiredLog.errorDetail, durationMs: expiredLog.durationMs, lastPolledAt: expiredLog.lastPolledAt }));
+                return;
+            }
             if (isTransientVideoPollError(error)) {
                 await saveGenerationLog({ ...nextLog, status: "生成中" }, active);
                 if (!active()) return;
@@ -2450,7 +2474,7 @@ function backendTaskToLog(task: VideoResponse, fallbackConfig: AiConfig): Genera
     const createdAt = parseTaskTimestamp(task.createdAt ?? task.created_at) || Date.now();
     const status = isStoppedTask(task.status) ? "已停止" : isFailedVideoTask(task) ? "失败" : isCompletedVideoTask(task) ? "成功" : "生成中";
     const interrupted = Boolean(task.error?.message?.includes("已中断"));
-    const durationMs = interrupted ? Math.min(Math.max(0, Date.now() - createdAt), GENERATION_TASK_INTERRUPTED_AFTER_MS) : Math.max(0, Date.now() - createdAt);
+    const durationMs = interrupted ? Math.min(Math.max(0, Date.now() - createdAt), WORKBENCH_TASK_INTERRUPTED_AFTER_MS) : Math.max(0, Date.now() - createdAt);
     const video = status === "成功" && (task.video_url || task.url) ? videoFromTaskResponse(task, durationMs) : undefined;
     return {
         id: `backend-${videoTaskIdentityKeys(task)[0] || nanoid()}`,
@@ -2616,6 +2640,20 @@ function videoLogDeleteKeys(log: GenerationLog) {
 
 function videoLogScore(log: GenerationLog) {
     return (log.status === "成功" ? 4 : 0) + (log.video ? 4 : 0) + (log.video?.storageKey ? 2 : 0) + (log.task && !isLocalClientVideoTask(log.task) ? 2 : 0) + (log.errorDetail ? 1 : 0);
+}
+
+function hasPersistedVideoLog(log: GenerationLog) {
+    return Boolean(log.video?.storageKey || log.video?.url || log.task?.storageKey || log.task?.video_url || log.task?.url);
+}
+
+function hasPersistedVideoResult(result: GenerationResult) {
+    return Boolean(result.video?.storageKey || result.video?.url || result.task?.storageKey || result.task?.video_url || result.task?.url);
+}
+
+function isMissingVideoTaskError(error: unknown) {
+    if (axios.isAxiosError(error) && error.response?.status === 404) return true;
+    if (!(error instanceof VideoRequestError)) return false;
+    return /404|任务不存在|未找到|not found/i.test(error.message + " " + (error.detail || ""));
 }
 
 function referenceUsedByGeneration(reference: ReferenceImage, logs: GenerationLog[], results: GenerationResult[]) {

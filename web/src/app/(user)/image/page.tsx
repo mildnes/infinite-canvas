@@ -35,6 +35,7 @@ import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/app/(user)/canvas/components/asset-picker-modal";
 import { canvasThemes } from "@/lib/canvas-theme";
+import { resolveMissingTaskOutcome, WORKBENCH_TASK_INTERRUPTED_AFTER_MS } from "@/lib/workbench-task-sync";
 import { imageOutputCapabilityForConfig, normalizeImageOutputFormat, resolveImageOutputFormat } from "@/lib/image-output-format";
 import {
     CreativeWorkflowWorkspace,
@@ -132,7 +133,6 @@ const CATEGORY_STORE_KEY = "infinite-canvas:image_generation_categories";
 const WORKBENCH_LAYOUT_KEY = "infinite-canvas:image-workbench-layout";
 const RESULT_VIEW_MODE_KEY = "infinite-canvas:image-result-view-mode";
 const IMAGE_TASK_POLL_INTERVAL_MS = 10000;
-const GENERATION_TASK_INTERRUPTED_AFTER_MS = 30 * 60 * 1000;
 const WORKFLOW_BUTTON_POSITION_KEY = "infinite-canvas:workflow-button-position";
 const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
 const categoryStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_categories" });
@@ -252,9 +252,17 @@ export default function ImagePage() {
         setResults((current) => {
             let changed = false;
             const next = current.map((item) => {
-                if (item.status !== "pending" || now - item.createdAt < GENERATION_TASK_INTERRUPTED_AFTER_MS) return item;
+                if (item.status !== "pending") return item;
+                const outcome = resolveMissingTaskOutcome({ hasImages: hasPersistedImageResult(item), createdAt: item.createdAt, now });
+                if (outcome.status !== "failed") {
+                    if (outcome.status === "success") {
+                        changed = true;
+                        return { ...item, status: "success" as const, error: undefined, errorDetail: undefined };
+                    }
+                    return item;
+                }
                 changed = true;
-                return { ...item, status: "failed" as const, durationMs: GENERATION_TASK_INTERRUPTED_AFTER_MS, error: "任务已中断（超过 30 分钟未完成）" };
+                return { ...item, status: "failed" as const, durationMs: WORKBENCH_TASK_INTERRUPTED_AFTER_MS, error: outcome.error };
             });
             return changed ? next : current;
         });
@@ -941,10 +949,14 @@ export default function ImagePage() {
                     if (!logActive()) return;
                     const task = taskById.get(imageLogTaskId(log));
                     if (!task) {
-                        const nextLog = { ...log, status: "失败" as const, durationMs: Date.now() - log.createdAt, failCount: 1, errors: ["图片任务不存在或未创建成功"], errorDetails: ["后端没有找到对应的图片任务"], lastPolledAt: Date.now() };
+                        const outcome = resolveMissingTaskOutcome({ hasImages: hasPersistedImageLog(log), createdAt: log.createdAt, now: Date.now() });
+                        if (outcome.status === "pending") return;
+                        const nextLog = outcome.status === "success"
+                            ? { ...log, status: "成功" as const, errors: [], errorDetails: [], lastPolledAt: Date.now() }
+                            : { ...log, status: "失败" as const, durationMs: Date.now() - log.createdAt, failCount: 1, errors: [outcome.error], errorDetails: [outcome.error], lastPolledAt: Date.now() };
                         await saveLog(nextLog, logActive);
                         if (!logActive()) return;
-                        setResults((value) => updateResultByLogId(value, log.id, { status: "failed", error: nextLog.errors[0], errorDetail: nextLog.errorDetails?.[0], durationMs: nextLog.durationMs, lastPolledAt: nextLog.lastPolledAt }));
+                        setResults((value) => updateResultByLogId(value, log.id, { status: outcome.status === "success" ? "success" : "failed", error: nextLog.errors[0], errorDetail: nextLog.errorDetails?.[0], durationMs: nextLog.durationMs, lastPolledAt: nextLog.lastPolledAt }));
                         return;
                     }
                     if ((task.image_urls?.length || 0) > 1) {
@@ -2432,6 +2444,14 @@ function imageResultMatchesLog(result: GenerationResult, log: GenerationLog) {
     return imageResultIdentityKeys(result).some((key) => keys.has(key));
 }
 
+function hasPersistedImageLog(log: GenerationLog) {
+    return log.images.length > 0 || Boolean(log.task?.imageStorage?.length || log.task?.storageKey || log.task?.image_url || log.task?.url);
+}
+
+function hasPersistedImageResult(result: GenerationResult) {
+    return Boolean(result.image || result.task?.imageStorage?.length || result.task?.storageKey || result.task?.image_url || result.task?.url);
+}
+
 function generationLogRank(log: GenerationLog) {
     return (log.status === "成功" ? 1000 : log.status === "失败" ? 700 : 0) + log.images.length * 100 + log.successCount * 20 + log.failCount * 10 + (log.task ? 5 : 0) + (imageTaskSourceId(log.task) === log.id ? 8 : 0);
 }
@@ -2630,7 +2650,7 @@ function imageLogFromTask(log: GenerationLog, task: CanvasImageTask): Generation
     const elapsedMs = Math.max(0, Date.now() - startedAt);
     if (isFailedImageTask(task)) {
         const message = task.error?.message || task.error_detail || "图片生成失败";
-        const durationMs = message.includes("已中断") ? Math.min(elapsedMs, GENERATION_TASK_INTERRUPTED_AFTER_MS) : elapsedMs;
+        const durationMs = message.includes("已中断") ? Math.min(elapsedMs, WORKBENCH_TASK_INTERRUPTED_AFTER_MS) : elapsedMs;
         return { ...log, task, status: "失败", durationMs, failCount: 1, errors: [message], errorDetails: [task.error_detail || message], lastPolledAt: Date.now() };
     }
     const durationMs = elapsedMs;
