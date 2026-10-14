@@ -212,6 +212,17 @@ APIMart 透明背景能力以其实际模型接口为准：[GPT Image 1/1.5 Offi
 | `agent.mcpServers` | object[] | MCP 服务私有配置，包含传输和密钥；仅管理员接口可读 |
 | `storage.autoSyncAllAssets` | boolean | 是否在本地生成媒体副本之后继续把新上传和生成媒体同步到可用云存储，默认关闭；同步失败保留本地稳定副本 |
 
+### 渠道顺序（前端模型选择器的显示顺序）
+
+`private.channels` 是**有序数组**，这个顺序直接决定前端模型选择器（`web/src/components/model-picker.tsx`）里模型的排列，是刻意设计的不变式：
+
+- 后端：`enabledChannelModels` 按渠道顺序拼接各渠道的 `models`（跨渠道重名去重时**保留首次出现的位置**）；`publicChannelInfos` 按渠道顺序输出。**两者都不得排序或重排**。
+- 前端：`model-picker.tsx` 按 `config.publicChannels` 的顺序 `flatMap` 出模型列表，渠道内按 `models` 顺序渲染，**不得加 `.sort()` / 字母序**。
+- 调整入口：管理端「系统设置 → 渠道」表格操作列的 **↑ ↓** 按钮（工具函数 `web/src/lib/channel-order.ts` 的 `moveChannel`，点击即保存并通知前端刷新配置）。
+- 守卫测试：`service/channel_order_test.go`、`web/src/components/model-picker-order.test.mjs`。改到这两条链路时会直接失败，不要为了让它通过而放宽断言。
+
+> 这个顺序只影响**显示**；实际路由仍由请求里的渠道头（`X-Model-Channel-ID`）决定，未指定渠道头时按 `weight` 加权随机。
+
 ### 已生成媒体的云端补传与本地副本
 
 登录账号的渠道生成结果无论 `storage.autoSyncAllAssets` 是否开启，都会先写入 `generated-media/` 并获得稳定 `server:<id>`。开启自动同步后，上传失败会记录原因和下次重试时间，固定目标并通过租约防止重复执行；重启后接管过期任务。只有完整云端回读通过字节数和 SHA-256 校验才确认同步成功，失败保留本地副本和短链接。切换开关不会自动补传全部历史对象。
