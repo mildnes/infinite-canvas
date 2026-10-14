@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircleOutlined, DeleteOutlined, FormatPainterOutlined, LoadingOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
+import { ArrowDownOutlined, ArrowUpOutlined, CheckCircleOutlined, DeleteOutlined, FormatPainterOutlined, LoadingOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import { json } from "@codemirror/lang-json";
 import { App, Button, Card, Checkbox, Col, Collapse, Drawer, Flex, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from "antd";
 import dynamic from "next/dynamic";
@@ -9,6 +9,7 @@ import { EditorView } from "@uiw/react-codemirror";
 
 import { ChannelModelSelectorModal } from "@/components/channel-model-selector-modal";
 import type { WorkflowChannelSettings } from "@/components/workflow/workflow-channel-pane";
+import { moveChannel } from "@/lib/channel-order";
 import { IMAGE_QUALITY_OPTIONS, type ImageQualityCapability } from "@/lib/image-quality";
 import { imageOutputFormatOptions, type ImageOutputCapability } from "@/lib/image-output-format";
 import { isWorkflowProtocol, modelChannelApiKeyUrls, modelChannelDefaultBaseUrls, modelChannelProtocolOptions } from "@/lib/model-channel";
@@ -1041,9 +1042,14 @@ export default function AdminSettingsPage() {
                                         )}
                                     </Form.List>
                                 </Card>
-                                <Button type="primary" icon={<PlusOutlined />} onClick={() => openChannelDrawer(null)}>
-                                    新增渠道
-                                </Button>
+                                <Space align="center" size={12}>
+                                    <Button type="primary" icon={<PlusOutlined />} onClick={() => openChannelDrawer(null)}>
+                                        新增渠道
+                                    </Button>
+                                    <Typography.Text type="secondary">
+                                        渠道顺序即前端模型选择器的显示顺序：用 ↑ ↓ 调整，立即保存并同步到前端
+                                    </Typography.Text>
+                                </Space>
                                 <Table
                                     rowKey="_rowKey"
                                     pagination={false}
@@ -1066,9 +1072,25 @@ export default function AdminSettingsPage() {
                                         {
                                             title: "操作",
                                             key: "actions",
-                                            width: 220,
+                                            width: 300,
                                             render: (_, item) => (
                                                 <Space size={4}>
+                                                    <Button
+                                                        size="small"
+                                                        icon={<ArrowUpOutlined />}
+                                                        title="上移（渠道顺序即前端模型列表的显示顺序）"
+                                                        aria-label="上移渠道"
+                                                        disabled={item._index === 0}
+                                                        onClick={() => void persistChannels(moveChannel(channels, item._index, -1))}
+                                                    />
+                                                    <Button
+                                                        size="small"
+                                                        icon={<ArrowDownOutlined />}
+                                                        title="下移（渠道顺序即前端模型列表的显示顺序）"
+                                                        aria-label="下移渠道"
+                                                        disabled={item._index === channels.length - 1}
+                                                        onClick={() => void persistChannels(moveChannel(channels, item._index, 1))}
+                                                    />
                                                     {!isWorkflowProtocol(item.protocol) ? <Button size="small" onClick={() => openTestDialog(item._index)}>测试</Button> : null}
                                                     <Button size="small" onClick={() => openChannelDrawer(item._index)}>
                                                         编辑
