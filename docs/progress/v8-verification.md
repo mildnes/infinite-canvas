@@ -52,6 +52,74 @@ OAuth 只采用 PUBLIC_BASE_URL 的 http(s) origin，忽略 Host／X-Forwarded-H
 
 完整 provider／model 请求大小、HTTP 拒绝边界、Base64 增量及三条参考链路是否共享上限，必须在获得真实入口后补充。不能把鉴权失败或未知 provider 错误解释成体积上限。
 
+## 可靠性修复
+
+| 项目 | 改动文件 | 旧实现失败证据 | 修复与针对验证 |
+| --- | --- | --- | --- |
+| R1 保存 | canvas/stores/use-canvas-store.ts、canvas/[id]/canvas-client-page.tsx；canvas-save-reliability.test.mjs、canvas-interaction-persistence.test.mjs | 基线 store 新 7 用例 0 pass／7 fail；pointerup／删除 UI 新 2 用例 0 pass／2 fail | 400 ms 去抖＋2 s 最长等待、稳定 partialize／sanitize 缓存、pagehide／hidden flush、pointerup 直接保存最终 nodes |
+| R2 版本 | service/canvas_project.go、repository/canvas_project.go、handler/canvas_project.go、canvas store、api/canvas-tasks.ts；Go 版本与 HTTP 夹具 | 旧实现保存 2099 客户端时间；旧编辑 200 覆盖；sync 冲突前置插入未回滚 | 服务端生成 createdAt／updatedAt，现有 updatedAt 原子 CAS；save 携 baseUpdatedAt、sync 携 baseUpdatedAts；409 返回 currentProject，前端回灌并保留可重试草稿；仓库并发与 HTTP 子用例通过 |
+| R3 删除 | 同上项目 Go 文件、canvas-delete-projects-dialog.tsx、canvas/page.tsx、canvas store | 旧 store 删除先移除本地且不等待；已删除保存仍为 200 错误 JSON | await 远端删除、失败保留本地、取消排队保存防复活；空白 ID 过滤后一次批量删除。基线仓库本就接收整批 ID，没有把冗余 for-return 误说成只删第一条 |
+| R4 游客导入 | services/storage-migration.ts、(user)/layout.tsx、components/layout/guest-canvas-import-prompt.tsx、lib/guest-canvas-import.ts；2 个测试文件 | 871d0cc 实际迁移模块新 4 用例 0 pass／4 fail，缺少游客来源读取／导入入口 | 显式读 :anon，确认／进度／重试、按项目 ID 去重；旧 server／本机媒体读取字节后归属目标账号并重写稳定引用，回退本机键不算成功；写入前后 owner 守卫，源数据始终保留；12/12 针对用例通过 |
+| R6 水合 | canvas store、lib/localforage-storage.ts、services/api/request.ts、canvas/page.tsx；api-request-timeout.test.mjs、account-storage.test.mjs | 旧黑洞水合未 ready；旧 owner 等待超时新用例 0 pass／1 fail；API timeout／409 两例失败 | HTTP 12 s AbortController，owner 等待 12 s，总水合 14 s 截止，迟到结果丢弃、ready 错误态与重试入口；R1／R2／R3／R6 针对 19/19 通过 |
+| R9 轮询 | canvas-client-page.tsx、canvas-node.tsx、canvas/types.ts、lib/generation-task-run.ts、api/image.ts／audio.ts／direct-ai.ts；handler/canvas_task.go／video_task.go 与轮询测试 | 旧前端新 7 例 0 pass／7 fail；图片／音频 missing 为 200，client 视频 missing 落入上游 | 404 立即错误；5／10／20／30 s 退避，连续 5 次暂停，每次查询 15 s 超时；图片／音频／视频／工作流“重新查询”只查原 ID，不自动新建或扣费；针对 23/23 通过 |
+
+R2 没有新增数据库列；无版本旧请求继续兼容，时间不再由客户端决定。真正的 SQL CAS 冲突会回滚整批事务，其他账号和软删除语义保持。
+
+集成首轮前端 `356/361`：5 个既有真实 callback 的 VM 测试缺少新 canvasTaskRetryMode 依赖。仅修测试环境以导入真实 helper 和页面真实任务 ID 函数，原生成逻辑与断言不变。最终 366/366 包含全部既有用例与媒体代理兼容新例，没有减少或跳过测试。
+
 ## 全量验证与提交
 
-安全针对性验证已通过；可靠性代理的红绿证据与最终全量结果在集成完成后补充。本机使用 Go 1.25.0 darwin/arm64 与 Node 22，不能标为容器执行。
+本机使用 Go 1.25.0 darwin/arm64、Node 22.22.3、Bun 1.3.14，不能标为容器执行；未在本机执行 Next build。
+
+```text
+bun install --frozen-lockfile
+bun install v1.3.14 (0d9b296a)
+Checked 711 installs across 750 packages (no changes)
+exit=0
+
+bun run sync:shared
+$ cp -f ../shared/image-output-capability-rules.json src/lib/
+exit=0
+
+go test ./...
+ok cmd/media-previews
+ok config
+ok handler
+ok repository
+ok service
+其他包 [no test files]
+exit=0
+
+go test -race ./...
+ok cmd/media-previews
+ok config
+ok handler
+ok repository
+ok service
+其他包 [no test files]
+exit=0
+
+npx --package tsx@4.23.15 tsx --test <全部 63 个 src 测试文件，逐个参数传入>
+# tests 366
+# pass 366
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+exit=0
+
+npx tsc --noEmit --incremental false
+（编译器空输出）
+exit=0
+
+gofmt -l <改动 Go 文件>
+（空输出；全仓既有遗留 12 个，与基线一致）
+
+git diff --check
+（空输出）
+exit=0
+```
+
+完整包名均为 github.com/tigerowo/infinite-canvas 下对应路径。测试通过不能替代真实浏览器关闭／刷新、播放器解码与上游校验入口的验收；这些边界列在 pending-test.md。R8 仍未完成，不能把本次代码提交描述为全量 P0 全部关闭。
+
+安全批次与可靠性批次各一条中文 Conventional Commit。Gitea 推送与 CI 状态由交付回复记录；不触发 deploy-production.yml。

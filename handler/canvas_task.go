@@ -148,7 +148,7 @@ func GetCanvasImageTask(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	if !found {
-		Fail(w, "图片任务不存在")
+		FailWithStatus(w, http.StatusNotFound, "图片任务不存在")
 		return
 	}
 	OK(w, service.CanvasImageTaskResponse(task))
@@ -317,7 +317,7 @@ func GetCanvasAudioTask(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	if !found {
-		Fail(w, "音频任务不存在")
+		FailWithStatus(w, http.StatusNotFound, "音频任务不存在")
 		return
 	}
 	OK(w, service.CanvasAudioTaskResponse(task))

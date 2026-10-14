@@ -1,27 +1,32 @@
 "use client";
 
-import { Button, Modal } from "antd";
+import { useState } from "react";
+import { App, Button, Modal } from "antd";
 
-import { deleteCanvasProjects, deleteCanvasTasks } from "@/services/api/canvas-tasks";
+import { deleteCanvasTasks } from "@/services/api/canvas-tasks";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useCanvasStore } from "../stores/use-canvas-store";
 import { useCanvasUiStore } from "../stores/use-canvas-ui-store";
 
 export function CanvasDeleteProjectsDialog() {
+    const { message } = App.useApp();
+    const [deleting, setDeleting] = useState(false);
     const ids = useCanvasUiStore((state) => state.deleteProjectIds);
     const setDeleteIds = useCanvasUiStore((state) => state.setDeleteProjectIds);
     const removeSelectedIds = useCanvasUiStore((state) => state.removeSelectedProjectIds);
     const deleteProjects = useCanvasStore((state) => state.deleteProjects);
     const cleanupImages = useAssetStore((state) => state.cleanupImages);
-    const confirm = () => {
-        void Promise.all([
-            deleteCanvasProjects(ids),
-            Promise.all(ids.map((id) => deleteCanvasTasks(id))),
-        ]).catch(() => undefined);
-        deleteProjects(ids);
-        cleanupImages();
-        removeSelectedIds(ids);
-        setDeleteIds([]);
+    const confirm = async () => {
+        if (deleting) return;
+        setDeleting(true);
+        try {
+            await deleteProjects(ids);
+            void Promise.all(ids.map((id) => deleteCanvasTasks(id))).catch(() => undefined);
+            cleanupImages();
+            removeSelectedIds(ids);
+            setDeleteIds([]);
+        } catch (error) { message.error(error instanceof Error ? error.message : "删除失败，请检查网络后重试"); }
+        finally { setDeleting(false); }
     };
 
     return (
@@ -29,11 +34,11 @@ export function CanvasDeleteProjectsDialog() {
             title="删除画布？"
             open={ids.length > 0}
             centered
-            onCancel={() => setDeleteIds([])}
+            onCancel={() => { if (!deleting) setDeleteIds([]); }}
             footer={
                 <>
-                    <Button onClick={() => setDeleteIds([])}>取消</Button>
-                    <Button danger type="primary" onClick={confirm}>
+                    <Button disabled={deleting} onClick={() => setDeleteIds([])}>取消</Button>
+                    <Button danger type="primary" loading={deleting} onClick={confirm}>
                         删除
                     </Button>
                 </>

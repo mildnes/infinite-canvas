@@ -44,6 +44,7 @@ export type CanvasNodeMetadata = {
     status?: CanvasNodeStatus;
     stopState?: "stopping" | "failed";
     errorDetails?: string;
+    taskPollError?: boolean;
     fontSize?: number;
     generationMode?: CanvasGenerationMode;
     generationType?: CanvasImageGenerationType;

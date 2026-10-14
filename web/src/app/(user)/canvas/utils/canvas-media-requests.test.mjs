@@ -6,7 +6,7 @@ import ts from "typescript";
 import { stripReferenceMetadata } from "./prompt-reference-metadata.ts";
 import { buildNodeGenerationContext, buildNodeChatMessages } from "../components/canvas-node-generation.ts";
 import { CanvasNodeType } from "../types.ts";
-import { beginTaskRun, currentTaskRun, acceptsTaskUpdate, isStoppedTask } from "../../../../lib/generation-task-run.ts";
+import { beginTaskRun, currentTaskRun, acceptsTaskUpdate, isStoppedTask, canvasTaskRetryMode } from "../../../../lib/generation-task-run.ts";
 
 const page = readFileSync(new URL("../[id]/canvas-client-page.tsx", import.meta.url), "utf8");
 const ast = ts.createSourceFile("canvas.tsx", page, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -112,7 +112,7 @@ function callbackScope(node) {
     const api = harness();
     const state = { nodes: [node], writes: 0, notices: [], running: [] };
     const scope = {
-        ...api, Error, CanvasNodeType, nodesRef: { current: state.nodes }, connectionsRef: { current: [] }, effectiveConfig: config,
+        ...api, Error, CanvasNodeType, canvasTaskRetryMode, nodesRef: { current: state.nodes }, connectionsRef: { current: [] }, effectiveConfig: config,
         startNodeTaskRun: () => ({ controller: new AbortController() }), guardNodeTaskResponse: () => {}, nodeRunActive: () => true,
         useUserStore: { getState: () => ({ token: "test" }) },
         isCanvasImageNodeType: (type) => ["image", "panorama"].includes(type), isPanoramaNodeType: (type) => type === "panorama",
@@ -126,6 +126,10 @@ function callbackScope(node) {
         NODE_DEFAULT_SIZE: { image: { width: 320, height: 180 } }, buildImageGenerationMetadata: () => ({}),
         buildAnglePrompt: () => empty, buildAngleLabel: () => "angle",
     };
+    for (const name of ["canvasVideoTaskId", "canvasRecoverableTaskId"]) {
+        const definition = nodes.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name);
+        scope[name] = vm.runInNewContext(compile(`(${definition.getText(ast)})`), scope);
+    }
     scope.canSubmitCanvasMediaRequest = vm.runInNewContext(compile(`(${callback("canSubmitCanvasMediaRequest")})`), scope);
     return { api, state, scope };
 }

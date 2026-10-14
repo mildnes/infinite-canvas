@@ -282,7 +282,7 @@ async function requestDirectJSON(protocol: DirectProtocolAdapter, url: string, a
             signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
         });
         const payload = await readDirectResponse(response);
-        if (!response.ok) throw new Error(protocol.readError(payload) || `上游请求失败：${response.status}`);
+        if (!response.ok) throw Object.assign(new Error(protocol.readError(payload) || `上游请求失败：${response.status}`), { status: response.status });
         const error = protocol.readError(payload);
         if (error) throw new Error(error);
         return payload;

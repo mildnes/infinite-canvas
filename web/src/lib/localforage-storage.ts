@@ -10,17 +10,26 @@ export function currentStorageOwnerId(): string | null {
     return token ? user?.id || null : "anon";
 }
 
-export async function waitForStorageOwner() {
+export async function waitForStorageOwner(timeoutMs = 12000) {
+    const wait = (subscribe: (ready: () => void) => () => void, ready: () => boolean) => new Promise<void>((resolve, reject) => {
+        let unsubscribe = () => {};
+        const timeout = setTimeout(() => { unsubscribe(); reject(new Error("账号信息加载超时，请检查网络后重试")); }, timeoutMs);
+        const finish = () => { if (ready()) { clearTimeout(timeout); unsubscribe(); resolve(); } };
+        unsubscribe = subscribe(finish);
+        finish();
+    });
+    const startedAt = Date.now();
     if (!useUserStore.persist.hasHydrated()) {
-        await new Promise<void>(resolve => {
-            const unsubscribe = useUserStore.persist.onFinishHydration(() => { unsubscribe(); resolve(); });
-            if (useUserStore.persist.hasHydrated()) { unsubscribe(); resolve(); }
-        });
+        await wait(resolve => useUserStore.persist.onFinishHydration(resolve), () => useUserStore.persist.hasHydrated());
     }
     if (!useUserStore.getState().isReady) {
-        await new Promise<void>(resolve => {
-            const unsubscribe = useUserStore.subscribe(state => { if (state.isReady) { unsubscribe(); resolve(); } });
-            if (useUserStore.getState().isReady) { unsubscribe(); resolve(); }
+        const remaining = timeoutMs - (Date.now() - startedAt);
+        if (remaining <= 0) throw new Error("账号信息加载超时，请检查网络后重试");
+        await new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => { unsubscribe(); reject(new Error("账号信息加载超时，请检查网络后重试")); }, remaining);
+            const finish = () => { if (useUserStore.getState().isReady) { clearTimeout(timeout); unsubscribe(); resolve(); } };
+            const unsubscribe = useUserStore.subscribe(finish);
+            finish();
         });
     }
     return currentStorageOwnerId();

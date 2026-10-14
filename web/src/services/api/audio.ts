@@ -185,7 +185,7 @@ export async function pollCanvasAudioTaskStatus(taskId: string, signal?: AbortSi
         signal,
         headers: { Authorization: `Bearer ${token}` },
     });
-    if (!response.ok) throw new Error(await readFetchError(response, "读取音频任务失败"));
+    if (!response.ok) throw Object.assign(new Error(await readFetchError(response, "读取音频任务失败")), { status: response.status });
     const payload = (await response.json()) as { code?: number; msg?: string; data?: CanvasAudioTask };
     if (payload.code !== 0 || !payload.data) throw new Error(payload.msg || "读取音频任务失败");
     return syncGeneratedAudio(payload.data);

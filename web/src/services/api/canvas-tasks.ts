@@ -9,10 +9,12 @@ export async function listCanvasProjects(token: string) {
 export async function saveCanvasProject(
     token: string,
     project: CanvasProject,
+    baseUpdatedAt = project.serverUpdatedAt ?? "",
 ) {
+    const { serverUpdatedAt: _serverUpdatedAt, pendingSave: _pendingSave, ...data } = project;
     return apiPost<CanvasProject>(
         "/api/v1/canvas/projects",
-        { data: project },
+        { data, baseUpdatedAt },
         token,
     );
 }
@@ -20,10 +22,11 @@ export async function saveCanvasProject(
 export async function syncCanvasProjects(
     token: string,
     projects: CanvasProject[],
+    baseUpdatedAts = Object.fromEntries(projects.map((project) => [project.id, project.serverUpdatedAt ?? ""])),
 ) {
     return apiPost<CanvasProject[]>(
         "/api/v1/canvas/projects/sync",
-        { projects },
+        { projects: projects.map(({ serverUpdatedAt: _serverUpdatedAt, pendingSave: _pendingSave, ...data }) => data), baseUpdatedAts },
         token,
     );
 }

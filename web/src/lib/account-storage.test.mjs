@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import vm from "node:vm";
+import { execFileSync } from "node:child_process";
 import test from "node:test";
 import ts from "typescript";
 import * as assetData from "./asset-data.ts";
@@ -31,7 +32,7 @@ function fixture() {
         "../utils/canvas-media-persistence": { sanitizeCanvasNodesForPersistence: nodes => nodes, sanitizeCanvasSessionsForPersistence: sessions => sessions },
     };
     const context = { Promise, console: { ...console, warn: (...args) => operations.push(["warn", ...args]) }, window: { localStorage: { getItem: key => disk.get(key), setItem: (key, value) => disk.set(key, value), removeItem: key => disk.delete(key) }, setTimeout: fn => { timers.set(++sequence, fn); return sequence; }, clearTimeout: id => timers.delete(id) }, setTimeout: fn => { timers.set(++sequence, fn); return sequence; }, clearTimeout: id => timers.delete(id), require: name => modules[name] || {} };
-    const load = path => { const exports = {}; vm.runInNewContext(ts.transpileModule(readFileSync(new URL(path, import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2016, module: ts.ModuleKind.CommonJS } }).outputText, { ...context, exports }); return exports; };
+    const load = path => { const exports = {}; const source = process.env.STORAGE_OWNER_BASELINE && path === "./localforage-storage.ts" ? execFileSync("git", ["show", process.env.STORAGE_OWNER_BASELINE + ":web/src/lib/localforage-storage.ts"], { encoding: "utf8" }) : readFileSync(new URL(path, import.meta.url), "utf8"); vm.runInNewContext(ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2016, module: ts.ModuleKind.CommonJS } }).outputText, { ...context, exports }); return exports; };
     const storage = load("./localforage-storage.ts");
     modules["@/lib/localforage-storage"] = storage;
     return { user, disk, operations, posts, saves, timers, remote, storage, load, delayedRead: promise => { nextRead = promise; }, delayedList: promise => { listGate = promise; listOwner = user.getState().user?.id; }, switchOwner: id => user.setState({ token: id === "anon" ? "" : id + "-token", user: id === "anon" ? null : { id }, isReady: true }), seed: (key, id, records) => disk.set(key + ":" + id, JSON.stringify({ state: { ownerUserId: id, ...(key === canvasKey ? { projects: records } : { assets: records, tombstones: [] }) }, version: 0 })) };
@@ -117,4 +118,16 @@ test("adapter discards delayed reads and canvas remote responses from the previo
     await syncing; await tick();
     assert.ok(!store.getState().projects.some(p => p.id === "late-B"));
     assert.ok(!f.posts.some(p => p.token === "A-token" && p.projects?.some(p => p.id === "B-local")));
+});
+
+test("waiting for an unresolved owner has a deadline and releases subscriptions", async () => {
+    const f = fixture();
+    f.user.setState({ isReady: false });
+    const waiting = f.storage.waitForStorageOwner();
+    await tick();
+    assert.ok(f.timers.size > 0, "owner hydration must have a timeout");
+    for (const fn of [...f.timers.values()]) fn();
+    await assert.rejects(waiting, /超时/);
+    f.user.setState({ isReady: true });
+    assert.equal(await f.storage.waitForStorageOwner(), "A");
 });

@@ -23,6 +23,8 @@ export default function CanvasPage() {
     const projects = useCanvasStore((state) => state.projects);
     const createProject = useCanvasStore((state) => state.createProject);
     const importProject = useCanvasStore((state) => state.importProject);
+    const syncError = useCanvasStore((state) => state.syncError);
+    const retrySaves = useCanvasStore((state) => state.retrySaves);
     const selectedIds = useCanvasUiStore((state) => state.selectedProjectIds);
     const setDeleteIds = useCanvasUiStore((state) => state.setDeleteProjectIds);
 
@@ -88,6 +90,8 @@ export default function CanvasPage() {
                         </Button>
                     </div>
                 </header>
+
+                {syncError ? <div role="alert" className="flex items-center gap-3 text-sm"><span>{syncError}</span><Button size="small" onClick={() => void retrySaves()}>重试同步</Button></div> : null}
 
                 {!hydrated ? (
                     <section className="flex min-h-[360px] items-center justify-center border-y border-stone-200 text-sm text-stone-500 dark:border-stone-800">正在加载画布...</section>

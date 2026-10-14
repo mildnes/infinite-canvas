@@ -53,6 +53,8 @@ export async function apiDelete<T>(url: string, token?: string) {
 
 async function apiRequest<T>(config: { url: string; method: "GET" | "POST" | "DELETE"; params?: ApiParams; data?: unknown; headers?: Record<string, string> }) {
     let response;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
     try {
         response = await axios.request<ApiResponse<T>>({
             url: config.url,
@@ -61,10 +63,15 @@ async function apiRequest<T>(config: { url: string; method: "GET" | "POST" | "DE
             paramsSerializer: { serialize: (params) => serializeApiParams(params as ApiParams).toString() },
             data: config.data,
             headers: config.headers,
+            signal: controller.signal,
+            timeout: 12000,
             validateStatus: () => true,
         });
-    } catch {
+    } catch (error) {
+        if (controller.signal.aborted || (error as { code?: string })?.code === "ECONNABORTED") throw new Error("请求超时，请检查网络后重试");
         throw new Error("接口连接失败，请确认后端服务已启动");
+    } finally {
+        clearTimeout(timeout);
     }
 
     const result = response.data;
@@ -74,7 +81,7 @@ async function apiRequest<T>(config: { url: string; method: "GET" | "POST" | "DE
 
     const payload = result as ApiResponse<T>;
     if (response.status < 200 || response.status >= 300 || payload.code !== 0) {
-        throw Object.assign(new Error(payload.msg || "请求失败"), { status: response.status });
+        throw Object.assign(new Error(payload.msg || "请求失败"), { status: response.status, data: payload.data });
     }
 
     return payload.data;

@@ -9,6 +9,24 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+type CanvasProjectConflictError struct {
+	Current model.CanvasProject
+}
+
+func (e *CanvasProjectConflictError) Error() string {
+	return "画布已在其他设备更新，请重试"
+}
+
+func GetUserCanvasProject(userID, id string) (model.CanvasProject, error) {
+	db, err := DB()
+	if err != nil {
+		return model.CanvasProject{}, err
+	}
+	var project model.CanvasProject
+	err = db.First(&project, "user_id = ? AND id = ?", strings.TrimSpace(userID), strings.TrimSpace(id)).Error
+	return project, err
+}
+
 func ListUserCanvasProjects(userID string) ([]model.CanvasProject, error) {
 	db, err := DB()
 	if err != nil {
@@ -107,6 +125,38 @@ func SaveUserCanvasProjects(
 		}
 	}
 	return ListUserCanvasProjects(userID)
+}
+
+// SaveUserCanvasProjectsWithVersions applies every write or none of them.
+func SaveUserCanvasProjectsWithVersions(projects []model.CanvasProject, versions map[string]string) error {
+	db, err := DB()
+	if err != nil {
+		return err
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		for _, project := range projects {
+			var result *gorm.DB
+			base := versions[project.ID]
+			if base == "" {
+				result = tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&project)
+			} else {
+				result = tx.Model(&model.CanvasProject{}).
+					Where("user_id = ? AND id = ? AND deleted_at = '' AND updated_at = ?", project.UserID, project.ID, base).
+					Updates(map[string]any{"project_data": project.ProjectData, "updated_at": project.UpdatedAt})
+			}
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				var current model.CanvasProject
+				if err := tx.First(&current, "user_id = ? AND id = ?", project.UserID, project.ID).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+					return err
+				}
+				return &CanvasProjectConflictError{Current: current}
+			}
+		}
+		return nil
+	})
 }
 
 // ReplaceCanvasProjectDataForMaintenance refuses to overwrite a changed or deleted project.

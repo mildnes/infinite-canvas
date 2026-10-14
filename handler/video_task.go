@@ -230,6 +230,10 @@ func serveAIVideoTask(w http.ResponseWriter, r *http.Request, id string) bool {
 		return true
 	}
 	if !found {
+		if isClientVideoTaskID(id) {
+			FailWithStatus(w, http.StatusNotFound, "视频任务不存在")
+			return true
+		}
 		return false
 	}
 	OK(w, service.VideoTaskResponse(task))

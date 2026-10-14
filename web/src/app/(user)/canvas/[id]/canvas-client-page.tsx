@@ -1,7 +1,7 @@
 "use client";
 
 import { previewSrcFor, loadOriginalImage, previewContentHit } from "../utils/canvas-image-preview";
-import { beginTaskRun, currentTaskRun, acceptsTaskUpdate, isStoppedTask, type TaskRun, type TaskKind } from "@/lib/generation-task-run";
+import { beginTaskRun, currentTaskRun, acceptsTaskUpdate, isStoppedTask, canPollCanvasTask, recordCanvasTaskPollError, pollCanvasTaskRequest, canvasTaskRetryMode, type CanvasTaskPollState, type TaskRun, type TaskKind } from "@/lib/generation-task-run";
 import { resolveCanvasAssetPayload } from "../utils/canvas-asset-insertion";
 import { backfillStoragePreviewFromOriginal } from "@/services/storage-preview-client";
 
@@ -12,7 +12,7 @@ import { useParams, useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight, Download, Globe2, Home, ImageIcon, Images, Layers3, List, Maximize, Menu, Bot, Music2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Redo2, Settings2, Trash2, Undo2, Upload, Video, Volume2, VolumeX, X } from "lucide-react";
 import { saveAs } from "file-saver";
 
-import { deleteCanvasProjects, deleteCanvasTasks, stopCanvasTask } from "@/services/api/canvas-tasks";
+import { deleteCanvasTasks, stopCanvasTask } from "@/services/api/canvas-tasks";
 import { batchCanvasImageTaskStatus, pollCanvasImageTaskStatus, requestImageQuestion, type CanvasImageTask } from "@/services/api/image";
 import { createCanvasAudioTask, pollCanvasAudioTaskStatus, type CanvasAudioTask } from "@/services/api/audio";
 import { pollVideoGenerationTaskStatus, VIDEO_POLL_INTERVAL_MS, type VideoResponse } from "@/services/api/video";
@@ -69,7 +69,7 @@ import { CanvasToolbar } from "../components/canvas-toolbar";
 import { AssetPickerModal, type AssetPickerTab } from "../components/asset-picker-modal";
 import { CanvasZoomControls } from "../components/canvas-zoom-controls";
 import { CANVAS_ASSET_DRAG_TYPE, CanvasSidePanel } from "../components/canvas-side-panel";
-import { DEFAULT_CANVAS_AGENT_PANEL, DEFAULT_CANVAS_SIDE_PANEL, useCanvasStore } from "../stores/use-canvas-store";
+import { DEFAULT_CANVAS_AGENT_PANEL, DEFAULT_CANVAS_SIDE_PANEL, flushCanvasSaves, useCanvasStore } from "../stores/use-canvas-store";
 import { assistantReferenceContentFromNode, buildNodeMentionReferences, isCanvasReferenceNode } from "../utils/canvas-resource-references";
 import { buildCanvasAgentContext } from "../agent/canvas-agent-context";
 import { applyCanvasAgentImageSelection, resolveCanvasAgentImageSelection } from "../agent/canvas-agent-image-model";
@@ -334,8 +334,6 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const historyCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const historyCleanupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const historyCleanupKeysRef = useRef(new Map<string, string>());
-    const viewportSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const sidePanelSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const focusAnimationRef = useRef<number | null>(null);
     const applyingHistoryRef = useRef(false);
     const historyPausedRef = useRef(false);
@@ -374,6 +372,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const updateProject = useCanvasStore((state) => state.updateProject);
     const renameProject = useCanvasStore((state) => state.renameProject);
     const deleteProjects = useCanvasStore((state) => state.deleteProjects);
+    const syncError = useCanvasStore((state) => state.syncError);
+    const retrySaves = useCanvasStore((state) => state.retrySaves);
+    const restoreVersion = useCanvasStore((state) => state.restoreVersion);
     const currentProject = useCanvasStore((state) => state.projects.find((project) => project.id === projectId));
     const colorTheme = useThemeStore((state) => state.theme);
     const theme = canvasThemes[colorTheme];
@@ -488,7 +489,11 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
     const nodesRef = useRef(nodes);
     const nodeTaskRunsRef = useRef(new Map<string, TaskRun>());
-    const startNodeTaskRun = useCallback((nodeId: string, kind: TaskKind, taskId: string) => beginTaskRun(nodeTaskRunsRef.current, nodeId, kind, taskId, useUserStore.getState().token), []);
+    const taskPollingStateRef = useRef(new Map<string, CanvasTaskPollState>());
+    const startNodeTaskRun = useCallback((nodeId: string, kind: TaskKind, taskId: string) => {
+        taskPollingStateRef.current.delete(nodeId);
+        return beginTaskRun(nodeTaskRunsRef.current, nodeId, kind, taskId, useUserStore.getState().token);
+    }, []);
     const nodeRunActive = useCallback((nodeId: string, run: TaskRun) => currentTaskRun(nodeTaskRunsRef.current, nodeId, run, useUserStore.getState().token), []);
     const guardNodeTaskResponse = useCallback((nodeId: string, run: TaskRun, taskId: string) => {
         if (nodeTaskRunsRef.current.get(nodeId)?.id === run.id) run.taskId = taskId;
@@ -497,13 +502,48 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     useEffect(() => () => {
         nodeTaskRunsRef.current.forEach((run) => run.controller.abort());
         nodeTaskRunsRef.current.clear();
+        taskPollingStateRef.current.clear();
     }, [currentUserToken, projectId]);
+    const reportNodeTaskPollError = useCallback((node: CanvasNodeData, run: TaskRun, error: unknown) => {
+        if (!nodeRunActive(node.id, run) || run.stopping) return;
+        const outcome = recordCanvasTaskPollError(run.taskId || canvasRecoverableTaskId(node), error, taskPollingStateRef.current.get(node.id));
+        taskPollingStateRef.current.set(node.id, outcome);
+        if (!outcome.stopped) return;
+        setNodes((prev) => !nodeRunActive(node.id, run) || run.stopping ? prev : prev.map((item) =>
+            (item.id === node.id || (item.metadata?.isBatchRoot && item.metadata.primaryImageId === node.id)) && item.metadata?.status === NODE_STATUS_LOADING
+                ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, taskPollError: true, errorDetails: outcome.errorDetails } }
+                : item));
+    }, [nodeRunActive]);
     const activeProjectIdRef = useRef(projectId);
     activeProjectIdRef.current = projectId;
     const consumedAgentRequestProjectRef = useRef<string | null>(null);
     const connectionsRef = useRef(connections);
     const selectedNodeIdsRef = useRef(selectedNodeIds);
     const viewportRef = useRef(viewport);
+    const loadedProjectRef = useRef<{ id: string; token: string } | null>(null);
+    const restoringProjectRef = useRef(false);
+    const latestCanvasStateRef = useRef({ connections, chatSessions, activeChatId, agentConfig, backgroundMode, showImageInfo, sidePanel, agentPanel });
+    const persistCurrentCanvasRef = useRef<(latestNodes?: CanvasNodeData[]) => void>(() => {});
+    useLayoutEffect(() => {
+        latestCanvasStateRef.current = { connections, chatSessions, activeChatId, agentConfig, backgroundMode, showImageInfo, sidePanel, agentPanel };
+        persistCurrentCanvasRef.current = (latestNodes = nodesRef.current) => {
+            if (!projectLoaded || restoringProjectRef.current || loadedProjectRef.current?.id !== projectId || loadedProjectRef.current.token !== useUserStore.getState().token) return;
+            updateProject(projectId, { ...latestCanvasStateRef.current, nodes: latestNodes, viewport: viewportRef.current });
+            void flushCanvasSaves().catch((error) => message.error(error instanceof Error ? error.message : "画布保存失败，请重试"));
+        };
+    }, [activeChatId, agentConfig, agentPanel, backgroundMode, chatSessions, connections, message, projectId, projectLoaded, showImageInfo, sidePanel, updateProject]);
+
+    useEffect(() => {
+        const flush = () => persistCurrentCanvasRef.current();
+        const hidden = () => { if (document.visibilityState === "hidden") flush(); };
+        window.addEventListener("pagehide", flush);
+        document.addEventListener("visibilitychange", hidden);
+        return () => {
+            flush();
+            window.removeEventListener("pagehide", flush);
+            document.removeEventListener("visibilitychange", hidden);
+        };
+    }, [projectId]);
     const connectingParamsRef = useRef(connectingParams);
     const connectionTargetNodeIdRef = useRef(connectionTargetNodeId);
     const selectionBoxRef = useRef(selectionBox);
@@ -575,6 +615,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
     useEffect(() => {
         if (!hydrated) return;
+        restoringProjectRef.current = true;
         setProjectLoaded(false);
         setInitialAgentRequest(null);
         setReferencePickerNodeId(null);
@@ -630,13 +671,15 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 showImageInfo: project.showImageInfo || false,
             };
             setHistoryState({ canUndo: false, canRedo: false });
+            loadedProjectRef.current = { id: projectId, token: ownerToken };
+            restoringProjectRef.current = false;
             setProjectLoaded(true);
         };
         void restore();
         return () => {
             disposed = true;
         };
-    }, [currentUserToken, hydrated, message, openProject, projectId, router]);
+    }, [currentUserToken, hydrated, message, openProject, projectId, restoreVersion, router]);
 
     useEffect(() => {
         if (!projectLoaded) return;
@@ -689,7 +732,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     }, [backgroundMode, cleanupCanvasFiles, connections, createHistoryEntry, nodes, projectLoaded, showImageInfo]);
 
     useEffect(() => {
-        if (!projectLoaded || historyPausedRef.current) return;
+        if (!projectLoaded || historyPausedRef.current || restoringProjectRef.current || loadedProjectRef.current?.id !== projectId || loadedProjectRef.current.token !== useUserStore.getState().token) return;
         updateProject(projectId, { nodes, connections, chatSessions, activeChatId, agentConfig, backgroundMode, showImageInfo });
     }, [activeChatId, agentConfig, backgroundMode, chatSessions, connections, nodes, projectId, projectLoaded, showImageInfo, updateProject]);
 
@@ -702,18 +745,19 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 const taskId = canvasVideoTaskId(node.metadata);
                 const workflowToken = node.metadata?.workflowRef ? useUserStore.getState().token : "";
                 const generationConfig = buildGenerationConfig(effectiveConfig, node, "video");
-                if (!taskId || (!node.metadata?.workflowRef && !isAiConfigReady(generationConfig, generationConfig.model))) return;
+                if (!taskId) return;
                 const run = nodeTaskRunsRef.current.get(node.id) || startNodeTaskRun(node.id, node.metadata?.workflowRef ? "workflow" : "video", taskId);
-                if (!nodeRunActive(node.id, run) || run.stopping) return;
+                if (!nodeRunActive(node.id, run) || run.stopping || !canPollCanvasTask(taskId, taskPollingStateRef.current.get(node.id))) return;
                 pollingVideoNodeIdsRef.current.add(node.id);
-                void (node.metadata?.workflowRef
-                    ? getWorkflowTask(workflowToken, run.taskId || taskId, run.controller.signal).then((task) => workflowVideoTask(task, workflowToken))
-                    : pollVideoGenerationTaskStatus(generationConfig, canvasVideoTaskFromMetadata(node.metadata), run.controller.signal))
+                void pollCanvasTaskRequest((signal) => node.metadata?.workflowRef
+                    ? getWorkflowTask(workflowToken, run.taskId || taskId, signal).then((task) => workflowVideoTask(task, workflowToken))
+                    : pollVideoGenerationTaskStatus(generationConfig, canvasVideoTaskFromMetadata(node.metadata), signal), run.controller.signal)
                     .then((task) => {
                         if (!nodeRunActive(node.id, run) || run.stopping) return;
+                        taskPollingStateRef.current.delete(node.id);
                         setNodes((prev) => !nodeRunActive(node.id, run) || run.stopping ? prev : applyCanvasVideoTaskUpdate(prev, node.id, task, generationConfig, node.metadata?.startedAt || Date.now(), { width: node.width, height: node.height }));
                     })
-                    .catch(() => undefined)
+                    .catch((error) => reportNodeTaskPollError(node, run, error))
                     .finally(() => {
                         pollingVideoNodeIdsRef.current.delete(node.id);
                     });
@@ -723,17 +767,19 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 if (pollingImageNodeIdsRef.current.has(node.id) || !node.metadata?.imageTaskId) return;
                 const workflowToken = node.metadata.workflowRef ? useUserStore.getState().token : "";
                 const run = nodeTaskRunsRef.current.get(node.id) || startNodeTaskRun(node.id, node.metadata.workflowRef ? "workflow" : "image", node.metadata.imageTaskId);
-                if (!nodeRunActive(node.id, run) || run.stopping) return;
+                if (!nodeRunActive(node.id, run) || run.stopping || !canPollCanvasTask(node.metadata.imageTaskId, taskPollingStateRef.current.get(node.id))) return;
                 pollingImageNodeIdsRef.current.add(node.id);
-                void (node.metadata.workflowRef
-                    ? getWorkflowTask(workflowToken, run.taskId || node.metadata.imageTaskId, run.controller.signal).then((task) => workflowImageTask(task, workflowToken))
-                    : pollCanvasImageTaskStatus(node.metadata.imageTaskId, run.controller.signal))
+                const taskId = node.metadata.imageTaskId;
+                void pollCanvasTaskRequest((signal) => node.metadata?.workflowRef
+                    ? getWorkflowTask(workflowToken, run.taskId || taskId, signal).then((task) => workflowImageTask(task, workflowToken))
+                    : pollCanvasImageTaskStatus(taskId, signal), run.controller.signal)
                     .then((task) => {
                         if (!nodeRunActive(node.id, run) || run.stopping) return;
+                        taskPollingStateRef.current.delete(node.id);
                         setNodes((prev) => !nodeRunActive(node.id, run) || run.stopping ? prev : applyCanvasImageTaskUpdate(prev, node.id, task, node.metadata?.startedAt || Date.now(), { width: node.width, height: node.height }));
                         setConnections((prev) => !nodeRunActive(node.id, run) || run.stopping ? prev : applyCanvasImageTaskConnections(prev, node.id, task, node.metadata?.batchRootId));
                     })
-                    .catch(() => undefined)
+                    .catch((error) => reportNodeTaskPollError(node, run, error))
                     .finally(() => {
                         pollingImageNodeIdsRef.current.delete(node.id);
                     });
@@ -743,16 +789,18 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 if (pollingAudioNodeIdsRef.current.has(node.id) || !node.metadata?.audioTaskId) return;
                 const workflowToken = node.metadata.workflowRef ? useUserStore.getState().token : "";
                 const run = nodeTaskRunsRef.current.get(node.id) || startNodeTaskRun(node.id, node.metadata.workflowRef ? "workflow" : "audio", node.metadata.audioTaskId);
-                if (!nodeRunActive(node.id, run) || run.stopping) return;
+                if (!nodeRunActive(node.id, run) || run.stopping || !canPollCanvasTask(node.metadata.audioTaskId, taskPollingStateRef.current.get(node.id))) return;
                 pollingAudioNodeIdsRef.current.add(node.id);
-                void (node.metadata.workflowRef
-                    ? getWorkflowTask(workflowToken, run.taskId || node.metadata.audioTaskId, run.controller.signal).then((task) => workflowAudioTask(task, workflowToken))
-                    : pollCanvasAudioTaskStatus(node.metadata.audioTaskId, run.controller.signal))
+                const taskId = node.metadata.audioTaskId;
+                void pollCanvasTaskRequest((signal) => node.metadata?.workflowRef
+                    ? getWorkflowTask(workflowToken, run.taskId || taskId, signal).then((task) => workflowAudioTask(task, workflowToken))
+                    : pollCanvasAudioTaskStatus(taskId, signal), run.controller.signal)
                     .then((task) => {
                         if (!nodeRunActive(node.id, run) || run.stopping) return;
+                        taskPollingStateRef.current.delete(node.id);
                         setNodes((prev) => !nodeRunActive(node.id, run) || run.stopping ? prev : applyCanvasAudioTaskUpdate(prev, node.id, task, node.metadata?.startedAt || Date.now()));
                     })
-                    .catch(() => undefined)
+                    .catch((error) => reportNodeTaskPollError(node, run, error))
                     .finally(() => {
                         pollingAudioNodeIdsRef.current.delete(node.id);
                     });
@@ -761,7 +809,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         pollCanvasTasks();
         const timer = window.setInterval(pollCanvasTasks, VIDEO_POLL_INTERVAL_MS);
         return () => window.clearInterval(timer);
-    }, [effectiveConfig, isAiConfigReady, projectLoaded]);
+    }, [effectiveConfig, nodeRunActive, projectLoaded, reportNodeTaskPollError, startNodeTaskRun]);
 
     useEffect(() => {
         if (!hasLoadingTimedNodes) return;
@@ -775,27 +823,13 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     }, [dialogNodeId]);
 
     useEffect(() => {
-        if (!projectLoaded) return;
-        if (viewportSaveTimerRef.current) clearTimeout(viewportSaveTimerRef.current);
-        viewportSaveTimerRef.current = setTimeout(() => {
-            updateProject(projectId, { viewport: viewportRef.current });
-            viewportSaveTimerRef.current = null;
-        }, 500);
-        return () => {
-            if (viewportSaveTimerRef.current) clearTimeout(viewportSaveTimerRef.current);
-        };
+        if (!projectLoaded || restoringProjectRef.current) return;
+        updateProject(projectId, { viewport });
     }, [projectId, projectLoaded, updateProject, viewport]);
 
     useEffect(() => {
-        if (!projectLoaded) return;
-        if (sidePanelSaveTimerRef.current) clearTimeout(sidePanelSaveTimerRef.current);
-        sidePanelSaveTimerRef.current = setTimeout(() => {
-            updateProject(projectId, { sidePanel, agentPanel });
-            sidePanelSaveTimerRef.current = null;
-        }, 500);
-        return () => {
-            if (sidePanelSaveTimerRef.current) clearTimeout(sidePanelSaveTimerRef.current);
-        };
+        if (!projectLoaded || restoringProjectRef.current) return;
+        updateProject(projectId, { sidePanel, agentPanel });
     }, [projectId, projectLoaded, sidePanel, agentPanel, updateProject]);
 
     useLayoutEffect(() => {
@@ -1508,13 +1542,14 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         router.push(`/canvas/${id}`);
     }, [createProject, router]);
 
-    const deleteCurrentProject = useCallback(() => {
-        void deleteCanvasProjects([projectId]).catch(() => undefined);
-        deleteCanvasTaskRecords();
-        deleteProjects([projectId]);
-        cleanupAssetImages();
-        router.push("/canvas");
-    }, [cleanupAssetImages, deleteCanvasTaskRecords, deleteProjects, projectId, router]);
+    const deleteCurrentProject = useCallback(async () => {
+        try {
+            await deleteProjects([projectId]);
+            deleteCanvasTaskRecords();
+            cleanupAssetImages();
+            router.push("/canvas");
+        } catch (error) { message.error(error instanceof Error ? error.message : "删除失败，请检查网络后重试"); }
+    }, [cleanupAssetImages, deleteCanvasTaskRecords, deleteProjects, message, projectId, router]);
 
     const handleCanvasMouseDown = useCallback(
         (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -1618,19 +1653,21 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         setIsNodeDragging(false);
         if (dragRef.current.hasMoved && clientX != null && clientY != null) {
             const movedIds = new Set(initialPositions.map((item) => item.id));
-            setNodes((prev) => {
-                const moved = prev.map((node) => {
+            const moved = nodesRef.current.map((node) => {
                     const initial = initialPositions.find((item) => item.id === node.id);
                     return initial ? { ...node, position: { x: initial.x + dx, y: initial.y + dy } } : node;
-                });
-                const targetGroup = findGroupDropTarget(movedIds, moved);
-                if (targetGroup) return snapNodesIntoGroup(movedIds, moved, targetGroup);
-                return moved.map((node) => {
+            });
+            const targetGroup = findGroupDropTarget(movedIds, moved);
+            const finalNodes = targetGroup ? snapNodesIntoGroup(movedIds, moved, targetGroup) : moved.map((node) => {
                     if (!movedIds.has(node.id) || node.type === CanvasNodeType.Group) return node;
                     const groupId = findContainingGroupId(node, moved);
                     return node.metadata?.groupId === groupId ? node : { ...node, metadata: { ...node.metadata, groupId } };
-                });
             });
+            nodesRef.current = finalNodes;
+            setNodes(finalNodes);
+            persistCurrentCanvasRef.current(finalNodes);
+        } else if (dragRef.current.hasMoved) {
+            persistCurrentCanvasRef.current(nodesRef.current);
         }
 
         dragRef.current.isDraggingNode = false;
@@ -4012,8 +4049,62 @@ const generateAngleNode = useCallback(
         [agentEffectiveConfig, createGroupFromSelection, currentProject?.title, deleteConnection, deleteNodes, getCanvasCenter, handleGenerateNode, isAiConfigReady, projectId, renameProject, resolvedAgentConfig.autoGenerateMedia, updateProject],
     );
 
+    const resumeNodeTaskPolling = useCallback(async (node: CanvasNodeData) => {
+        const taskId = canvasRecoverableTaskId(node);
+        if (!taskId) return;
+        const mode = node.type === CanvasNodeType.Video ? "video" : node.type === CanvasNodeType.Audio ? "audio" : "image";
+        const run = startNodeTaskRun(node.id, node.metadata?.workflowRef ? "workflow" : mode, taskId);
+        const config = buildGenerationConfig(effectiveConfig, node, mode);
+        const pollingNodes = mode === "video" ? pollingVideoNodeIdsRef.current : mode === "audio" ? pollingAudioNodeIdsRef.current : pollingImageNodeIdsRef.current;
+        pollingNodes.add(node.id);
+        setRunningNodeId(node.id);
+        try {
+            const task = await pollCanvasTaskRequest(async (signal) => {
+                if (node.metadata?.workflowRef) {
+                    const token = useUserStore.getState().token;
+                    const workflowTask = await getWorkflowTask(token, taskId, signal);
+                    return mode === "video" ? workflowVideoTask(workflowTask, token) : mode === "audio" ? workflowAudioTask(workflowTask, token) : workflowImageTask(workflowTask, token);
+                }
+                return mode === "video" ? pollVideoGenerationTaskStatus(config, canvasVideoTaskFromMetadata(node.metadata), signal) : mode === "audio" ? pollCanvasAudioTaskStatus(taskId, signal) : pollCanvasImageTaskStatus(taskId, signal);
+            }, run.controller.signal);
+            guardNodeTaskResponse(node.id, run, taskId);
+            taskPollingStateRef.current.delete(node.id);
+            setNodes((prev) => {
+                if (!nodeRunActive(node.id, run) || run.stopping) return prev;
+                const resumed = prev.map((item) => item.id === node.id || (item.metadata?.isBatchRoot && item.metadata.primaryImageId === node.id)
+                    ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_LOADING, taskPollError: undefined, errorDetails: undefined } } : item);
+                const startedAt = node.metadata?.startedAt || Date.now();
+                if (mode === "video") return applyCanvasVideoTaskUpdate(resumed, node.id, task as VideoResponse, config, startedAt, node);
+                if (mode === "audio") return applyCanvasAudioTaskUpdate(resumed, node.id, task as CanvasAudioTask, startedAt);
+                let updated = applyCanvasImageTaskUpdate(resumed, node.id, task as CanvasImageTask, startedAt, node);
+                const root = resumed.find((item) => item.metadata?.isBatchRoot && item.metadata.primaryImageId === node.id);
+                if (root && (task as CanvasImageTask).source !== "workflow") updated = applyCanvasImageTaskUpdate(updated, root.id, task as CanvasImageTask, startedAt, root);
+                return updated;
+            });
+            if (mode === "image") setConnections((prev) => !nodeRunActive(node.id, run) || run.stopping ? prev : applyCanvasImageTaskConnections(prev, node.id, task as CanvasImageTask, node.metadata?.batchRootId));
+        } catch (error) {
+            if (!nodeRunActive(node.id, run) || run.stopping) return;
+            const outcome = recordCanvasTaskPollError(taskId, error);
+            const errorDetails = outcome.errorDetails || "任务查询失败，请检查网络后重新查询。";
+            taskPollingStateRef.current.set(node.id, { ...outcome, stopped: true });
+            setNodes((prev) => !nodeRunActive(node.id, run) || run.stopping ? prev : prev.map((item) => item.id === node.id || (item.metadata?.isBatchRoot && item.metadata.primaryImageId === node.id)
+                ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, taskPollError: true, errorDetails } } : item));
+            message.error(errorDetails);
+        } finally {
+            if (nodeRunActive(node.id, run)) {
+                pollingNodes.delete(node.id);
+                setRunningNodeId(null);
+            }
+        }
+    }, [effectiveConfig, guardNodeTaskResponse, message, nodeRunActive, startNodeTaskRun]);
+
     const handleRetryNode = useCallback(
         async (node: CanvasNodeData) => {
+            const taskNode = node.metadata?.isBatchRoot && node.metadata.primaryImageId ? nodesRef.current.find((item) => item.id === node.metadata?.primaryImageId) || node : node;
+            if (canvasTaskRetryMode(node.metadata?.status, node.metadata?.taskPollError, canvasRecoverableTaskId(taskNode)) === "lookup") {
+                await resumeNodeTaskPolling(taskNode);
+                return;
+            }
             const sourceNode = findRetrySourceNode(node.id, nodesRef.current, connectionsRef.current) || node;
             const retryWorkflowRef = node.metadata?.workflowRef;
             const batchPrimaryId = isCanvasImageNodeType(node.type) && node.metadata?.isBatchRoot ? node.metadata.primaryImageId : undefined;
@@ -4165,7 +4256,7 @@ const generateAngleNode = useCallback(
                 setRunningNodeId(null);
             }
         },
-        [canSubmitCanvasMediaRequest, effectiveConfig, message, openConfigDialog, projectId, resolveCanvasImageOutputFormat],
+        [canSubmitCanvasMediaRequest, effectiveConfig, message, openConfigDialog, projectId, resolveCanvasImageOutputFormat, resumeNodeTaskPolling],
     );
 
     const stopCanvasNode = useCallback(async (node: CanvasNodeData) => {
@@ -4358,7 +4449,7 @@ const generateAngleNode = useCallback(
         if (focusAnimationRef.current) cancelAnimationFrame(focusAnimationRef.current);
     }, []);
 
-    if (!projectLoaded) return <CanvasRefreshShell />;
+    if (!projectLoaded) return syncError ? <div className="flex h-full flex-col items-center justify-center gap-3"><p role="alert">{syncError}</p><Button onClick={() => void retrySaves()}>重新加载画布</Button></div> : <CanvasRefreshShell />;
     return (
         <main
             className="flex h-full min-h-0 overflow-hidden"
@@ -4387,6 +4478,7 @@ const generateAngleNode = useCallback(
                 onInsertAsset={handleAssetInsert}
             />
             <section className="relative min-w-0 flex-1 overflow-hidden">
+                {syncError ? <div role="alert" className="absolute left-1/2 top-14 z-[130] flex -translate-x-1/2 items-center gap-3 rounded-lg px-4 py-2 text-sm" style={{ background: theme.node.panel, color: theme.node.text }}><span>{syncError}</span><Button size="small" onClick={() => void retrySaves()}>重试保存</Button></div> : null}
                 <CanvasTopBar
                     title={currentProject?.title || "未命名画布"}
                     sidePanelOpen={sidePanel.open}

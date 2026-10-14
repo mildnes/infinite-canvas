@@ -1308,7 +1308,7 @@ export async function pollCanvasImageTaskStatus(taskId: string, signal?: AbortSi
     });
     if (!response.ok) {
         const error = await fetchErrorDetail(response, "读取图片任务失败");
-        throw new ImageRequestError(error.message, error.detail);
+        throw Object.assign(new ImageRequestError(error.message, error.detail), { status: response.status });
     }
     const payload = (await response.json()) as { code?: number; msg?: string; data?: CanvasImageTask };
     if (payload.code !== 0 || !payload.data) throw new ImageRequestError(payload.msg || "读取图片任务失败", payload);

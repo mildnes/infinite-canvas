@@ -573,7 +573,7 @@ function ErrorContent({ node, theme, onRetry }: Pick<NodeContentRendererProps, "
                 onMouseDown={(event) => event.stopPropagation()}
             >
                 <RefreshCw className="size-3.5" />
-                重试
+                {node.metadata?.taskPollError ? "重新查询" : "重试"}
             </button>
         </div>
     );
