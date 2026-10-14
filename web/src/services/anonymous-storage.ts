@@ -28,8 +28,8 @@ function ensureAnonymousStorageSession() {
 export async function uploadAnonymousStorageFile<T extends StorageObjectPayload>(blob: Blob, filename: string, provider: object): Promise<T> {
     await ensureAnonymousStorageSession();
     const formData = new FormData();
-    formData.append("file", blob, filename);
     formData.append("provider", JSON.stringify(provider));
+    formData.append("file", blob, filename);
     const response = await fetch("/api/anonymous/files", { method: "POST", body: formData, credentials: "same-origin" });
     const payload = (await response.json().catch(() => null)) as ApiPayload<T> | null;
     if (!response.ok || payload?.code !== 0 || !payload.data) throw new Error(payload?.msg || "匿名存储上传失败");

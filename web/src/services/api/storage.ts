@@ -10,7 +10,7 @@ export type RegisteredStorageObject = {
 
 export type StorageObjectInfo = {
     id: string;
-    objectKey: string;
+    objectKey?: string;
     publicUrl: string;
     mimeType: string;
     bytes: number;
@@ -26,8 +26,8 @@ export type StorageObjectInfo = {
     cloudSyncNextRetryAt?: string;
 };
 
-export function getStorageObjectInfo(id: string) {
-    return apiGet<StorageObjectInfo>(`/api/files/${encodeURIComponent(id)}`);
+export function getStorageObjectInfo(id: string, token?: string) {
+    return apiGet<StorageObjectInfo>(`/api/files/${encodeURIComponent(id)}`, undefined, token);
 }
 
 export function registerDirectStorageObject(

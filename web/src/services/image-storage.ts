@@ -280,8 +280,8 @@ export async function uploadRemoteImageToServer(url: string, filename: string): 
         return cacheAnonymousImage(uploaded, blob);
     }
     const formData = new FormData();
-    formData.append("file", blob, filename || "image-" + nanoid() + "." + imageExtension(blob.type));
     if (userProvider) formData.append("provider", JSON.stringify(toProviderPayload(userProvider)));
+    formData.append("file", blob, filename || "image-" + nanoid() + "." + imageExtension(blob.type));
     const uploadResponse = await fetch("/api/v1/files", { method: "POST", headers: { Authorization: "Bearer " + ownerToken }, body: formData });
     const payload = (await uploadResponse.json().catch(() => null)) as { code?: number; msg?: string; data?: UploadedImage } | null;
     if (!uploadResponse.ok || payload?.code !== 0 || !payload.data) throw new Error(payload?.msg || "服务端图片上传失败");
@@ -328,10 +328,10 @@ export async function resolveImageUrl(storageKey?: string, fallback = "") {
         const cachedUrl = serverUrls.get(id);
         if (cachedUrl) return cachedUrl;
         const { getStorageObjectInfo } = await import("@/services/api/storage");
-        const info = await getStorageObjectInfo(id).catch(() => null);
+        const info = await getStorageObjectInfo(id, useUserStore.getState().token).catch(() => null);
         if (!info) return fallback;
         const provider = loadUserStorageProvider();
-        if (info.direct && provider?.type === "webdav") {
+        if (info.direct && info.objectKey && provider?.type === "webdav") {
             const direct = await import("@/services/webdav-direct-storage");
             try {
                 const blob = await direct.readDirectWebDAV(provider, info.objectKey, info.mimeType);
@@ -385,8 +385,8 @@ async function maybeUploadImageToServer(blob: Blob, tokenOverride?: string): Pro
         }
     }
     const formData = new FormData();
-    formData.append("file", blob, `image-${nanoid()}.${imageExtension(blob.type)}`);
     if (userProvider) formData.append("provider", JSON.stringify(toProviderPayload(userProvider)));
+    formData.append("file", blob, `image-${nanoid()}.${imageExtension(blob.type)}`);
     try {
         const response = await fetch("/api/v1/files", { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: formData });
         const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string; data?: UploadedImage } | null;

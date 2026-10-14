@@ -47,7 +47,8 @@ export async function uploadAssetMediaFile(file: File, prefix = "asset-media"): 
 }
 
 export async function downloadRemoteMedia(url: string) {
-    const response = await fetch(getProxyUrl(url));
+    const proxyUrl = getProxyUrl(url).replace(/^\/api\/proxy-image\?/, "/api/proxy-media?");
+    const response = await fetch(proxyUrl);
     if (!response.ok) throw new Error(`媒体下载失败：${response.status}`);
     const blob = await response.blob();
     if (blob.type.includes("json") || blob.type.startsWith("text/")) {
@@ -85,14 +86,17 @@ export async function persistGeneratedMediaBlob(blob: Blob, filename: string, so
     return payload.data;
 }
 
-async function uploadMediaBlobToServer(blob: Blob, filename: string, metadataUrl?: string): Promise<UploadedFile> {
+async function uploadMediaBlobToServer(blob: Blob, filename: string, metadataUrl?: string, ownerToken?: string): Promise<UploadedFile> {
+    if (ownerToken) assertGeneratedMediaOwner(useUserStore.getState().token, ownerToken);
     const preview = prepareImagePreview(blob);
     const config = await loadStorageConfig().catch(() => null);
     const userProvider = config?.allowUserProvider ? loadUserStorageProvider() : null;
     if (!config || (!canUseGlobalStorage(config) && !userProvider)) throw new Error("服务端对象存储未启用");
-    const token = useUserStore.getState().token;
+    if (ownerToken) assertGeneratedMediaOwner(useUserStore.getState().token, ownerToken);
+    const token = ownerToken ?? useUserStore.getState().token;
     if (userProvider?.type === "webdav") {
         const directUpload = await uploadWebDAVMediaDirect(blob, filename, userProvider);
+        if (ownerToken) assertGeneratedMediaOwner(useUserStore.getState().token, ownerToken);
         if (directUpload) return directUpload;
     }
     if (!token) {
@@ -101,11 +105,12 @@ async function uploadMediaBlobToServer(blob: Blob, filename: string, metadataUrl
         return cacheAnonymousMedia(uploaded, blob);
     }
     const formData = new FormData();
-    formData.append("file", blob, filename);
     if (userProvider) formData.append("provider", JSON.stringify(toProviderPayload(userProvider)));
+    formData.append("file", blob, filename);
     const response = await fetch("/api/v1/files", { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: formData });
     const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string; data?: UploadedFile } | null;
     if (!response.ok || payload?.code !== 0 || !payload.data) throw new Error(payload?.msg || "媒体同步失败");
+    if (ownerToken) assertGeneratedMediaOwner(useUserStore.getState().token, ownerToken);
     publishStoragePreview(payload.data.storageKey, preview, token);
     const meta = metadataUrl || payload.data.mimeType?.startsWith("video/") ? await readVideoMeta(metadataUrl || payload.data.url) : {};
     return { ...payload.data, bytes: payload.data.bytes || blob.size, mimeType: payload.data.mimeType || blob.type || "application/octet-stream", ...meta };
@@ -135,8 +140,8 @@ export function clearStorageConfigCache() {
     clearAutoSyncCache();
 }
 
-export async function uploadMediaBlob(blob: Blob, filename: string): Promise<UploadedFile> {
-    return uploadMediaBlobToServer(blob, filename);
+export async function uploadMediaBlob(blob: Blob, filename: string, ownerToken?: string): Promise<UploadedFile> {
+    return uploadMediaBlobToServer(blob, filename, undefined, ownerToken);
 }
 
 export async function resolveMediaUrl(storageKey?: string, fallback = "") {
@@ -159,10 +164,10 @@ export async function resolveMediaUrl(storageKey?: string, fallback = "") {
         const id = storageKey.slice("server:".length);
         if (fallback && !fallback.startsWith("blob:") && !fallback.includes("direct=1") && !fallback.startsWith("/webdav-media/")) return fallback;
         const { getStorageObjectInfo } = await import("@/services/api/storage");
-        const info = await getStorageObjectInfo(id).catch(() => null);
+        const info = await getStorageObjectInfo(id, useUserStore.getState().token).catch(() => null);
         if (!info) return fallback;
         const provider = loadUserStorageProvider();
-        if (info.direct && provider?.type === "webdav") {
+        if (info.direct && info.objectKey && provider?.type === "webdav") {
             const direct = await import("@/services/webdav-direct-storage");
             try {
                 return await direct.directWebDAVMediaUrl(provider, info.objectKey);

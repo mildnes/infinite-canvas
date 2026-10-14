@@ -69,7 +69,7 @@ func storedWorkflowResultMedia(raw, ownerID string) (UploadedStorageObject, bool
 	if objectID == "" {
 		return UploadedStorageObject{}, true, errors.New("存储对象引用无效")
 	}
-	object, err := StorageObjectInfo(objectID)
+	object, err := repository.GetStorageObject(objectID)
 	if err != nil {
 		return UploadedStorageObject{}, true, err
 	}

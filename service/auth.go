@@ -593,15 +593,15 @@ func safeRedirectPath(redirect string) string {
 }
 
 func RequestOrigin(r *http.Request) string {
-	host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
-	if host == "" {
-		host = r.Host
+	// Only deployment configuration can select an OAuth/token destination.
+	if configured, err := url.Parse(strings.TrimSpace(config.Cfg.PublicBaseURL)); err == nil && (configured.Scheme == "https" || configured.Scheme == "http") && configured.Host != "" && configured.User == nil {
+		return configured.Scheme + "://" + configured.Host
 	}
-	proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
-	if proto == "" {
-		proto = "http"
+	port := strings.TrimSpace(config.Cfg.Port)
+	if port == "" {
+		port = "8080"
 	}
-	return proto + "://" + host
+	return "http://localhost:" + port
 }
 
 func firstNonEmpty(values ...string) string {

@@ -92,8 +92,8 @@ export async function deletePersistedDirectWebDAV(provider: UserWebDAVStoragePro
     if (!token || !storageKey.startsWith("server:")) return false;
     const id = storageKey.slice("server:".length);
     const { deleteDirectStorageObjectRecord, getStorageObjectInfo } = await import("@/services/api/storage");
-    const info = await getStorageObjectInfo(id).catch(() => null);
-    if (!info?.direct) return false;
+    const info = await getStorageObjectInfo(id, token).catch(() => null);
+    if (!info?.direct || !info.objectKey) return false;
     try {
         await deleteDirectWebDAV(provider, info.objectKey);
         await deleteDirectStorageObjectRecord(token, id);

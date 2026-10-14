@@ -149,11 +149,6 @@ func PublicStorageConfig() (model.PublicStorageSetting, error) {
 	}, nil
 }
 
-// StorageObjectInfo 获取存储对象元数据。
-func StorageObjectInfo(id string) (model.StorageObject, error) {
-	return repository.GetStorageObject(id)
-}
-
 // SaveCurrentUserStorageProvider 保存用户配置的存储提供商。
 func SaveCurrentUserStorageProvider(ctx context.Context, incoming UserStorageProviders) (UserConfigPayload, error) {
 	user, ok := UserFromContext(ctx)
@@ -202,9 +197,30 @@ func UploadStorageObject(ctx context.Context, filename string, contentType strin
 
 // UploadStorageObjectWithProvider 上传对象到存储（可选用户自定义 Provider）。
 func UploadStorageObjectWithProvider(ctx context.Context, filename string, contentType string, data []byte, providerInput *StorageObjectProviderInput) (UploadedStorageObject, error) {
-	settings, err := repository.GetSettings()
+	provider, err := resolveUploadStorageProvider(ctx, providerInput)
 	if err != nil {
 		return UploadedStorageObject{}, err
+	}
+	contentType, err = NormalizeUploadedMIME(contentType, data)
+	if err != nil {
+		return UploadedStorageObject{}, err
+	}
+	return uploadStorageObject(ctx, filename, contentType, data, provider)
+}
+
+func AuthorizeStorageUpload(ctx context.Context, providerInput *StorageObjectProviderInput) error {
+	_, err := resolveUploadStorageProvider(ctx, providerInput)
+	return err
+}
+
+func resolveUploadStorageProvider(ctx context.Context, providerInput *StorageObjectProviderInput) (model.StorageProvider, error) {
+	user, ok := UserFromContext(ctx)
+	if !ok || user.ID == "" {
+		return model.StorageProvider{}, errors.New("请先登录后再上传文件")
+	}
+	settings, err := repository.GetSettings()
+	if err != nil {
+		return model.StorageProvider{}, err
 	}
 	storage := normalizePrivateStorageSetting(settings.Private.Storage)
 	usingUserProvider := providerInput != nil && storage.AllowUserProvider
@@ -212,17 +228,21 @@ func UploadStorageObjectWithProvider(ctx context.Context, filename string, conte
 	if usingUserProvider {
 		provider = normalizeUserStorageProvider(*providerInput, ctx)
 		if !provider.Enabled || !storageProviderConfigured(provider) {
-			return UploadedStorageObject{}, errors.New("用户对象存储配置不完整")
+			return model.StorageProvider{}, errors.New("用户对象存储配置不完整")
 		}
 	} else {
 		if !canUseGlobalStorage(ctx, storage) {
-			return UploadedStorageObject{}, errors.New("服务端对象存储未启用")
+			return model.StorageProvider{}, errors.New("服务端对象存储未启用")
 		}
 		provider, err = selectStorageProvider(storage)
 		if err != nil {
-			return UploadedStorageObject{}, errors.New("服务端对象存储未启用")
+			return model.StorageProvider{}, errors.New("服务端对象存储未启用")
 		}
 	}
+	return provider, nil
+}
+
+func uploadStorageObject(ctx context.Context, filename string, contentType string, data []byte, provider model.StorageProvider) (UploadedStorageObject, error) {
 	objectID := uuid.NewString()
 	ext := path.Ext(filename)
 	if ext == "" {
@@ -237,14 +257,14 @@ func UploadStorageObjectWithProvider(ctx context.Context, filename string, conte
 	}
 	sum := sha256.Sum256(data)
 	checksum := hex.EncodeToString(sum[:])
-	if userID != "anonymous" {
+	if !anonymousStorageOwner(userID) {
 		candidates, lookupErr := repository.ListStorageObjectsByFingerprint(userID, checksum, int64(len(data)))
 		if lookupErr != nil {
 			// A lookup failure must not make a valid upload fail; it only loses a dedup opportunity.
 			log.Printf("storage upload dedup_lookup_failed user=%s err=%v", userID, lookupErr)
 		} else {
 			for _, candidate := range candidates {
-				if !storageObjectReadableForDedup(candidate) {
+				if !storageObjectReadableForDedup(candidate) || !IsSupportedUploadedMIME(candidate.MimeType) {
 					continue
 				}
 				log.Printf("storage upload dedup_reuse user=%s object=%s bytes=%d", userID, candidate.ID, candidate.Bytes)
@@ -330,8 +350,8 @@ func RegisterDirectStorageObject(ctx context.Context, input DirectStorageObjectI
 		return UploadedStorageObject{}, errors.New("WebDAV 对象路径无效")
 	}
 	contentType := strings.TrimSpace(input.MimeType)
-	if contentType == "" {
-		contentType = "application/octet-stream"
+	if contentType != "" && NormalizeStorageMIME(contentType) != "application/octet-stream" && !IsSupportedUploadedMIME(contentType) {
+		return UploadedStorageObject{}, errors.New("直传文件类型不受支持")
 	}
 	if input.Bytes <= 0 || input.Bytes == 1<<63-1 {
 		return UploadedStorageObject{}, errors.New("文件大小无效")
@@ -346,7 +366,20 @@ func RegisterDirectStorageObject(ctx context.Context, input DirectStorageObjectI
 		return UploadedStorageObject{}, mediaIssue(mediaErrorKind(err), "直传媒体验证失败："+mediaSafeError(err))
 	}
 	hash := sha256.New()
-	count, readErr := io.Copy(hash, io.LimitReader(stream, input.Bytes+1))
+	prefixBytes, readErr := io.ReadAll(io.LimitReader(stream, 3072))
+	if readErr != nil {
+		_ = stream.Close()
+		return UploadedStorageObject{}, readErr
+	}
+	contentType, err = NormalizeUploadedMIME(contentType, prefixBytes)
+	if err != nil {
+		_ = stream.Close()
+		return UploadedStorageObject{}, err
+	}
+	object.MimeType = contentType
+	_, _ = hash.Write(prefixBytes)
+	count, readErr := io.Copy(hash, io.LimitReader(stream, input.Bytes-int64(len(prefixBytes))+1))
+	count += int64(len(prefixBytes))
 	_ = stream.Close()
 	if readErr != nil || count != input.Bytes {
 		return UploadedStorageObject{}, mediaIssue("mismatch", "直传媒体字节数验证失败")
@@ -368,6 +401,38 @@ func RegisterDirectStorageObject(ctx context.Context, input DirectStorageObjectI
 
 // DeleteStorageObject 删除存储对象。
 func DeleteStorageObject(ctx context.Context, id string, providerInput *StorageObjectProviderInput) error {
+	return deleteStorageObject(ctx, id, providerInput, false)
+}
+
+// AdminDeleteStorageObject is an explicit admin-only cleanup entry point.
+// The ordinary owner endpoint never inherits cross-owner admin authority.
+func AdminDeleteStorageObject(ctx context.Context, id string, providerInput *StorageObjectProviderInput) error {
+	return deleteStorageObject(ctx, id, providerInput, true)
+}
+
+func authorizeStorageObjectDeletion(ctx context.Context, object model.StorageObject, admin bool) error {
+	user, ok := UserFromContext(ctx)
+	if admin {
+		if ok && user.ID != "" && user.Role == model.UserRoleAdmin {
+			return nil
+		}
+	} else if ok && user.ID != "" && user.Role != model.UserRoleGuest && object.CreatedBy != "" && !anonymousStorageOwner(object.CreatedBy) && object.CreatedBy == user.ID {
+		return nil
+	}
+	return errors.New("无权删除该对象")
+}
+
+// Anonymous objects keep their sentinel and are reclaimed by the server's
+// reference-aware lifecycle, never by guessing ownership from a browser cookie.
+func anonymousStorageOwner(owner string) bool {
+	return owner == "anonymous" || strings.HasPrefix(owner, "anonymous-")
+}
+
+func deleteStorageObject(ctx context.Context, id string, providerInput *StorageObjectProviderInput, admin bool) error {
+	user, authenticated := UserFromContext(ctx)
+	if !authenticated || user.ID == "" || user.Role == model.UserRoleGuest || (admin && user.Role != model.UserRoleAdmin) {
+		return errors.New("无权删除该对象")
+	}
 	object, err := repository.GetStorageObject(id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -375,8 +440,8 @@ func DeleteStorageObject(ctx context.Context, id string, providerInput *StorageO
 		}
 		return err
 	}
-	if user, ok := UserFromContext(ctx); ok && object.CreatedBy != "" && object.CreatedBy != user.ID {
-		return errors.New("无权删除该对象")
+	if err := authorizeStorageObjectDeletion(ctx, object, admin); err != nil {
+		return err
 	}
 	if object.ProviderID == generatedMediaProviderID || object.CloudSyncedAt != "" || hasGeneratedMediaCopy(object) {
 		// Task recovery and other projects can still reference this object. Defer
@@ -390,7 +455,7 @@ func DeleteStorageObject(ctx context.Context, id string, providerInput *StorageO
 	}
 	storage := normalizePrivateStorageSetting(settings.Private.Storage)
 	providers := storage.Providers
-	if object.CreatedBy != "" && object.CreatedBy != "anonymous" {
+	if object.CreatedBy != "" && !anonymousStorageOwner(object.CreatedBy) {
 		if config, found, loadErr := repository.GetUserConfig(object.CreatedBy); loadErr == nil && found {
 			providers = append(userStorageProvidersForOwner(config.StorageProvider, object.CreatedBy), providers...)
 		}
@@ -556,12 +621,15 @@ func DownloadStorageObject(id string, rangeHeader string) (DownloadedStorageObje
 	if err != nil {
 		return DownloadedStorageObject{}, err
 	}
+	if object.DeletedAt != "" {
+		return DownloadedStorageObject{}, gorm.ErrRecordNotFound
+	}
 	if object.ProviderID == generatedMediaProviderID {
 		return downloadGeneratedMedia(object, rangeHeader)
 	}
 
 	providers := []model.StorageProvider{}
-	if object.CreatedBy != "" && object.CreatedBy != "anonymous" {
+	if object.CreatedBy != "" && !anonymousStorageOwner(object.CreatedBy) {
 		if config, found, loadErr := repository.GetUserConfig(object.CreatedBy); loadErr == nil && found {
 			providers = append(providers, userStorageProvidersForOwner(config.StorageProvider, object.CreatedBy)...)
 		}
