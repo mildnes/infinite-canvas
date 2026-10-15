@@ -40,6 +40,17 @@ func SaveUserConfig(config model.UserConfig) (model.UserConfig, error) {
 	return config, db.Save(&config).Error
 }
 
+// Skip a stale migration snapshot rather than overwrite a concurrent configuration save.
+func SaveMigratedUserImageHistory(userID, previous, raw string) error {
+	db, err := DB()
+	if err != nil {
+		return err
+	}
+	return db.Model(&model.UserConfig{}).
+		Where("user_id = ? AND image_history = ?", userID, previous).
+		Updates(map[string]interface{}{"image_history": raw, "updated_at": userConfigTimestamp()}).Error
+}
+
 // Update just asset_data; other configuration fields must survive concurrent saves.
 // A nil previous value preserves the legacy last-write-wins API.
 func SaveUserAssetData(userID, raw string, previous *string) (bool, error) {

@@ -320,16 +320,20 @@ func migrateUserImageGenerationLogs(userID string) error {
 	if err != nil || !found || strings.TrimSpace(config.ImageHistory) == "" {
 		return err
 	}
-	var legacy struct {
-		Logs []json.RawMessage `json:"logs"`
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(config.ImageHistory), &payload); err != nil {
+		return nil
 	}
-	if err := json.Unmarshal([]byte(config.ImageHistory), &legacy); err != nil || len(legacy.Logs) == 0 {
-		config.ImageHistory = ""
-		_, saveErr := repository.SaveUserConfig(config)
-		return saveErr
+	rawLogs, found := payload["logs"]
+	if !found {
+		return nil
 	}
-	logs := make([]model.ImageGenerationLog, 0, len(legacy.Logs))
-	for _, raw := range legacy.Logs {
+	var legacyLogs []json.RawMessage
+	if err := json.Unmarshal(rawLogs, &legacyLogs); err != nil {
+		return nil
+	}
+	logs := make([]model.ImageGenerationLog, 0, len(legacyLogs))
+	for _, raw := range legacyLogs {
 		log := imageGenerationLogFromPayload(raw)
 		if log.ID != "" {
 			log.SummaryJSON = imageGenerationSummary(raw)
@@ -339,7 +343,14 @@ func migrateUserImageGenerationLogs(userID string) error {
 	if err := repository.UpsertImageGenerationLogs(userID, logs); err != nil {
 		return err
 	}
-	config.ImageHistory = ""
-	_, err = repository.SaveUserConfig(config)
-	return err
+	delete(payload, "logs")
+	remaining := ""
+	if len(payload) > 0 {
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		remaining = string(raw)
+	}
+	return repository.SaveMigratedUserImageHistory(userID, config.ImageHistory, remaining)
 }

@@ -7,6 +7,12 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 ## 工作台分类账号同步
 
+- [服务端迁移修复] 采用无额外状态的方案 A：无 `logs` 键直接返回；空数组做一次字段清理，非空数组照旧迁移日志后删除该键。`map[string]json.RawMessage` 保留 `categories`、`deletedCategories` 和未知字段（含大整数）；没有其它字段才置空。非法 JSON、非对象及错误类型的 `logs` 原样保留，不写配置。
+- [迁移并发保护] 只更新 `image_history`／`updated_at`，并以读取时的原始 `image_history` 作条件；若同期分类保存已改变 blob，则跳过旧快照写回，下次读取再检查。迁移不会覆盖并发修改的模型配置，不改变其它配置保存入口的既有语义。
+- [迁移先红后绿] 基线 `34cf25e` 下 16 个子用例中 3 通过／13 断言失败，无编译错误。空 `logs` 加分类、非空遗留日志加分类均报 `category metadata was removed or corrupted: ""`；无 `logs`、空对象及非法数据报 `read-only migration changed image history or updated_at`；仅遗留日志用例原本即通过。修复后 16/16 通过，额外覆盖连续分页、日志写入失败保留原 blob、并发分类／模型配置保存。
+- [迁移本机验证] 使用临时官方 Go 1.25.0 darwin/arm64 工具链（核验官方 SHA256），`go test ./...`、`go test -race ./service/...` 均 exit 0；改动 Go 文件 `gofmt -l` 空输出，全仓遗留 12 项不变，`git diff --check` 通过。本机无容器运行时，未执行指定 `golang:1.25` 容器验证；未改前端，因此不重复前端测试。测试仅用隔离临时 SQLite，未操作生产数据或部署。
+- [ ] Hermes 迁移复验：写入分类后连续调用图片日志分页接口，确认定义与墓碑持续保留；换浏览器／清本地分类后可恢复；删除后刷新不复活。生产部署及这些操作不由 Codex 执行。
+
 - [实现] 分类保存到既有 `user_configs.image_history.categories`，结构为 `{ id, name, createdAt, updatedAt? }`；删除记录保存在同一 JSON 的 `deletedCategories: [{ id, deletedAt }]`。分类写回先读完整 blob，合并最新分类及墓碑，再保留其它字段写回，既有 `logs` 不清空；日志主链路仍走分页读取与逐 ID upsert。
 - [实现] 分类按 ID 并集、版本较新者胜（`updatedAt` 缺失时回退 `createdAt`）；墓碑按 ID 并集取较晚删除时间，删除时间不早于分类版本时移除分类；分类按创建时间升序、ID 去重。A 设备删除后，B 的陈旧分类在下次加载或分类同步时剔除，墓碑继续保留；只有分类与远端不同时写回。
 - [实现] 生图工作台创建、改名、删除与加载，以及创意工作流的分类创建都接同一同步 helper。`withWorkflowLogCategories` 继续按未知且未删除的原 ID 恢复定义，沿用日志创建时间；已改名、已删除及没有分类 ID 的旧记录不触发自动重建。显式新生成仍可按原规则创建工作流分类。
