@@ -35,7 +35,7 @@ import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/app/(user)/canvas/components/asset-picker-modal";
 import { canvasThemes } from "@/lib/canvas-theme";
-import { addCategoryIds, resolveCategoryByName } from "@/lib/image-log-categories";
+import { addCategoryIds, mergeImageCategories, resolveCategoryByName, type GenerationCategory, type DeletedGenerationCategory } from "@/lib/image-log-categories";
 import { resolveMissingTaskOutcome, WORKBENCH_TASK_INTERRUPTED_AFTER_MS } from "@/lib/workbench-task-sync";
 import { imageOutputCapabilityForConfig, normalizeImageOutputFormat, resolveImageOutputFormat } from "@/lib/image-output-format";
 import {
@@ -52,6 +52,8 @@ import { ImageRequestError, batchCanvasImageTaskStatus, createCanvasImageTask, d
 import { getWorkflowTask, isRetryableWorkflowError, submitWorkflowTask, workflowMediaStorageKey } from "@/services/api/workflow-generation";
 import { parseWorkflowRef, type WorkflowRef } from "@/lib/workflow-channel";
 import { deleteImageGenerationLogs, fetchImageGenerationLog, fetchImageGenerationLogsPage, upsertImageGenerationLogs } from "@/services/api/generation-logs";
+import { fetchUserImageCategories, type UserImageCategories } from "@/services/api/user-config";
+import { readStoredImageCategories, sameImageCategoryState, syncStoredImageCategories, writeStoredImageCategories } from "@/services/image-categories";
 import { deleteStoredImages, imageToDataUrl, resolveImageUrl, uploadImage, uploadRemoteImageToServer } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useUserStore } from "@/stores/use-user-store";
@@ -124,20 +126,17 @@ type GenerationLog = {
 
 type GenerationLogConfig = Pick<AiConfig, "channelMode" | "model" | "imageModel" | "activeChannelId" | "imageChannelId" | "quality" | "imageOutputFormat" | "size" | "count" | "apiMode" | "streamImages" | "streamPartialImages" | "responseFormatB64Json" | "codexCli">;
 type RequestSnapshot = { text: string; requestConfig: AiConfig; displayConfig: GenerationLogConfig; references: ReferenceImage[]; workflowRef?: WorkflowRef };
-type GenerationCategory = { id: string; name: string; createdAt: number };
 type ResultViewMode = "all" | "category";
 type WorkflowPollContext = { token: string; signal: AbortSignal };
 
 type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
 type WorkbenchLayout = "side" | "bottom";
 const LOG_STORE_KEY = "infinite-canvas:image_generation_logs";
-const CATEGORY_STORE_KEY = "infinite-canvas:image_generation_categories";
 const WORKBENCH_LAYOUT_KEY = "infinite-canvas:image-workbench-layout";
 const RESULT_VIEW_MODE_KEY = "infinite-canvas:image-result-view-mode";
 const IMAGE_TASK_POLL_INTERVAL_MS = 10000;
 const WORKFLOW_BUTTON_POSITION_KEY = "infinite-canvas:workflow-button-position";
 const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
-const categoryStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_categories" });
 export default function ImagePage() {
     const { message, modal } = App.useApp();
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -177,6 +176,7 @@ export default function ImagePage() {
     const workflowButtonRef = useRef<HTMLButtonElement>(null);
     const workflowButtonDragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number; moved: boolean } | null>(null);
     const accountHistorySyncEnabledRef = useRef(false);
+    const syncedImageCategoriesRef = useRef<{ token: string; state: UserImageCategories } | null>(null);
     const historyPageRequestRef = useRef<{ token: string; loading: boolean } | null>(null);
     const saveLogChainRef = useRef<Promise<void>>(Promise.resolve());
     const pollingLogIdsRef = useRef(new Set<string>());
@@ -886,30 +886,42 @@ export default function ImagePage() {
         if (!cursor) setHistoryCursor(null);
         try {
             accountHistorySyncEnabledRef.current = true;
-            const page = await fetchImageGenerationLogsPage<GenerationLog>(token, 40, cursor);
+            const [page, remoteCategories] = await Promise.all([
+                fetchImageGenerationLogsPage<GenerationLog>(token, 40, cursor),
+                fetchUserImageCategories(token).catch(() => {
+                    if (active()) accountHistorySyncEnabledRef.current = false;
+                    return null;
+                }),
+            ]);
             if (!active()) return;
             let mergedLogs: GenerationLog[] | undefined;
             const previous = saveLogChainRef.current;
             const next = (async () => {
                 await previous.catch(() => undefined);
                 if (!active()) return;
-                const [localLogs, storedCategories] = await Promise.all([readStoredLogs(), readStoredCategories()]);
+                const [localLogs, storedCategories] = await Promise.all([readStoredLogs(), readStoredImageCategories()]);
                 if (!active()) return;
                 const merged = await mergeGenerationLogs(page.items.map((log) => ({ ...log, summaryOnly: true })), localLogs, true);
-                const categorized = withWorkflowLogCategories(merged, storedCategories);
+                const mergedCategories = mergeImageCategories(storedCategories.categories, remoteCategories?.categories || [], storedCategories.deletedCategories, remoteCategories?.deletedCategories || []);
+                const categorized = withWorkflowLogCategories(merged, mergedCategories.categories, mergedCategories.deletedCategories);
                 if (!active()) return;
-                await replaceStoredImageHistory(categorized.logs, categorized.categories);
+                const categoryState = await replaceStoredImageHistory(categorized.logs, categorized.categories, mergedCategories.deletedCategories);
                 if (!active()) return;
                 mergedLogs = categorized.logs;
-                setCategories(categorized.categories);
+                setCategories(categoryState.categories);
                 setLogs(categorized.logs);
                 setHistoryCursor(page.nextCursor || null);
+                const synced = !remoteCategories || sameImageCategoryState(categoryState, remoteCategories) ? categoryState : await syncStoredImageCategories(token, categoryState);
+                if (!active()) return;
+                if (remoteCategories) syncedImageCategoriesRef.current = { token, state: synced };
+                setCategories(synced.categories);
             })();
             saveLogChainRef.current = next;
             await next;
             return mergedLogs;
         } catch {
             // Keep local history available when account sync fails.
+            if (active()) accountHistorySyncEnabledRef.current = false;
             if (cursor && active()) message.error("加载更多记录失败，请重试");
             return undefined;
         } finally {
@@ -918,7 +930,7 @@ export default function ImagePage() {
         }
     };
 
-    const persistImageHistory = async (nextLogs: GenerationLog[], _nextCategories: GenerationCategory[]) => {
+    const persistImageHistory = async (nextLogs: GenerationLog[], nextCategories: GenerationCategory[]) => {
         if (!token || !accountHistorySyncEnabledRef.current) return;
         const ownerToken = token;
         await (async () => {
@@ -933,8 +945,17 @@ export default function ImagePage() {
             }));
             if (useUserStore.getState().token !== ownerToken) return;
             await upsertImageGenerationLogs(token, complete);
+            if (useUserStore.getState().token !== ownerToken) return;
+            const storedCategories = await readStoredImageCategories();
+            const categoryState = mergeImageCategories(nextCategories, storedCategories.categories, [], storedCategories.deletedCategories);
+            const previous = syncedImageCategoriesRef.current;
+            if (previous?.token === ownerToken && sameImageCategoryState(previous.state, categoryState)) return;
+            const synced = await syncStoredImageCategories(ownerToken, categoryState);
+            if (useUserStore.getState().token !== ownerToken) return;
+            syncedImageCategoriesRef.current = { token: ownerToken, state: synced };
+            setCategories(synced.categories);
         })().catch(() => {
-            accountHistorySyncEnabledRef.current = false;
+            if (useUserStore.getState().token === ownerToken) accountHistorySyncEnabledRef.current = false;
         });
     };
 
@@ -1041,6 +1062,7 @@ export default function ImagePage() {
     };
 
     const createCategory = async (name: string) => {
+        if (useUserStore.getState().token !== token) return null;
         const trimmedName = name.trim();
         if (!trimmedName) {
             message.error("请输入分类名称");
@@ -1048,28 +1070,33 @@ export default function ImagePage() {
         }
         const existing = resolveCategoryByName(categories, trimmedName);
         if (existing) return existing;
-        const nextCategory = { id: nanoid(), name: trimmedName, createdAt: Date.now() };
+        const createdAt = Date.now();
+        const nextCategory = { id: nanoid(), name: trimmedName, createdAt, updatedAt: createdAt };
         const nextCategories = [...categories, nextCategory];
-        setCategories(nextCategories);
-        await categoryStore.setItem(CATEGORY_STORE_KEY, nextCategories);
-        await persistImageHistory(logs, nextCategories);
-        return nextCategory;
+        const stored = await writeStoredImageCategories({ categories: nextCategories, deletedCategories: [] });
+        if (useUserStore.getState().token !== token) return null;
+        setCategories(stored.categories);
+        await persistImageHistory(logs, stored.categories);
+        return useUserStore.getState().token === token ? nextCategory : null;
     };
 
     const renameCategory = async (category: GenerationCategory, name: string) => {
+        if (useUserStore.getState().token !== token) return;
         const trimmedName = name.trim();
         if (!trimmedName) {
             message.error("请输入分类名称");
             return;
         }
-        const nextCategories = categories.map((item) => (item.id === category.id ? { ...item, name: trimmedName } : item));
-        setCategories(nextCategories);
-        await categoryStore.setItem(CATEGORY_STORE_KEY, nextCategories);
-        await persistImageHistory(logs, nextCategories);
-        message.success("已重命名分类");
+        const nextCategories = categories.map((item) => (item.id === category.id ? { ...item, name: trimmedName, updatedAt: Date.now() } : item));
+        const stored = await writeStoredImageCategories({ categories: nextCategories, deletedCategories: [] });
+        if (useUserStore.getState().token !== token) return;
+        setCategories(stored.categories);
+        await persistImageHistory(logs, stored.categories);
+        if (useUserStore.getState().token === token) message.success("已重命名分类");
     };
 
     const deleteCategory = (category: GenerationCategory) => {
+        if (useUserStore.getState().token !== token) return;
         modal.confirm({
             title: "删除分类",
             content: `确定删除分类「${category.name}」吗？分类内的生成结果会移至未分类。`,
@@ -1077,14 +1104,16 @@ export default function ImagePage() {
             cancelText: "取消",
             okButtonProps: { danger: true },
             onOk: async () => {
+                if (useUserStore.getState().token !== token) return;
                 const nextCategories = categories.filter((item) => item.id !== category.id);
                 const nextLogs = logs.map((log) => ({ ...log, categoryIds: log.categoryIds.filter((id) => id !== category.id) }));
-                setCategories(nextCategories);
+                const stored = await writeStoredImageCategories({ categories: nextCategories, deletedCategories: [{ id: category.id, deletedAt: Math.max(Date.now(), category.updatedAt ?? category.createdAt) }] });
+                if (useUserStore.getState().token !== token) return;
+                setCategories(stored.categories);
                 setLogs(nextLogs);
-                await categoryStore.setItem(CATEGORY_STORE_KEY, nextCategories);
                 await Promise.all(nextLogs.map((log) => logStore.setItem(log.id, serializeLog(log))));
-                await persistImageHistory(nextLogs, nextCategories);
-                message.success("已删除分类");
+                await persistImageHistory(nextLogs, stored.categories);
+                if (useUserStore.getState().token === token) message.success("已删除分类");
             },
         });
     };
@@ -2886,33 +2915,33 @@ async function readStoredLogs() {
 async function readStoredCategories() {
     if (typeof window === "undefined") return [];
     try {
-        const value = await categoryStore.getItem<GenerationCategory[]>(CATEGORY_STORE_KEY);
-        return Array.isArray(value) ? value.filter((item) => item.id && item.name).sort((a, b) => a.createdAt - b.createdAt) : [];
+        return (await readStoredImageCategories()).categories;
     } catch {
         return [];
     }
 }
 
-async function replaceStoredImageHistory(logs: GenerationLog[], categories: GenerationCategory[]) {
-    if (typeof window === "undefined") return;
+async function replaceStoredImageHistory(logs: GenerationLog[], categories: GenerationCategory[], deletedCategories: DeletedGenerationCategory[] = []) {
+    if (typeof window === "undefined") return { categories, deletedCategories };
     await logStore.clear();
     await Promise.all(logs.map((log) => logStore.setItem(log.id, serializeLog(log))));
-    await categoryStore.setItem(CATEGORY_STORE_KEY, categories);
+    return writeStoredImageCategories({ categories, deletedCategories });
 }
 
-function withWorkflowLogCategories(logs: GenerationLog[], categories: GenerationCategory[]) {
+function withWorkflowLogCategories(logs: GenerationLog[], categories: GenerationCategory[], deletedCategories: DeletedGenerationCategory[] = []) {
     const byName = new Map(categories.map((category) => [category.name, category]));
     const byId = new Map(categories.map((category) => [category.id, category]));
+    const deletedIds = new Set(deletedCategories.map((category) => category.id));
     let nextCategories = categories;
     let categoriesChanged = false;
     let logsChanged = false;
-    const ensureCategory = (name: string, preferredId?: string) => {
+    const ensureCategory = (name: string, preferredId?: string, createdAt = Date.now()) => {
         const trimmed = name.trim();
         if (!trimmed) return null;
         const existing = byName.get(trimmed);
         if (existing) return existing;
         const id = preferredId && !byId.has(preferredId) ? preferredId : nanoid();
-        const category = { id, name: trimmed, createdAt: Date.now() };
+        const category = { id, name: trimmed, createdAt, updatedAt: createdAt };
         if (!categoriesChanged) nextCategories = [...categories];
         categoriesChanged = true;
         nextCategories.push(category);
@@ -2921,15 +2950,23 @@ function withWorkflowLogCategories(logs: GenerationLog[], categories: Generation
         return category;
     };
     const nextLogs = logs.map((log) => {
+        const hadDeletedCategory = log.categoryIds.some((id) => deletedIds.has(id) && !byId.has(id));
+        const categoryIds = log.categoryIds.filter((id) => !deletedIds.has(id) || byId.has(id));
+        if (categoryIds.length !== log.categoryIds.length) {
+            logsChanged = true;
+            log = { ...log, categoryIds };
+        }
         const workflowName = log.workflowName?.trim();
         if (!workflowName) return log;
+        if (hadDeletedCategory) return log;
         const missingCategoryId = log.categoryIds.find((id) => !byId.has(id));
-        const category = ensureCategory(workflowName, missingCategoryId);
+        if (!missingCategoryId) return log;
+        const category = ensureCategory(workflowName, missingCategoryId, log.createdAt);
         if (!category || log.categoryIds.includes(category.id)) return log;
         logsChanged = true;
         return { ...log, categoryIds: [...log.categoryIds, category.id] };
     });
-    return { logs: logsChanged ? nextLogs : logs, categories: categoriesChanged ? nextCategories : categories };
+    return { logs: logsChanged ? nextLogs : logs, categories: categoriesChanged ? nextCategories.sort((a, b) => a.createdAt - b.createdAt) : categories };
 }
 
 function hasInlineImageData(log: Partial<GenerationLog>) {

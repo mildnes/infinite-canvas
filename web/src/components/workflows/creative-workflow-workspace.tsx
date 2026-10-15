@@ -12,10 +12,12 @@ import { ModelPicker } from "@/components/model-picker";
 import { AssetPickerModal, type InsertAssetPayload } from "@/app/(user)/canvas/components/asset-picker-modal";
 import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
 import { formatBytes, formatDuration, getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
+import { resolveCategoryByName } from "@/lib/image-log-categories";
 import { normalizeImageOutputFormat } from "@/lib/image-output-format";
 import { createCanvasImageTask, requestEdit, requestGeneration, requestImageQuestion, type CanvasImageTask } from "@/services/api/image";
 import { saveImageGenerationLogs } from "@/services/api/generation-logs";
 import { deleteUserWorkflow, draftUserWorkflow, fetchUserConfig, fetchUserWorkflows, saveUserWorkflow, type CreativeWorkflowRecord } from "@/services/api/user-config";
+import { readStoredImageCategories, syncStoredImageCategories, writeStoredImageCategories } from "@/services/image-categories";
 import { deleteStoredImages, imageToDataUrl, uploadImage } from "@/services/image-storage";
 import { channelProtocolForConfig, defaultConfig, localChannelForActiveModel, normalizeLocalChannels, resolveModelForCapability, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -180,14 +182,11 @@ type ImageHistoryLog = {
     lastPolledAt?: number;
 };
 
-type GenerationCategory = { id: string; name: string; createdAt: number };
-
 const WORKFLOW_STORE_KEY = "infinite-canvas:creative-workflows";
 const SERIES_DRAFT_STORE_PREFIX = "infinite-canvas:series-drafts:";
-const CATEGORY_STORE_KEY = "infinite-canvas:image_generation_categories";
 const workflowStore = localforage.createInstance({ name: "infinite-canvas", storeName: "creative_workflows" });
 const imageLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
-const categoryStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_categories" });
+let categorySyncFailedToken = "";
 
 const variableTypeOptions: Array<{ value: WorkflowVariableType; label: string }> = [
     { value: "text", label: "短文本" },
@@ -765,7 +764,7 @@ export function CreativeWorkflowWorkspace({
         seriesTitle?: string;
         seriesIndex?: number;
     }) => {
-        const category = await ensureWorkflowCategory(workflow.name);
+        const category = await ensureWorkflowCategory(workflow.name, token);
         const taskLogs = Array.from({ length: count }, (_, index) => {
             const id = nanoid();
             const clientTaskId = `client_workflow_image_task_${taskId}_${index}`;
@@ -863,7 +862,7 @@ export function CreativeWorkflowWorkspace({
                     };
                 }),
             );
-            const category = await ensureWorkflowCategory(workflow.name);
+            const category = await ensureWorkflowCategory(workflow.name, token);
             const log = buildImageHistoryLog({
                 workflow,
                 prompt,
@@ -2113,15 +2112,42 @@ function buildImageHistoryLog({
     };
 }
 
-async function ensureWorkflowCategory(name: string) {
+async function ensureWorkflowCategory(name: string, ownerToken = useUserStore.getState().token) {
     const trimmed = name.trim();
-    if (!trimmed) return null;
-    const categories = (await categoryStore.getItem<GenerationCategory[]>(CATEGORY_STORE_KEY)) || [];
-    const existing = categories.find((item) => item.name === trimmed);
-    if (existing) return existing;
-    const nextCategory = { id: nanoid(), name: trimmed, createdAt: Date.now() };
-    await categoryStore.setItem(CATEGORY_STORE_KEY, [...categories, nextCategory]);
-    return nextCategory;
+    if (!trimmed || ownerToken !== useUserStore.getState().token) return null;
+    try {
+        let state = await readStoredImageCategories();
+        if (ownerToken !== useUserStore.getState().token) return null;
+        if (ownerToken && categorySyncFailedToken !== ownerToken) {
+            try {
+                state = await syncStoredImageCategories(ownerToken, state);
+            } catch (error) {
+                categorySyncFailedToken = ownerToken;
+                console.warn("工作流分类同步失败，继续使用本地分类", error);
+                state = await readStoredImageCategories();
+            }
+        }
+        if (ownerToken !== useUserStore.getState().token) return null;
+        const existing = resolveCategoryByName(state.categories, trimmed);
+        if (existing) return existing;
+        const now = Date.now();
+        const nextCategory = { id: nanoid(), name: trimmed, createdAt: now, updatedAt: now };
+        state = await writeStoredImageCategories({ ...state, categories: [...state.categories, nextCategory] });
+        if (ownerToken !== useUserStore.getState().token) return null;
+        if (ownerToken && categorySyncFailedToken !== ownerToken) {
+            try {
+                state = await syncStoredImageCategories(ownerToken, state);
+            } catch (error) {
+                categorySyncFailedToken = ownerToken;
+                console.warn("工作流分类同步失败，继续使用本地分类", error);
+            }
+        }
+        if (ownerToken !== useUserStore.getState().token) return null;
+        return state.categories.find((category) => category.id === nextCategory.id) || null;
+    } catch (error) {
+        console.warn("工作流分类保存失败", error);
+        return null;
+    }
 }
 
 function serializeHistoryLog(log: ImageHistoryLog): ImageHistoryLog {

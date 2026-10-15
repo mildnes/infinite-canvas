@@ -1,6 +1,7 @@
 import { apiDelete, apiGet, apiPost } from "@/services/api/request";
 import type { AiConfig } from "@/stores/use-config-store";
 import type { WorkflowChannelData } from "@/lib/workflow-channel";
+import { mergeImageCategories, type DeletedGenerationCategory, type GenerationCategory } from "@/lib/image-log-categories";
 import { toProviderPayload, type UserS3StorageProvider, type UserStorageProvider, type UserWebDAVStorageProvider } from "@/services/image-storage";
 
 export type UserConfigPayload = {
@@ -58,6 +59,34 @@ export async function fetchUserImageHistory<T>(token: string) {
 
 export async function syncUserImageHistory<T>(token: string, data: T) {
     return apiPost<T>("/api/v1/user-data/image-history", { data }, token);
+}
+
+export type UserImageCategories = {
+    categories: GenerationCategory[];
+    deletedCategories: DeletedGenerationCategory[];
+};
+
+type UserImageHistory = Record<string, unknown> & Partial<UserImageCategories>;
+
+export async function fetchUserImageCategories(token: string): Promise<UserImageCategories> {
+    if (!token) return { categories: [], deletedCategories: [] };
+    const existing = await fetchUserImageHistory<UserImageHistory | null>(token);
+    return {
+        categories: Array.isArray(existing?.categories) ? existing.categories : [],
+        deletedCategories: Array.isArray(existing?.deletedCategories) ? existing.deletedCategories : [],
+    };
+}
+
+export async function syncUserImageCategories(token: string, { categories, deletedCategories }: UserImageCategories): Promise<void> {
+    if (!token) return;
+    const existing = await fetchUserImageHistory<UserImageHistory | null>(token);
+    const merged = mergeImageCategories(
+        categories,
+        Array.isArray(existing?.categories) ? existing.categories : [],
+        deletedCategories,
+        Array.isArray(existing?.deletedCategories) ? existing.deletedCategories : [],
+    );
+    await syncUserImageHistory(token, { ...existing, ...merged });
 }
 
 export async function fetchUserAssetData<T>(token: string) {

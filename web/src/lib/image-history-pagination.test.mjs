@@ -52,11 +52,16 @@ test("真实分页回调只拉一页并用合并全集更新本地，不按页�
         useUserStore: { getState: () => ({ token: "owner" }) },
         setHistoryLoading: () => {}, setHistoryCursor: (next) => { cursor = next; },
         accountHistorySyncEnabledRef: { current: false }, saveLogChainRef: { current: Promise.resolve() },
+        syncedImageCategoriesRef: { current: null },
         fetchImageGenerationLogsPage: async (...args) => { requests.push(args); return { items: [{ id: "page", config: { channelMode: "remote" } }], nextCursor: "next" }; },
-        readStoredLogs: async () => saved, readStoredCategories: async () => [],
+        fetchUserImageCategories: async () => ({ categories: [], deletedCategories: [] }),
+        readStoredLogs: async () => saved, readStoredImageCategories: async () => ({ categories: [], deletedCategories: [] }),
+        mergeImageCategories: () => ({ categories: [], deletedCategories: [] }),
         mergeGenerationLogs: mergeHarness(),
         withWorkflowLogCategories: (logs, categories) => ({ logs, categories }),
-        replaceStoredImageHistory: async (logs) => { saved = logs; },
+        replaceStoredImageHistory: async (logs, categories, deletedCategories) => { saved = logs; return { categories, deletedCategories }; },
+        sameImageCategoryState: () => true,
+        syncStoredImageCategories: async (_, state) => state,
         setCategories: () => {}, setLogs: () => {}, message: { error: assert.fail },
     });
     await load();
@@ -74,6 +79,12 @@ test("摘要回写前补详情，保留没有下发的 originalUrl 与其它 tas
         fetchImageGenerationLog: async () => ({ id: "log", prompt: "完整原文", references: [], task: { id: "task", originalUrl: inline, response_body: "保留详情" } }),
         serializeLog: (log) => log,
         upsertImageGenerationLogs: async (...args) => { requests.push(args); },
+        readStoredImageCategories: async () => ({ categories: [], deletedCategories: [] }),
+        mergeImageCategories: () => ({ categories: [], deletedCategories: [] }),
+        syncedImageCategoriesRef: { current: null },
+        sameImageCategoryState: () => true,
+        syncStoredImageCategories: async (_, state) => state,
+        setCategories: () => {},
     });
     await persist([{ id: "log", summaryOnly: true, prompt: "", categoryIds: ["new"], task: { id: "task", progress: 100 } }], []);
     assert.equal(requests.length, 1);
