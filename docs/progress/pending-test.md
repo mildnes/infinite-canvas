@@ -22,7 +22,7 @@ description: 当前版本已实现但仍需人工验证的变更项
 - [ ] Hermes 验证 PNG／JPEG／WebP、视频与音频上传和参考；Matroska／OGG／3GPP 等显式容器类型已经过字节检测夹具测试，真实播放／上游参考仍待验。
 - [ ] 验证 owner／admin 带 token 可获得 WebDAV 所需 objectKey，匿名／非 owner 不收到内部字段；游客自备 provider 上传保留，游客对象保留 anonymous 哨兵并由服务端生命周期清理，不通过浏览器会话猜测删除权。
 - [ ] OAuth 部署须配置 PUBLIC_BASE_URL 为应用公开地址；非法请求域名或转发头不能改变跳转来源，未配置时使用固定 localhost:8080（或 PORT）。本批仍保留 JWT query，但目的地址只来自可信配置。
-- [ ] 图片代理支持 IMAGE_PROXY_ALLOWED_HOSTS 精确主机（含端口）列表并检查重定向；未配置时仍允许经 SSRF 防护的公网来源，不宣称来源授权已收口。R8 传输方案须等待真实无计费探测，详见 [v8 验证记录](v8-verification.md)。
+- [本轮取消] R8 provider 体积探测与 Base64／签名 URL 传输方案按用户决定移出范围；当前保留图片代理的 SSRF 防护、来源授权扩展点和同源参考 URL 拦截。若恢复 R8，需另开探测与方案评审。
 
 ## 生图工作台批量添加分类（C 组）
 

@@ -44,13 +44,13 @@ ok github.com/tigerowo/infinite-canvas/service
 
 OAuth 只采用 PUBLIC_BASE_URL 的 http(s) origin，忽略 Host／X-Forwarded-Host／X-Forwarded-Proto；配置缺失或非法时回退固定 localhost 与 PORT。正常 OAuth 的 redirect_uri 与回跳使用同一可信来源。JWT query 尚未改为一次性 code，当前满足本批最低限制，不向请求头决定的地址交付 JWT。
 
-## R8 决策门：未完成
+## R8 范围决策：本轮取消
 
-本地无渠道凭据、无已确认不会触发生成的真实请求校验入口；10 月 15 日几轮参考报告未包含 provider 体积探测结果。已向用户单独请求安全校验入口／配置路径或 Hermes 的实测证据，其余代码修复继续。
+用户已明确决定本轮不再使用 R8，因此不再要求 provider/model 体积探测、Base64／签名 URL 方案选择或历史引用迁移。没有发出付费生成请求，也没有探测生产数据库。若未来恢复 R8，应单独安排无计费探测和传输方案评审。
 
-未发送付费生成请求，未探测生产数据库，未迁移历史引用，未强制选择 Base64 或签名 URL。IMAGE_PROXY_ALLOWED_HOSTS 是独立来源授权扩展点：配置后精确限制主机和每次重定向；未配置时只保留既有 SSRF 防护，来源限制仍未启用。
+IMAGE_PROXY_ALLOWED_HOSTS 仍是独立来源授权扩展点：配置后精确限制主机和每次重定向；未配置时保留既有 SSRF 防护。当前代码对本站同源、localhost、回环和非 HTTP(S) 的参考 URL 仍做安全拦截，不代表已选择 R8 传输方案。
 
-完整 provider／model 请求大小、HTTP 拒绝边界、Base64 增量及三条参考链路是否共享上限，必须在获得真实入口后补充。不能把鉴权失败或未知 provider 错误解释成体积上限。
+provider 请求大小和 Base64 增量不属于本轮验收项；若未来恢复 R8，必须重新按 provider/model 和三条参考链路实测，不能把鉴权失败或未知 provider 错误解释成体积上限。
 
 ### R8 来源盘点（不等同于 provider 上限结论）
 
@@ -130,6 +130,6 @@ git diff --check
 exit=0
 ```
 
-完整包名均为 github.com/tigerowo/infinite-canvas 下对应路径。测试通过不能替代真实浏览器关闭／刷新、播放器解码与上游校验入口的验收；这些边界列在 pending-test.md。R8 仍未完成，不能把本次代码提交描述为全量 P0 全部关闭。
+完整包名均为 github.com/tigerowo/infinite-canvas 下对应路径。测试通过不能替代真实浏览器关闭／刷新和播放器解码等人工验收；这些边界列在 pending-test.md。R8 已按用户决定移出本轮范围。
 
 安全批次与可靠性批次各一条中文 Conventional Commit。Gitea 推送与 CI 状态由交付回复记录；不触发 deploy-production.yml。
