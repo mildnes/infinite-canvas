@@ -112,7 +112,7 @@ function callbackScope(node) {
     const api = harness();
     const state = { nodes: [node], writes: 0, notices: [], running: [] };
     const scope = {
-        ...api, Error, CanvasNodeType, canvasTaskRetryMode, nodesRef: { current: state.nodes }, connectionsRef: { current: [] }, effectiveConfig: config,
+        ...api, Error, CanvasNodeType, canvasTaskRetryMode, nodesRef: { current: state.nodes }, connectionsRef: { current: [] }, effectiveConfig: config, canvasGenerationDefaults: config,
         startNodeTaskRun: () => ({ controller: new AbortController() }), guardNodeTaskResponse: () => {}, nodeRunActive: () => true,
         useUserStore: { getState: () => ({ token: "test" }) },
         isCanvasImageNodeType: (type) => ["image", "panorama"].includes(type), isPanoramaNodeType: (type) => type === "panorama",

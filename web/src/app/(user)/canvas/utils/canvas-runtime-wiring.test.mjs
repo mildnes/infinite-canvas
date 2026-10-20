@@ -6,6 +6,8 @@ const page = readFileSync(new URL("../[id]/canvas-client-page.tsx", import.meta.
 const node = readFileSync(new URL("../components/canvas-node.tsx", import.meta.url), "utf8");
 const toolbar = readFileSync(new URL("../components/canvas-node-hover-toolbar.tsx", import.meta.url), "utf8");
 const assistant = readFileSync(new URL("../components/canvas-assistant-panel.tsx", import.meta.url), "utf8");
+const promptPanel = readFileSync(new URL("../components/canvas-node-prompt-panel.tsx", import.meta.url), "utf8");
+const configPanel = readFileSync(new URL("../components/canvas-config-node-panel.tsx", import.meta.url), "utf8");
 
 test("文本节点编辑工具接入按节点 nonce，并保持光标末尾逻辑", () => {
     assert.match(page, /editRequestNonces/);
@@ -35,4 +37,17 @@ test("编辑请求 nonce 每次点击递增，其他节点保持 0", () => {
     state = next(state, "text-a");
     assert.deepEqual(state, { "text-a": 2 });
     assert.equal(state["text-b"] || 0, 0);
+});
+
+test("画板生成默认配置继承 Agent 设置，节点显式参数仍由节点配置覆盖", () => {
+    assert.match(page, /applyCanvasAgentGenerationDefaults/);
+    assert.match(page, /const canvasGenerationDefaults = useMemo/);
+    assert.match(page, /const baseGenerationConfig = mode === "image" \|\| mode === "video" \? canvasGenerationDefaults : effectiveConfig/);
+    assert.match(page, /size: node\.metadata\?\.size \|\| baseGenerationConfig\.size \|\| "auto"/);
+    assert.match(page, /generationDefaults=\{canvasGenerationDefaults\}/);
+    assert.match(promptPanel, /generationDefaults\?: AiConfig/);
+    assert.match(promptPanel, /buildNodeConfig\(generationDefaults \|\| globalConfig, node, mode\)/);
+    assert.match(configPanel, /generationDefaults\?: AiConfig/);
+    assert.match(configPanel, /buildNodeConfig\(generationDefaults \|\| globalConfig, node, mode\)/);
+    assert.match(configPanel, /modePatch\(generationDefaults \|\| globalConfig/);
 });

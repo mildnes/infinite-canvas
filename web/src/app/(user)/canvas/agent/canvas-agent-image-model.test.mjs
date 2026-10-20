@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyCanvasAgentImageSelection, resolveCanvasAgentImageSelection } from "./canvas-agent-image-model.ts";
+import { applyCanvasAgentGenerationDefaults, applyCanvasAgentImageSelection, resolveCanvasAgentImageSelection } from "./canvas-agent-image-model.ts";
 
 const config = {
     channelMode: "remote",
@@ -38,6 +38,41 @@ test("将 Agent 选择的图片模型和渠道应用到本次生成配置", () =
     assert.equal(generationConfig.imageModel, "grok-imagine-image");
     assert.equal(generationConfig.imageChannelId, "grok-b");
     assert.equal(generationConfig.imageOutputFormat, "png-transparent");
+});
+
+test("画布生成默认配置继承 Agent 的图片模型、渠道、质量和尺寸", () => {
+    const generationDefaults = applyCanvasAgentGenerationDefaults(
+        { ...config, quality: "auto", size: "3840x2160", vquality: "720", videoSize: "16:9" },
+        {
+            imageModel: "grok-imagine-image",
+            imageChannelId: "grok-b",
+            imageOutputFormat: "png-transparent",
+            imageQuality: "high",
+            imageSize: "2048x1152",
+            videoQuality: "1080",
+            videoSize: "9:16",
+        },
+    );
+
+    assert.equal(generationDefaults.imageModel, "grok-imagine-image");
+    assert.equal(generationDefaults.imageChannelId, "grok-b");
+    assert.equal(generationDefaults.imageOutputFormat, "png-transparent");
+    assert.equal(generationDefaults.quality, "high");
+    assert.equal(generationDefaults.size, "2048x1152");
+    assert.equal(generationDefaults.vquality, "1080");
+    assert.equal(generationDefaults.videoSize, "9:16");
+});
+
+test("Agent 生成默认配置缺少字段时保留全局值", () => {
+    const generationDefaults = applyCanvasAgentGenerationDefaults(
+        { ...config, quality: "auto", size: "3840x2160", vquality: "720", videoSize: "16:9" },
+        { imageQuality: "", imageSize: "", videoQuality: "", videoSize: "" },
+    );
+
+    assert.equal(generationDefaults.quality, "auto");
+    assert.equal(generationDefaults.size, "3840x2160");
+    assert.equal(generationDefaults.vquality, "720");
+    assert.equal(generationDefaults.videoSize, "16:9");
 });
 
 test("旧 Agent 配置缺少格式时保持 auto，不继承新的全局默认格式", () => {

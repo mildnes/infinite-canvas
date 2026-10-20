@@ -72,7 +72,7 @@ import { CANVAS_ASSET_DRAG_TYPE, CanvasSidePanel } from "../components/canvas-si
 import { DEFAULT_CANVAS_AGENT_PANEL, DEFAULT_CANVAS_SIDE_PANEL, flushCanvasSaves, useCanvasStore } from "../stores/use-canvas-store";
 import { assistantReferenceContentFromNode, buildNodeMentionReferences, isCanvasReferenceNode } from "../utils/canvas-resource-references";
 import { buildCanvasAgentContext } from "../agent/canvas-agent-context";
-import { applyCanvasAgentImageSelection, resolveCanvasAgentImageSelection } from "../agent/canvas-agent-image-model";
+import { applyCanvasAgentGenerationDefaults, resolveCanvasAgentImageSelection } from "../agent/canvas-agent-image-model";
 import type { CanvasAgentAction, CanvasAgentToolResult } from "../agent/canvas-agent-tools";
 import {
     CanvasNodeType,
@@ -468,7 +468,18 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     }, [currentAccountId, message, projectId]);
     const resolvedAgentConfig = useMemo<CanvasAgentConfig>(() => {
         const imageSelection = resolveCanvasAgentImageSelection(effectiveConfig, agentConfig);
-        return agentConfig ? { ...agentConfig, ...imageSelection, textApiMode: agentConfig.textApiMode || "chat", textReasoningEnabled: agentConfig.textReasoningEnabled ?? false, textStreaming: agentConfig.textStreaming ?? false, autoGenerateMedia: agentConfig.autoGenerateMedia ?? true } : {
+        return agentConfig ? {
+                ...agentConfig,
+                ...imageSelection,
+                textApiMode: agentConfig.textApiMode || "chat",
+                textReasoningEnabled: agentConfig.textReasoningEnabled ?? false,
+                textStreaming: agentConfig.textStreaming ?? false,
+                autoGenerateMedia: agentConfig.autoGenerateMedia ?? true,
+                imageQuality: agentConfig.imageQuality || effectiveConfig.quality,
+                imageSize: agentConfig.imageSize || effectiveConfig.size,
+                videoQuality: agentConfig.videoQuality || effectiveConfig.vquality,
+                videoSize: agentConfig.videoSize || effectiveConfig.videoSize,
+            } : {
                 textApiMode: "chat",
                 textReasoningEnabled: false,
                 textStreaming: false,
@@ -482,9 +493,13 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         },
         [agentConfig, effectiveConfig],
     );
-    const agentEffectiveConfig = useMemo(
-        () => ({ ...applyCanvasAgentImageSelection(effectiveConfig, resolvedAgentConfig), quality: resolvedAgentConfig.imageQuality, size: resolvedAgentConfig.imageSize, vquality: resolvedAgentConfig.videoQuality, videoSize: resolvedAgentConfig.videoSize, count: "1", canvasImageCount: "1" }),
+    const canvasGenerationDefaults = useMemo(
+        () => applyCanvasAgentGenerationDefaults(effectiveConfig, resolvedAgentConfig),
         [effectiveConfig, resolvedAgentConfig],
+    );
+    const agentEffectiveConfig = useMemo(
+        () => ({ ...canvasGenerationDefaults, count: "1", canvasImageCount: "1" }),
+        [canvasGenerationDefaults],
     );
 
     const nodesRef = useRef(nodes);
@@ -922,10 +937,10 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
     const createConnectedNode = useCallback(
         (type: CanvasNodeType, pending: PendingConnectionCreate) => {
-            const workflowRef = isCanvasImageNodeType(type) ? effectiveConfig.imageWorkflowRef : type === CanvasNodeType.Video ? effectiveConfig.videoWorkflowRef : type === CanvasNodeType.Audio ? effectiveConfig.audioWorkflowRef : undefined;
+            const workflowRef = isCanvasImageNodeType(type) ? canvasGenerationDefaults.imageWorkflowRef : type === CanvasNodeType.Video ? canvasGenerationDefaults.videoWorkflowRef : type === CanvasNodeType.Audio ? canvasGenerationDefaults.audioWorkflowRef : undefined;
             const metadata = type === CanvasNodeType.Config
-                ? { model: effectiveConfig.imageModel || effectiveConfig.model, channelId: effectiveConfig.imageChannelId, size: effectiveConfig.size, count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count), imageOutputFormat: effectiveConfig.imageOutputFormat || "auto", workflowRef: effectiveConfig.imageWorkflowRef }
-                : isCanvasImageNodeType(type) ? { imageOutputFormat: effectiveConfig.imageOutputFormat || "auto", workflowRef } : workflowRef ? { workflowRef } : undefined;
+                ? { model: canvasGenerationDefaults.imageModel || canvasGenerationDefaults.model, channelId: canvasGenerationDefaults.imageChannelId, size: canvasGenerationDefaults.size, count: getGenerationCount(canvasGenerationDefaults.canvasImageCount || canvasGenerationDefaults.count), imageOutputFormat: canvasGenerationDefaults.imageOutputFormat || "auto", workflowRef: canvasGenerationDefaults.imageWorkflowRef }
+                : isCanvasImageNodeType(type) ? { imageOutputFormat: canvasGenerationDefaults.imageOutputFormat || "auto", workflowRef } : workflowRef ? { workflowRef } : undefined;
             const newNode = createCanvasNode(type, pending.position, metadata);
             const connection = normalizeConnection(pending.connection.nodeId, newNode.id, [...nodesRef.current, newNode], pending.connection.handleType);
             if (!connection) {
@@ -940,7 +955,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             setPendingConnectionCreate(null);
             setConnecting(null);
         },
-        [effectiveConfig.audioWorkflowRef, effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageChannelId, effectiveConfig.imageModel, effectiveConfig.imageOutputFormat, effectiveConfig.imageWorkflowRef, effectiveConfig.model, effectiveConfig.size, effectiveConfig.videoWorkflowRef, message, setConnecting],
+        [canvasGenerationDefaults, message, setConnecting],
     );
 
     const cancelPendingConnectionCreate = useCallback(() => {
@@ -1057,7 +1072,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     }, [audioTrimPlaying, audioTrimEnd]);
 
     const maskEditNode = maskEditNodeId ? nodeById.get(maskEditNodeId) || null : null;
-    const maskEditConfig = maskEditNode ? buildGenerationConfig(effectiveConfig, maskEditNode, "image") : null;
+    const maskEditConfig = maskEditNode ? buildGenerationConfig(canvasGenerationDefaults, maskEditNode, "image") : null;
     const currentMaskEditModel = maskEditModel || maskEditConfig?.model || "";
     const currentMaskEditChannelId = maskEditChannelId || maskEditConfig?.imageChannelId || "";
     const splitNode = splitNodeId ? nodeById.get(splitNodeId) || null : null;
@@ -1196,18 +1211,18 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const createNode = useCallback(
         (type: CanvasNodeType, position?: Position, textContent?: string, nodeId?: string) => {
             const targetPosition = position || getCanvasCenter();
-            const workflowRef = isCanvasImageNodeType(type) ? effectiveConfig.imageWorkflowRef : type === CanvasNodeType.Video ? effectiveConfig.videoWorkflowRef : type === CanvasNodeType.Audio ? effectiveConfig.audioWorkflowRef : undefined;
+            const workflowRef = isCanvasImageNodeType(type) ? canvasGenerationDefaults.imageWorkflowRef : type === CanvasNodeType.Video ? canvasGenerationDefaults.videoWorkflowRef : type === CanvasNodeType.Audio ? canvasGenerationDefaults.audioWorkflowRef : undefined;
             const configMetadata =
                 type === CanvasNodeType.Config
                     ? {
-                        model: effectiveConfig.imageModel || effectiveConfig.model,
-                        channelId: effectiveConfig.imageChannelId,
-                        size: effectiveConfig.size,
-                        count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count),
-                        imageOutputFormat: effectiveConfig.imageOutputFormat || "auto",
-                        workflowRef: effectiveConfig.imageWorkflowRef,
+                        model: canvasGenerationDefaults.imageModel || canvasGenerationDefaults.model,
+                        channelId: canvasGenerationDefaults.imageChannelId,
+                        size: canvasGenerationDefaults.size,
+                        count: getGenerationCount(canvasGenerationDefaults.canvasImageCount || canvasGenerationDefaults.count),
+                        imageOutputFormat: canvasGenerationDefaults.imageOutputFormat || "auto",
+                        workflowRef: canvasGenerationDefaults.imageWorkflowRef,
                     }
-                    : isCanvasImageNodeType(type) ? { imageOutputFormat: effectiveConfig.imageOutputFormat || "auto", workflowRef } : workflowRef ? { workflowRef } : undefined;
+                    : isCanvasImageNodeType(type) ? { imageOutputFormat: canvasGenerationDefaults.imageOutputFormat || "auto", workflowRef } : workflowRef ? { workflowRef } : undefined;
             const newNode = createCanvasNode(
                 type,
                 targetPosition,
@@ -1222,7 +1237,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             setSelectedConnectionId(null);
             if (type !== CanvasNodeType.Text && type !== CanvasNodeType.Audio && type !== CanvasNodeType.Director) setDialogNodeId(newNode.id);
         },
-        [effectiveConfig.audioWorkflowRef, effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageChannelId, effectiveConfig.imageModel, effectiveConfig.imageOutputFormat, effectiveConfig.imageWorkflowRef, effectiveConfig.model, effectiveConfig.size, effectiveConfig.videoWorkflowRef, getCanvasCenter],
+        [canvasGenerationDefaults, getCanvasCenter],
     );
 
     const deleteCanvasTaskRecords = useCallback(
@@ -2736,9 +2751,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 const maskEditImageNode = useCallback(
         async (node: CanvasNodeData, payload: CanvasImageMaskEditPayload) => {
             if (!node.metadata?.content) return;
-            const baseGenerationConfig = buildGenerationConfig(effectiveConfig, node, "image");
+            const baseGenerationConfig = buildGenerationConfig(canvasGenerationDefaults, node, "image");
             const selectedModel = payload.model || baseGenerationConfig.model;
-            const generationConfig = resolveCanvasImageOutputFormat({ ...baseGenerationConfig, model: selectedModel, imageModel: selectedModel, activeChannelId: payload.channelId || baseGenerationConfig.imageChannelId || baseGenerationConfig.activeChannelId, imageChannelId: payload.channelId || baseGenerationConfig.imageChannelId, count: "1", size: node.metadata?.size || "auto" });
+            const generationConfig = resolveCanvasImageOutputFormat({ ...baseGenerationConfig, model: selectedModel, imageModel: selectedModel, activeChannelId: payload.channelId || baseGenerationConfig.imageChannelId || baseGenerationConfig.activeChannelId, imageChannelId: payload.channelId || baseGenerationConfig.imageChannelId, count: "1", size: node.metadata?.size || baseGenerationConfig.size || "auto" });
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
                 openConfigDialog(true);
                 return;
@@ -2782,7 +2797,7 @@ const maskEditImageNode = useCallback(
                 setRunningNodeId(null);
             }
         },
-        [canSubmitCanvasMediaRequest, effectiveConfig, isAiConfigReady, message, openConfigDialog, projectId, resolveCanvasImageOutputFormat],
+        [canSubmitCanvasMediaRequest, canvasGenerationDefaults, isAiConfigReady, message, openConfigDialog, projectId, resolveCanvasImageOutputFormat],
     );
 
     const upscaleImageNode = useCallback(async (node: CanvasNodeData, params: CanvasImageUpscaleParams) => {
@@ -2820,7 +2835,7 @@ const maskEditImageNode = useCallback(
 const generateAngleNode = useCallback(
         async (node: CanvasNodeData, params: CanvasImageAngleParams) => {
             if (!node.metadata?.content) return;
-            const generationConfig = resolveCanvasImageOutputFormat({ ...buildGenerationConfig(effectiveConfig, node, "image"), count: "1" });
+            const generationConfig = resolveCanvasImageOutputFormat({ ...buildGenerationConfig(canvasGenerationDefaults, node, "image"), count: "1" });
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
                 openConfigDialog(true);
                 return;
@@ -2866,7 +2881,7 @@ const generateAngleNode = useCallback(
                 setRunningNodeId(null);
             }
         },
-        [canSubmitCanvasMediaRequest, effectiveConfig, message, openConfigDialog, projectId, resolveCanvasImageOutputFormat],
+        [canSubmitCanvasMediaRequest, canvasGenerationDefaults, message, openConfigDialog, projectId, resolveCanvasImageOutputFormat],
     );
 
     const handleFontSizeChange = useCallback((nodeId: string, fontSize: number) => {
@@ -3095,7 +3110,8 @@ const generateAngleNode = useCallback(
         async (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => {
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
             const workflowRef = mode === "text" ? undefined : sourceNode?.metadata?.workflowRef;
-            const rawGenerationConfig = buildGenerationConfig(effectiveConfig, sourceNode, mode);
+            const baseGenerationConfig = mode === "image" || mode === "video" ? canvasGenerationDefaults : effectiveConfig;
+            const rawGenerationConfig = buildGenerationConfig(baseGenerationConfig, sourceNode, mode);
             const generationConfig = mode === "image" ? resolveCanvasImageOutputFormat({ ...rawGenerationConfig, imageWorkflowRef: workflowRef || rawGenerationConfig.imageWorkflowRef }) : rawGenerationConfig;
             if (workflowRef && !useUserStore.getState().token) {
                 message.error("工作流生成需要先登录");
@@ -3583,7 +3599,7 @@ const generateAngleNode = useCallback(
                 setRunningNodeId(null);
             }
         },
-        [canSubmitCanvasMediaRequest, effectiveConfig, message, openConfigDialog, resolveCanvasImageOutputFormat],
+        [canSubmitCanvasMediaRequest, canvasGenerationDefaults, effectiveConfig, message, openConfigDialog, resolveCanvasImageOutputFormat],
     );
 
     const getCanvasAgentContext = useCallback(
@@ -4129,18 +4145,18 @@ const generateAngleNode = useCallback(
             const rawGenerationConfig =
                 hasSavedImageMetadata && savedImageMetadata
                     ? {
-                        ...effectiveConfig,
-                        model: effectiveConfig.channelMode === "remote" ? resolveModelForCapability(effectiveConfig, savedImageMetadata.model, "image") : savedImageMetadata.model || effectiveConfig.imageModel || effectiveConfig.model,
-                        imageChannelId: savedImageMetadata.channelId || effectiveConfig.imageChannelId,
-                        imageModel: effectiveConfig.channelMode === "remote" ? resolveModelForCapability(effectiveConfig, savedImageMetadata.model, "image") : savedImageMetadata.model || effectiveConfig.imageModel,
+                        ...canvasGenerationDefaults,
+                        model: canvasGenerationDefaults.channelMode === "remote" ? resolveModelForCapability(canvasGenerationDefaults, savedImageMetadata.model, "image") : savedImageMetadata.model || canvasGenerationDefaults.imageModel || canvasGenerationDefaults.model,
+                        imageChannelId: savedImageMetadata.channelId || canvasGenerationDefaults.imageChannelId,
+                        imageModel: canvasGenerationDefaults.channelMode === "remote" ? resolveModelForCapability(canvasGenerationDefaults, savedImageMetadata.model, "image") : savedImageMetadata.model || canvasGenerationDefaults.imageModel,
                         imageWorkflowRef: retryWorkflowRef,
-                        activeChannelId: savedImageMetadata.channelId || effectiveConfig.imageChannelId,
-                        quality: savedImageMetadata.quality || effectiveConfig.quality,
+                        activeChannelId: savedImageMetadata.channelId || canvasGenerationDefaults.imageChannelId,
+                        quality: savedImageMetadata.quality || canvasGenerationDefaults.quality,
                         imageOutputFormat: savedImageMetadata.imageOutputFormat || "auto",
-                        size: isPanorama ? PANORAMA_IMAGE_SIZE : savedImageMetadata.size || effectiveConfig.size,
+                        size: isPanorama ? PANORAMA_IMAGE_SIZE : savedImageMetadata.size || canvasGenerationDefaults.size,
                         count: "1",
                     }
-                    : { ...buildGenerationConfig(effectiveConfig, sourceNode, node.type === CanvasNodeType.Text ? "text" : node.type === CanvasNodeType.Video ? "video" : node.type === CanvasNodeType.Audio ? "audio" : "image"), count: "1" };
+                    : { ...buildGenerationConfig(node.type === CanvasNodeType.Text || node.type === CanvasNodeType.Audio ? effectiveConfig : canvasGenerationDefaults, sourceNode, node.type === CanvasNodeType.Text ? "text" : node.type === CanvasNodeType.Video ? "video" : node.type === CanvasNodeType.Audio ? "audio" : "image"), count: "1" };
             const generationConfig = isCanvasImageNodeType(node.type) ? resolveCanvasImageOutputFormat({ ...rawGenerationConfig, imageWorkflowRef: retryWorkflowRef || rawGenerationConfig.imageWorkflowRef }, true) : rawGenerationConfig;
             if (retryWorkflowRef && !useUserStore.getState().token) {
                 message.error("工作流生成需要先登录");
@@ -4266,7 +4282,7 @@ const generateAngleNode = useCallback(
                 setRunningNodeId(null);
             }
         },
-        [canSubmitCanvasMediaRequest, effectiveConfig, message, openConfigDialog, projectId, resolveCanvasImageOutputFormat, resumeNodeTaskPolling],
+        [canSubmitCanvasMediaRequest, canvasGenerationDefaults, effectiveConfig, message, openConfigDialog, projectId, resolveCanvasImageOutputFormat, resumeNodeTaskPolling],
     );
 
     const stopCanvasNode = useCallback(async (node: CanvasNodeData) => {
@@ -4323,11 +4339,11 @@ const generateAngleNode = useCallback(
                 },
                 {
                     prompt: "",
-                    model: effectiveConfig.imageModel || effectiveConfig.model,
-                    channelId: effectiveConfig.imageChannelId,
-                    size: effectiveConfig.size,
-                    count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count),
-                    imageOutputFormat: effectiveConfig.imageOutputFormat || "auto",
+                    model: canvasGenerationDefaults.imageModel || canvasGenerationDefaults.model,
+                    channelId: canvasGenerationDefaults.imageChannelId,
+                    size: canvasGenerationDefaults.size,
+                    count: getGenerationCount(canvasGenerationDefaults.canvasImageCount || canvasGenerationDefaults.count),
+                    imageOutputFormat: canvasGenerationDefaults.imageOutputFormat || "auto",
                 },
             );
             const connection = { id: nanoid(), fromNodeId: sourceNode.id, toNodeId: configNode.id };
@@ -4341,7 +4357,7 @@ const generateAngleNode = useCallback(
             setSelectedConnectionId(null);
             setDialogNodeId(configNode.id);
         },
-        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageChannelId, effectiveConfig.imageModel, effectiveConfig.imageOutputFormat, effectiveConfig.model, effectiveConfig.size, message],
+        [canvasGenerationDefaults, message],
     );
 
     const insertAssistantImage = useCallback(
@@ -4613,6 +4629,7 @@ const generateAngleNode = useCallback(
                                         connectedNodes={connectedNodesByNodeId.get(panelNode.id) || []}
                                         videoFrameOptions={videoFrameOptionsByNodeId.get(panelNode.id) || []}
                                         videoResourceOptions={videoResourceOptionsByNodeId.get(panelNode.id) || []}
+                                        generationDefaults={canvasGenerationDefaults}
                                         onPromptChange={handleNodePromptChange}
                                         onConfigChange={handleConfigNodeChange}
                                         onGenerate={handleGenerateNode}
@@ -4635,6 +4652,7 @@ const generateAngleNode = useCallback(
                                         inputSummary={getInputSummary(configInputsById.get(contentNode.id) || [])}
                                         videoFrameOptions={videoFrameOptionsByNodeId.get(contentNode.id) || []}
                                         videoResourceOptions={videoResourceOptionsByNodeId.get(contentNode.id) || []}
+                                        generationDefaults={canvasGenerationDefaults}
                                         onConfigChange={handleConfigNodeChange}
                                         onComposerToggle={() => setDialogNodeId((current) => (current === contentNode.id ? null : contentNode.id))}
                                         onGenerate={(nodeId) => {
@@ -4740,7 +4758,7 @@ const generateAngleNode = useCallback(
                     onUploadMediaToCloud={(node) => void uploadNodeMediaToCloud(node)}
                     onUploadImageToCloud={(node) => void uploadNodeImageToCloud(node)}
                     onMaskEdit={(node) => {
-                        const nodeConfig = buildGenerationConfig(effectiveConfig, node, "image");
+                        const nodeConfig = buildGenerationConfig(canvasGenerationDefaults, node, "image");
                         setMaskEditModel(nodeConfig.model);
                         setMaskEditChannelId(nodeConfig.imageChannelId || nodeConfig.activeChannelId || "");
                         setMaskEditNodeId(node.id);

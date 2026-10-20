@@ -72,10 +72,10 @@ export function CanvasAssistantComposer({
     const selectedImageModel = agentConfig.imageModel || effectiveConfig.imageModel;
     const selectedImageChannelId = agentConfig.imageChannelId || effectiveConfig.imageChannelId;
     const imageConfig = useMemo(
-        () => ({ ...effectiveConfig, model: selectedImageModel, imageModel: selectedImageModel, imageChannelId: selectedImageChannelId, imageOutputFormat: agentConfig.imageOutputFormat || effectiveConfig.imageOutputFormat || "auto", quality: agentConfig.imageQuality, size: agentConfig.imageSize }),
+        () => ({ ...effectiveConfig, model: selectedImageModel, imageModel: selectedImageModel, imageChannelId: selectedImageChannelId, imageOutputFormat: agentConfig.imageOutputFormat || effectiveConfig.imageOutputFormat || "auto", quality: agentConfig.imageQuality || effectiveConfig.quality, size: agentConfig.imageSize || effectiveConfig.size }),
         [agentConfig.imageOutputFormat, agentConfig.imageQuality, agentConfig.imageSize, effectiveConfig, selectedImageChannelId, selectedImageModel],
     );
-    const videoConfig = useMemo(() => ({ ...effectiveConfig, vquality: agentConfig.videoQuality, size: agentConfig.videoSize }), [agentConfig.videoQuality, agentConfig.videoSize, effectiveConfig]);
+    const videoConfig = useMemo(() => ({ ...effectiveConfig, vquality: agentConfig.videoQuality || effectiveConfig.vquality, size: agentConfig.videoSize || effectiveConfig.videoSize }), [agentConfig.videoQuality, agentConfig.videoSize, effectiveConfig]);
     const reasoningEnabled = agentConfig.textReasoningEnabled === true;
     const promptReferences = useMemo(() => {
         const seen = new Set<string>();

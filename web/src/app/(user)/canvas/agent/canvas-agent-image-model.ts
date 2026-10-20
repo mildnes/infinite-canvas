@@ -43,3 +43,13 @@ export function applyCanvasAgentImageSelection(config: AiConfig, selection: Pick
         imageOutputFormat: selection.imageOutputFormat || config.imageOutputFormat || "auto",
     };
 }
+
+export function applyCanvasAgentGenerationDefaults(config: AiConfig, agentConfig: CanvasAgentConfig): AiConfig {
+    return {
+        ...applyCanvasAgentImageSelection(config, agentConfig),
+        quality: agentConfig.imageQuality || config.quality,
+        size: agentConfig.imageSize || config.size,
+        vquality: agentConfig.videoQuality || config.vquality,
+        videoSize: agentConfig.videoSize || config.videoSize,
+    };
+}
