@@ -6,6 +6,7 @@
 - [功能介绍](overview/features.md)
 - [Docker 部署](overview/docker.md)
 - [第三方 GitHub 提示词仓库](overview/third-party-prompt-repositories.md)
+- [GitHub 镜像上传](overview/github-mirror.md)
 
 ## 操作手册
 

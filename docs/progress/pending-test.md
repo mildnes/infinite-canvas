@@ -5,6 +5,12 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
+## GitHub 镜像上传脚本
+
+- [实现] 新增 `scripts/push-github.sh`：从主仓当前开发分支克隆临时仓库，用 `git-filter-repo` 重写历史后推到 GitHub `main`，剔除 `.gitea/`、`outputs/`，并把私有镜像域名替换为 `registry.example.com:4443` 占位符；同时改写 `docs/overview/docker.md` 中指向已删除 CI 文件的句子，GitHub 副本不再出现失效路径。可用 `BRANCH`／`UPSTREAM`／`GITHUB_URL`／`SOURCE_REPO` 覆盖默认值。
+- [实现] 新增 `docs/overview/github-mirror.md` 说明 GitHub 只作上传、剔除内容与强推注意事项，并加入 `docs/index.md` 索引。
+- [本机验证] `bash -n` 语法通过；对本地裸仓库跑通一次完整流程：GitHub 副本树中 `.gitea`／`outputs` 前缀 0 条，重写后全部历史 blob 搜私有域名 0 处，`docs/overview/docker.md` 改写句已生效。真实 GitHub `main` 已按同规则更新，GitHub Actions 在仓库设置中关闭，推送后工作流运行数为 0。未验证 GitHub 网页渲染效果。
+
 ## 画布 Agent 生成默认值
 
 - [实现] 画布从当前项目 Agent 配置派生图片/视频生成默认值，包含图片模型、渠道、质量、尺寸、输出格式及视频清晰度/尺寸；普通节点、配置节点、文本转图片、局部编辑、角度生成、重试和画板设置面板共用该默认值。节点 metadata 中的显式参数仍优先，节点级覆盖不会被 Agent 默认值改写。
