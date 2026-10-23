@@ -10,7 +10,7 @@ type CanvasNodeSpec = {
 };
 
 export const NODE_DEFAULT_SIZE = {
-    [CanvasNodeType.Image]: { width: 340, height: 240, title: "图片" },
+    [CanvasNodeType.Image]: { width: 420, height: 236, title: "图片" },
     [CanvasNodeType.Panorama]: { ...PANORAMA_NODE_SIZE, title: "全景图" },
     [CanvasNodeType.Text]: { width: 340, height: 240, title: "文本" },
     [CanvasNodeType.Config]: { width: 440, height: 240, title: "生成配置" },

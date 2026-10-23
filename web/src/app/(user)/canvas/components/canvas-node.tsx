@@ -68,7 +68,7 @@ type CanvasNodeProps = {
     onHoverStart: (nodeId: string) => void;
     onHoverEnd: (nodeId: string) => void;
     onConnectStart: (event: React.MouseEvent, nodeId: string, handleType: "source" | "target") => void;
-    onResize: (nodeId: string, width: number, height: number, position?: Position) => void;
+    onResize: (nodeId: string, width: number, height: number, position?: Position, loadedNode?: CanvasNodeData) => void;
     onContentChange: (nodeId: string, content: string) => void;
     onTitleChange: (nodeId: string, title: string) => void;
     onToggleBatch?: (nodeId: string) => void;
@@ -102,6 +102,7 @@ type NodeContentRendererProps = {
     onToggleBatch?: () => void;
     onSetBatchPrimary?: () => void;
     onMoveStart?: (event: React.MouseEvent<HTMLButtonElement>) => void;
+    onMediaLoaded?: (node: CanvasNodeData, width: number, height: number) => void;
 };
 
 export const CanvasNode = React.memo(function CanvasNode({
@@ -167,6 +168,10 @@ export const CanvasNode = React.memo(function CanvasNode({
         startTop: 0,
         startWidth: 0,
         startHeight: 0,
+        currentLeft: 0,
+        currentTop: 0,
+        currentWidth: 0,
+        currentHeight: 0,
         keepRatio: false,
         ratio: 1,
     });
@@ -267,19 +272,27 @@ export const CanvasNode = React.memo(function CanvasNode({
                 }
             }
 
-            onResize(data.id, width, height, {
+            const position = {
                 x: fromLeft ? startRight - width : resizeRef.current.startLeft,
                 y: fromTop ? startBottom - height : resizeRef.current.startTop,
-            });
+            };
+            resizeRef.current.currentLeft = position.x;
+            resizeRef.current.currentTop = position.y;
+            resizeRef.current.currentWidth = width;
+            resizeRef.current.currentHeight = height;
+            onResize(data.id, width, height, position);
         },
         [data.id, onResize, scale],
     );
 
     const handleResizeUp = useCallback(() => {
+        if (!resizeRef.current.isResizing) return;
+        const { currentLeft, currentTop, currentWidth, currentHeight } = resizeRef.current;
         resizeRef.current.isResizing = false;
+        onResize(data.id, currentWidth, currentHeight, { x: currentLeft, y: currentTop }, { ...data, metadata: { ...data.metadata, freeResize: true } });
         window.removeEventListener("mousemove", handleResizeMove);
         window.removeEventListener("mouseup", handleResizeUp);
-    }, [handleResizeMove]);
+    }, [data, handleResizeMove, onResize]);
 
     const handleResizeMouseDown = (event: React.MouseEvent, corner: ResizeCorner) => {
         event.stopPropagation();
@@ -293,6 +306,10 @@ export const CanvasNode = React.memo(function CanvasNode({
             startTop: data.position.y,
             startWidth: data.width,
             startHeight: data.height,
+            currentLeft: data.position.x,
+            currentTop: data.position.y,
+            currentWidth: data.width,
+            currentHeight: data.height,
             keepRatio: (isCanvasImageNodeType(data.type) && !data.metadata?.freeResize) || data.type === CanvasNodeType.Video,
             ratio: (data.metadata?.naturalWidth || data.width) / (data.metadata?.naturalHeight || data.height || 1),
         };
@@ -447,6 +464,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                             onToggleBatch={() => onToggleBatch?.(data.id)}
                             onSetBatchPrimary={() => onSetBatchPrimary?.(data)}
                             onMoveStart={(event) => onMouseDown(event, data.id)}
+                            onMediaLoaded={(node, width, height) => onResize(data.id, width, height, undefined, node)}
                         />
                     ) : null}
                 </div>
@@ -670,6 +688,7 @@ function ImageNodeContent(props: NodeContentRendererProps) {
             batchRecovering={props.batchRecovering}
             onToggleBatch={props.onToggleBatch}
             onSetBatchPrimary={props.onSetBatchPrimary}
+            onMediaLoaded={props.onMediaLoaded}
         />
     );
 }
@@ -689,6 +708,7 @@ function PanoramaNodeContent(props: NodeContentRendererProps) {
             batchRecovering={props.batchRecovering}
             onToggleBatch={props.onToggleBatch}
             onSetBatchPrimary={props.onSetBatchPrimary}
+            onMediaLoaded={props.onMediaLoaded}
             media={<CanvasPanoramaViewer src={src} alt={props.node.title} proxyGeneratedPanorama={proxyGeneratedPanorama} expandOnDoubleClick={!props.isBatchRoot} onMoveStart={props.onMoveStart} onOpen={props.onViewImage ? () => props.onViewImage?.(props.node) : undefined} />}
         />
     );
@@ -735,7 +755,7 @@ function EmptyImageContent({ node, theme, isBatchRoot, batchCount, batchExpanded
 }
 
 function VideoNodeContent(props: NodeContentRendererProps) {
-    const { node, theme, isSelected, onViewImage } = props;
+    const { node, theme, isSelected, onViewImage, onMediaLoaded } = props;
     const videoRef = useRef<HTMLVideoElement>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [mediaDurationMs, setMediaDurationMs] = useState(0);
@@ -770,7 +790,7 @@ function VideoNodeContent(props: NodeContentRendererProps) {
     };
     return (
         <div className="relative h-full w-full overflow-hidden rounded-[18px] bg-black" data-canvas-no-zoom>
-            <video ref={videoRef} src={mediaPlaybackUrl(node.metadata.content)} tabIndex={-1} playsInline preload="metadata" className="h-full w-full object-contain outline-none" onLoadStart={() => { setVideoTime(0); setMediaDurationMs(0); }} onLoadedMetadata={(event) => setMediaDurationMs(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration * 1000 : 0)} onTimeUpdate={(event) => setVideoTime(event.currentTarget.currentTime)} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} onKeyDown={(event) => { if (isSelected && event.code === "Space") { event.preventDefault(); event.stopPropagation(); togglePlayback(); } }} />
+            <video ref={videoRef} src={mediaPlaybackUrl(node.metadata.content)} tabIndex={-1} playsInline preload="metadata" className="h-full w-full object-contain outline-none" onLoadStart={() => { setVideoTime(0); setMediaDurationMs(0); }} onLoadedMetadata={(event) => { const video = event.currentTarget; setMediaDurationMs(Number.isFinite(video.duration) ? video.duration * 1000 : 0); if (video.currentSrc === video.src) onMediaLoaded?.(node, video.videoWidth, video.videoHeight); }} onTimeUpdate={(event) => setVideoTime(event.currentTarget.currentTime)} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} onKeyDown={(event) => { if (isSelected && event.code === "Space") { event.preventDefault(); event.stopPropagation(); togglePlayback(); } }} />
             {mediaDurationMs > 0 ? <span className="pointer-events-none absolute left-2 top-2 z-20 flex h-7 items-center justify-center rounded-md px-2 text-[11px] font-medium opacity-70 backdrop-blur" style={controlStyle}>{new Date(mediaDurationMs).toISOString().slice(mediaDurationMs >= 3_600_000 ? 11 : 14, 19)}</span> : null}
             <button type="button" title={isPlaying ? "暂停" : "播放"} aria-label={isPlaying ? "暂停" : "播放"} className={`${controlClassName} left-2`} style={controlStyle} onClick={(event) => { event.stopPropagation(); togglePlayback(); }} onMouseDown={keepVideoFocus} onDoubleClick={(event) => event.stopPropagation()}>
                 {isPlaying ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
@@ -835,6 +855,7 @@ function ImageContent({
     batchRecovering,
     onToggleBatch,
     onSetBatchPrimary,
+    onMediaLoaded,
     media,
 }: {
     node: CanvasNodeData;
@@ -845,6 +866,7 @@ function ImageContent({
     batchRecovering: boolean;
     onToggleBatch?: () => void;
     onSetBatchPrimary?: () => void;
+    onMediaLoaded?: (node: CanvasNodeData, width: number, height: number) => void;
     media?: ReactNode;
 }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
@@ -866,6 +888,7 @@ function ImageContent({
                         onLoad={(event) => {
                             const miss = previewMiss.current;
                             const image = event.currentTarget;
+                            if (image.currentSrc === image.src) onMediaLoaded?.(node, image.naturalWidth, image.naturalHeight);
                             if (!miss || miss.src !== node.metadata?.content || miss.storageKey !== node.metadata?.storageKey || image.getAttribute("src") !== miss.src) return;
                             previewMiss.current = null;
                             backfillStoragePreviewFromOriginal(miss.src, miss.storageKey, miss.token, { width: image.naturalWidth, height: image.naturalHeight });

@@ -32,6 +32,7 @@ import { useUserStore } from "@/stores/use-user-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { cropDataUrl, splitDataUrl, upscaleDataUrl } from "../utils/canvas-image-data";
 import { fitNodeSize, nodeSizeFromRatio } from "../utils/canvas-node-size";
+import { centerResizedNodeSize, resolveGeneratedMediaSize } from "../utils/canvas-generated-media-size";
 import { captureVideoFrame, type VideoFramePosition } from "../utils/canvas-video-frame";
 import { PANORAMA_IMAGE_SIZE, PANORAMA_NODE_SIZE, buildPanoramaPrompt, isCanvasImageNodeType, isPanoramaNodeType } from "../utils/canvas-panorama";
 import { canUploadCanvasMediaToServer, mergeCanvasMediaRepair, nodeNeedsCloudUpload, repairCanvasProjectMedia, reportCanvasLocalOnlyMedia, uploadCanvasNodeToCloud } from "../utils/canvas-media-persistence";
@@ -2228,8 +2229,14 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         [screenToCanvas, setConnecting],
     );
 
-    const handleNodeResize = useCallback((nodeId: string, width: number, height: number, position?: Position) => {
-        setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, width, height, position: position || node.position } : node)));
+    const handleNodeResize = useCallback((nodeId: string, width: number, height: number, position?: Position, loadedNode?: CanvasNodeData) => {
+        setNodes((prev) => prev.map((node) => {
+            if (node.id !== nodeId) return node;
+            if (!loadedNode || position) return { ...node, width, height, position: position || node.position, metadata: loadedNode?.metadata?.freeResize ? { ...node.metadata, freeResize: true } : node.metadata };
+            const autoSize = resolveGeneratedMediaSize(node, width, height);
+            if (!autoSize || (node.width === autoSize.width && node.height === autoSize.height)) return node;
+            return { ...node, ...centerResizedNodeSize(node, autoSize) };
+        }));
     }, []);
 
     const toggleNodeFreeResize = useCallback((nodeId: string) => {
