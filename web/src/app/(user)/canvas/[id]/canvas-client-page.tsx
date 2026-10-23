@@ -292,7 +292,7 @@ function NodeCreateMenu({
     }, [onClose]);
 
     return (
-        <div ref={menuRef} className="absolute z-[120] w-[300px] rounded-[18px] border p-3 shadow-2xl backdrop-blur" data-canvas-no-zoom style={{ left: position.x, top: position.y, background: theme.node.panel, borderColor: theme.node.stroke, color: theme.node.text }} onPointerDown={(event) => event.stopPropagation()}>
+        <div ref={menuRef} className="absolute z-[120] w-[300px] rounded-[18px] border p-3 shadow-2xl backdrop-blur" data-canvas-no-zoom style={{ left: position.x, top: position.y, background: theme.node.panel, borderColor: theme.node.stroke, color: theme.node.text, transform: "scale(calc(var(--canvas-inverse-scale) * 0.9))", transformOrigin: "top left" }} onPointerDown={(event) => event.stopPropagation()}>
             <div className="mb-2 flex items-center justify-between px-1">
                 <span className="text-sm font-medium" style={{ color: theme.node.muted }}>添加节点</span>
                 <button type="button" className="grid size-7 place-items-center rounded-lg opacity-55 transition hover:opacity-100" onClick={onClose} aria-label="关闭">×</button>
