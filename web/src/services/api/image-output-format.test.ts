@@ -39,7 +39,7 @@ test("real image entry points use remote declarations without guessing custom mo
                     }],
                 };
                 sentRequests.length = 0;
-                await assert.rejects(() => run(config, "scene", run === requestEdit ? [reference] : []));
+                await assert.rejects(() => run === requestGeneration ? requestGeneration(config, "scene") : run === requestEdit ? requestEdit(config, "scene", [reference]) : createCanvasImageTask(config, "scene", []));
                 const sent = sentRequests[0];
                 assert.ok(sent);
                 if (sent.body instanceof FormData) {

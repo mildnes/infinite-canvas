@@ -9,7 +9,7 @@ import { isMimoChannel, mimoModels } from "@/lib/mimo-tts";
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig, normalizeGeminiBaseUrl } from "@/lib/gemini";
 import { imageOutputCapabilityForConfig, resolveImageOutputFormat, type ImageOutputFormat } from "@/lib/image-output-format";
 import { createImageOutputNoticeGate, imageOutputNoticeText, shouldNotifyImageOutputNotice } from "@/lib/image-output-notice";
-import { autoSyncImage, imageToDataUrl, resolveImageUrl, type UploadedImage } from "@/services/image-storage";
+import { autoSyncImage, imageToDataUrl, resolveImageUrl, type GeneratedImageOwner, type UploadedImage } from "@/services/image-storage";
 import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { externalMediaURL } from "@/lib/external-media-url";
@@ -99,6 +99,7 @@ export class ImageRequestError extends Error {
 
 type ImageRequestParams = {
     signal?: AbortSignal;
+    owner?: GeneratedImageOwner;
     n: number;
     quality: string;
     size?: string;
@@ -586,14 +587,18 @@ function retryDelay(attempt: number) {
     return 700 * attempt;
 }
 
-async function requestWithTransientRetry(run: () => Promise<Response>, retries = 2) {
+async function requestWithTransientRetry(run: () => Promise<Response>, retries = 2, owner?: GeneratedImageOwner) {
+    const active = () => !owner || useUserStore.getState().token === owner.ownerToken && (owner.active?.() ?? true);
     let lastError: unknown;
     for (let attempt = 0; attempt <= retries; attempt += 1) {
+        if (!active()) throw new Error("登录状态已变化");
         try {
             const response = await run();
+            if (!active()) throw new Error("登录状态已变化");
             if (!isTransientStatus(response.status) || attempt === retries) return response;
             lastError = new Error(`上游接口临时不可用：${response.status}`);
         } catch (error) {
+            if (!active()) throw error;
             lastError = error;
             if (attempt === retries) throw error;
         }
@@ -884,6 +889,7 @@ async function requestImageGenerationSingle(config: AiConfig & { seedIndex?: num
                             signal: params.signal ? AbortSignal.any([signal, params.signal]) : signal,
                         }),
                     ),
+                    2, params.owner,
                 ),
             async (response, responseMime) => {
                 if (config.streamImages && isEventStreamResponse(response)) {
@@ -894,6 +900,7 @@ async function requestImageGenerationSingle(config: AiConfig & { seedIndex?: num
                 const images = parseImagePayload(payload, responseMime);
                 return { images, responseBody: stringifyLogPayload(payload) };
             },
+            "images", params.owner,
         );
     }
 
@@ -907,6 +914,7 @@ async function requestImageGenerationSingle(config: AiConfig & { seedIndex?: num
     const directProvider = !usesAccountProxy(config) ? directAIProviderForConfig(config) : null;
     if (directProvider) {
         const { requestDirectImages } = await import("@/services/api/direct-ai");
+        if (params.owner && (useUserStore.getState().token !== params.owner.ownerToken || params.owner.active?.() === false)) throw new Error("登录状态已变化");
         return parseImagePayload(await requestDirectImages(config, directProvider, "/images/generations", body, params.timeoutSeconds, params.signal), mime);
     }
 
@@ -925,6 +933,7 @@ async function requestImageGenerationSingle(config: AiConfig & { seedIndex?: num
                         signal: params.signal ? AbortSignal.any([signal, params.signal]) : signal,
                     }),
                 ),
+                2, params.owner,
             ),
         async (response, responseMime) => {
             if (config.streamImages && isEventStreamResponse(response)) {
@@ -934,6 +943,7 @@ async function requestImageGenerationSingle(config: AiConfig & { seedIndex?: num
             const payload = (await response.json()) as ImageApiResponse;
             return { images: parseImagePayload(payload, responseMime), responseBody: stringifyLogPayload(payload) };
         },
+        "images", params.owner,
     );
 }
 
@@ -970,6 +980,7 @@ async function requestGrokImageEditSingle(config: AiConfig, prompt: string, refe
                         signal: params.signal ? AbortSignal.any([signal, params.signal]) : signal,
                     }),
                 ),
+                2, params.owner,
             ),
         async (response, responseMime) => {
             if (config.streamImages && isEventStreamResponse(response)) {
@@ -979,6 +990,7 @@ async function requestGrokImageEditSingle(config: AiConfig, prompt: string, refe
             const payload = (await response.json()) as ImageApiResponse;
             return { images: parseImagePayload(payload, responseMime), responseBody: stringifyLogPayload(payload) };
         },
+        "images", params.owner,
     );
 }
 
@@ -1007,6 +1019,7 @@ async function requestImageEditSingle(config: AiConfig, prompt: string, referenc
     const directProvider = !usesAccountProxy(config) ? directAIProviderForConfig(config) : null;
     if (directProvider) {
         const { requestDirectImages } = await import("@/services/api/direct-ai");
+        if (params.owner && (useUserStore.getState().token !== params.owner.ownerToken || params.owner.active?.() === false)) throw new Error("登录状态已变化");
         return parseImagePayload(await requestDirectImages(config, directProvider, "/images/edits", formData, params.timeoutSeconds, params.signal), mime);
     }
 
@@ -1025,6 +1038,7 @@ async function requestImageEditSingle(config: AiConfig, prompt: string, referenc
                         signal: params.signal ? AbortSignal.any([signal, params.signal]) : signal,
                     }),
                 ),
+                2, params.owner,
             ),
         async (response, responseMime) => {
             if (config.streamImages && isEventStreamResponse(response)) {
@@ -1034,6 +1048,7 @@ async function requestImageEditSingle(config: AiConfig, prompt: string, referenc
             const payload = (await response.json()) as ImageApiResponse;
             return { images: parseImagePayload(payload, responseMime), responseBody: stringifyLogPayload(payload) };
         },
+        "images", params.owner,
     );
 }
 
@@ -1114,6 +1129,7 @@ async function requestResponsesSingle(config: AiConfig, prompt: string, inputIma
                         signal: params.signal ? AbortSignal.any([signal, params.signal]) : signal,
                     }),
                 ),
+                2, params.owner,
             ),
         async (response, responseMime) => {
             if (config.streamImages && isEventStreamResponse(response)) {
@@ -1123,7 +1139,7 @@ async function requestResponsesSingle(config: AiConfig, prompt: string, inputIma
             const payload = (await response.json()) as ResponsesApiResponse;
             return { images: parseResponsesPayload(payload, responseMime), responseBody: stringifyLogPayload(payload) };
         },
-        "responses",
+        "responses", params.owner,
     );
 }
 
@@ -1139,23 +1155,27 @@ async function requestChatImagesSingle(config: AiConfig, prompt: string, inputIm
             headers: aiHeaders(config, "application/json"),
             body: JSON.stringify(body),
             signal: params.signal ? AbortSignal.any([signal, params.signal]) : signal,
-        }))),
+        })), 2, params.owner),
         async (response, responseMime) => {
             const payload = await response.json() as ChatImagesApiResponse;
             return { images: parseChatImagesPayload(payload, responseMime), responseBody: stringifyLogPayload(payload) };
         },
-        "chat",
+        "chat", params.owner,
     );
 }
 
-async function requestAndParseImages(config: AiConfig, endpoint: string, requestBody: unknown, timeoutSeconds: number, fetchResponse: () => Promise<Response>, parseResponse: (response: Response, mime: string) => Promise<ParsedImageResponse>, requestInterface: ImageOutputRequestInterface = "images") {
+async function requestAndParseImages(config: AiConfig, endpoint: string, requestBody: unknown, timeoutSeconds: number, fetchResponse: () => Promise<Response>, parseResponse: (response: Response, mime: string) => Promise<ParsedImageResponse>, requestInterface: ImageOutputRequestInterface = "images", owner?: GeneratedImageOwner) {
+    const active = () => !owner || useUserStore.getState().token === owner.ownerToken && (owner.active?.() ?? true);
     const startedAt = Date.now();
     const requestOwner = captureImageRequestOwner();
     let logged = false;
     try {
+        if (!active()) throw new Error("登录状态已变化");
         const response = await fetchResponse();
+        if (!active()) throw new Error("登录状态已变化");
         if (!response.ok) {
             const error = await fetchErrorDetail(response, "请求失败");
+            if (!active()) throw new Error("登录状态已变化");
             logged = true;
             void writeLocalAICallLog(config, endpoint, startedAt, response.status, timeoutSeconds, stringifyLogPayload(requestBody), stringifyLogPayload(error.detail || error.message), error.message);
             throw new ImageRequestError(error.message, error.detail);
@@ -1163,26 +1183,31 @@ async function requestAndParseImages(config: AiConfig, endpoint: string, request
         notifyImageOutputFallback(response, config, requestOwner);
         notifyImageQualityFallback(response, config, requestOwner);
         const parsed = await parseResponse(response, imageResponseMimeFromHeader(response, imageResponseMime(config, requestInterface)));
+        if (!active()) throw new Error("登录状态已变化");
         logged = true;
         void writeLocalAICallLog(config, endpoint, startedAt, response.status, timeoutSeconds, stringifyLogPayload(requestBody), parsed.responseBody, "");
         return parsed.images;
     } catch (error) {
-        if (!logged) {
+        if (!logged && active()) {
             void writeLocalAICallLog(config, endpoint, startedAt, 0, timeoutSeconds, stringifyLogPayload(requestBody), "", error instanceof ImageRequestError ? error.detail || error.message : error instanceof Error ? error.message : "请求失败");
         }
         throw error;
     }
 }
 
-async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[], signal?: AbortSignal): Promise<GeneratedImage[]> {
+async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[], signal?: AbortSignal, owner?: GeneratedImageOwner): Promise<GeneratedImage[]> {
+    const active = () => !owner || useUserStore.getState().token === owner.ownerToken && (owner.active?.() ?? true);
+    if (!active()) throw new Error("登录状态已变化");
     signal?.throwIfAborted();
     assertImageReferencesSupported(config.model, references);
     const params = createImageRequestParams(config);
     params.signal = signal;
+    params.owner = owner;
     const inputImageDataUrls = references.length ? await Promise.all(references.map((image) => imageToDataUrl(image))) : [];
+    if (!active()) throw new Error("登录状态已变化");
     const useConcurrentSingleRequests = isGeminiConfig(config) || config.apiMode === "responses" || config.apiMode === "chat" || config.codexCli || config.streamImages || isZhipuImageModel(config.model);
     if (params.n > 1 && useConcurrentSingleRequests) {
-        const results = await Promise.allSettled(Array.from({ length: params.n }, () => requestImages({ ...config, count: "1" }, prompt, references, signal)));
+        const results = await Promise.allSettled(Array.from({ length: params.n }, () => requestImages({ ...config, count: "1" }, prompt, references, signal, owner)));
         const images = results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
         if (images.length) return images;
         const firstError = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
@@ -1196,9 +1221,12 @@ async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?
     return references.length ? requestImageEditSingle(config, prompt, references, params) : requestImageGenerationSingle(config, prompt, params);
 }
 
-async function syncGeneratedImages(images: GeneratedImage[]) {
+async function syncGeneratedImages(images: GeneratedImage[], owner?: GeneratedImageOwner) {
+    const active = () => !owner || useUserStore.getState().token === owner.ownerToken && (owner.active?.() ?? true);
     return Promise.all(images.map(async (image) => {
-        const stored = await autoSyncImage(image.dataUrl, image.id, image.storageKey);
+        if (!active()) throw new Error("登录状态已变化");
+        const stored = await autoSyncImage(image.dataUrl, image.id, image.storageKey, owner);
+        if (!active()) throw new Error("登录状态已变化");
         return stored
             ? { id: image.id, dataUrl: stored.url, seed: image.seed, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType }
             : image;
@@ -1240,22 +1268,28 @@ function normalizeCanvasTaskOutputMime(task: CanvasImageTask, mime: string) {
     };
 }
 
-export async function requestGeneration(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string) {
+export async function requestGeneration(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, owner: GeneratedImageOwner = { ownerToken: useUserStore.getState().token }) {
+    const active = () => useUserStore.getState().token === owner.ownerToken && (owner.active?.() ?? true);
     try {
-        const images = await requestImages(config, prompt, []);
+        if (!active()) throw new Error("登录状态已变化");
+        const images = await requestImages(config, prompt, [], undefined, owner);
+        if (!active()) throw new Error("登录状态已变化");
         refreshRemoteUser(config);
-        return syncGeneratedImages(images);
+        return syncGeneratedImages(images, owner);
     } catch (error) {
         if (error instanceof ImageRequestError) throw error;
         throw new Error(error instanceof Error ? error.message : "请求失败");
     }
 }
 
-export async function requestEdit(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[]) {
+export async function requestEdit(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[], owner: GeneratedImageOwner = { ownerToken: useUserStore.getState().token }) {
+    const active = () => useUserStore.getState().token === owner.ownerToken && (owner.active?.() ?? true);
     try {
-        const images = await requestImages(config, prompt, references);
+        if (!active()) throw new Error("登录状态已变化");
+        const images = await requestImages(config, prompt, references, undefined, owner);
+        if (!active()) throw new Error("登录状态已变化");
         refreshRemoteUser(config);
-        return syncGeneratedImages(images);
+        return syncGeneratedImages(images, owner);
     } catch (error) {
         if (error instanceof ImageRequestError) throw error;
         throw new Error(error instanceof Error ? error.message : "请求失败");
@@ -1538,12 +1572,13 @@ async function requestGeminiImageSingle(config: AiConfig, prompt: string, refere
         () => requestWithTransientRetry(() => withTimeout(params.timeoutSeconds, (signal) => fetch(
             proxy ? `/api/v1${references.length ? "/images/edits" : "/images/generations"}` : geminiActionUrl(channel?.baseUrl || config.baseUrl, config.model, "generateContent"),
             { method: "POST", headers: proxy ? aiHeaders(config, "application/json") : geminiDirectHeaders(config), body: JSON.stringify(nativeBody), signal: params.signal ? AbortSignal.any([signal, params.signal]) : signal },
-        ))),
+        )), 2, params.owner),
         async (response) => {
             const payload = await response.json() as Record<string, unknown>;
             const images = parseGeminiImages(payload);
             return { images, responseBody: stringifyLogPayload(payload) };
         },
+        "images", params.owner,
     );
 }
 
@@ -1760,6 +1795,7 @@ async function requestAgnesImageEdit(config: AiConfig & { seedIndex?: number; se
                         signal: params.signal ? AbortSignal.any([signal, params.signal]) : signal,
                     }),
                 ),
+                2, params.owner,
             ),
         async (response, responseMime) => {
             if (config.streamImages && isEventStreamResponse(response)) {
@@ -1770,6 +1806,7 @@ async function requestAgnesImageEdit(config: AiConfig & { seedIndex?: number; se
             const images = parseImagePayload(payload, responseMime);
             return { images, responseBody: stringifyLogPayload(payload) };
         },
+        "images", params.owner,
     );
 }
 

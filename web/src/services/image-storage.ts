@@ -21,6 +21,7 @@ export type UploadedImage = {
     bytes: number;
     mimeType: string;
 };
+export type GeneratedImageOwner = { ownerToken: string; active?: () => boolean };
 
 type UserStorageProviderBase = {
     enabled: boolean;
@@ -88,8 +89,8 @@ function storageProviderIdentity(config: StorageConfig) {
     });
 }
 
-function autoSyncIdentity(config: StorageConfig) {
-    const token = useUserStore.getState().token || "anonymous";
+function autoSyncIdentity(config: StorageConfig, ownerToken = useUserStore.getState().token) {
+    const token = ownerToken || "anonymous";
     return `${token}:${storageProviderIdentity(config)}`;
 }
 
@@ -98,15 +99,18 @@ function autoSyncIdentity(config: StorageConfig) {
  * automatic cloud synchronization. The caller keeps its original local or
  * remote media whenever this returns null.
  */
-export async function autoSyncToCloud<T extends AutoSyncResult>(source: string | Blob, upload: () => Promise<T | null>): Promise<T | null> {
+export async function autoSyncToCloud<T extends AutoSyncResult>(source: string | Blob, upload: () => Promise<T | null>, owner?: GeneratedImageOwner): Promise<T | null> {
+    const ownerToken = owner?.ownerToken ?? useUserStore.getState().token;
+    const active = () => useUserStore.getState().token === ownerToken && (owner?.active?.() ?? true);
+    if (!active()) throw new Error("登录状态已变化");
     const config = await loadStorageConfig().catch(() => null);
+    if (!active()) throw new Error("登录状态已变化");
     if (!config?.autoSyncAllAssets || (!canUseGlobalStorage(config) && !(config.allowUserProvider && loadUserStorageProvider()))) return null;
 
-    const ownerToken = useUserStore.getState().token;
-    const owner = autoSyncIdentity(config);
-    if (autoSyncOwner !== owner) {
+    const ownerIdentity = autoSyncIdentity(config, ownerToken);
+    if (autoSyncOwner !== ownerIdentity) {
         autoSyncRequests.clear();
-        autoSyncOwner = owner;
+        autoSyncOwner = ownerIdentity;
     }
     let sourceId: string;
     if (typeof source === "string") {
@@ -115,11 +119,12 @@ export async function autoSyncToCloud<T extends AutoSyncResult>(source: string |
         sourceId = autoSyncBlobIds.get(source) || `blob:${++autoSyncBlobSequence}`;
         autoSyncBlobIds.set(source, sourceId);
     }
-    const key = `${owner}:${sourceId}`;
+    const key = `${ownerIdentity}:${sourceId}`;
     const result = await autoSyncRequests.run(key, () => upload().catch((error) => {
-        reportStorageSyncFailure(error);
+        if (active()) reportStorageSyncFailure(error);
         return null;
     }), typeof source === "string") as T | null;
+    if (!active()) throw new Error("登录状态已变化");
     if (result?.storageKey.startsWith("server:") && typeof window !== "undefined") {
         window.dispatchEvent(new CustomEvent(STORAGE_SYNC_COMPLETED_EVENT, { detail: { storageKey: result.storageKey, url: result.url || "", ownerToken } }));
     }
@@ -147,20 +152,27 @@ export function canUseGlobalStorage(config: StorageConfig) {
     return config.mode === "server_sqlite_s3" && Boolean(user && user.role !== "guest" && (user.role === "admin" || config.allowUserGlobalProvider));
 }
 
-export async function autoSyncImage(url: string, resultId: string, storageKey?: string): Promise<UploadedImage | null> {
+export async function autoSyncImage(url: string, resultId: string, storageKey?: string, owner?: GeneratedImageOwner): Promise<UploadedImage | null> {
+    const ownerToken = owner?.ownerToken ?? useUserStore.getState().token;
+    const active = () => useUserStore.getState().token === ownerToken && (owner?.active?.() ?? true);
+    if (!active()) throw new Error("登录状态已变化");
     if (!url || storageKey) return null;
-    const ownerToken = useUserStore.getState().token;
     if (ownerToken) {
         return generatedImageRequests.run(`generated:${ownerToken}:image:${resultId}`, async () => {
+            if (!active()) throw new Error("登录状态已变化");
             const response = await fetch(getProxyUrl(url));
             if (!response.ok) throw new Error(`生成图片下载失败：${response.status}`);
-            return persistGeneratedImageBlob(await response.blob(), "image", url, ownerToken);
+            const blob = await response.blob();
+            if (!active()) throw new Error("登录状态已变化");
+            return persistGeneratedImageBlob(blob, "image", url, ownerToken);
         }, true);
     }
     return autoSyncToCloud(`image:${resultId}`, async () => {
         try {
-            return await uploadRemoteImageToServer(url, "image");
+            if (!active()) throw new Error("登录状态已变化");
+            return await uploadRemoteImageToServer(url, "image", ownerToken);
         } catch (error) {
+            if (!active()) throw error;
             // Keep data/blob results usable even if the cloud provider rejects
             // the upload. The caller receives a local IndexedDB reference.
             if (url.startsWith("data:") || url.startsWith("blob:")) {
@@ -170,7 +182,7 @@ export async function autoSyncImage(url: string, resultId: string, storageKey?: 
             }
             throw error;
         }
-    });
+    }, { ownerToken, active });
 }
 
 function isLocalNetworkHost(hostname: string) {
@@ -270,6 +282,7 @@ export async function uploadRemoteImageToServer(url: string, filename: string, t
     if (useUserStore.getState().token !== ownerToken) throw new Error("登录状态已变化");
     if (ownerToken) return persistGeneratedImageBlob(blob, filename, url, ownerToken);
     const config = await loadStorageConfig();
+    if (useUserStore.getState().token !== ownerToken) throw new Error("登录状态已变化");
     const userProvider = config.allowUserProvider ? loadUserStorageProvider() : null;
     if (!canUseGlobalStorage(config) && !userProvider) throw new Error("服务端对象存储未启用");
     if (userProvider?.type === "webdav") {
@@ -293,6 +306,7 @@ export async function uploadRemoteImageToServer(url: string, filename: string, t
 }
 
 async function persistGeneratedImageBlob(blob: Blob, filename: string, sourceUrl: string, ownerToken: string): Promise<UploadedImage> {
+    assertGeneratedMediaOwner(useUserStore.getState().token, ownerToken);
     const preview = prepareImagePreview(blob);
     const formData = new FormData();
     formData.append("file", blob, filename || "generated-image");

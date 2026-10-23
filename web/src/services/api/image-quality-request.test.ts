@@ -37,7 +37,7 @@ test("Codex compatibility preserves all six qualities in real workbench and canv
             for (const { value } of IMAGE_QUALITY_OPTIONS) {
                 const config = { ...defaultConfig, channelMode: "remote" as const, model: "custom-image", imageModel: "custom-image", apiMode: scenario.apiMode, codexCli, quality: value, count: "1", size: "1024x1024" };
                 sentRequests.length = 0;
-                await assert.rejects(() => scenario.run(config, "test scene", scenario.references ? [reference] : []));
+                await assert.rejects(() => scenario.run === requestGeneration ? requestGeneration(config, "test scene") : scenario.run === requestEdit ? requestEdit(config, "test scene", [reference]) : createCanvasImageTask(config, "test scene", scenario.references ? [reference] : []));
                 const sent = sentRequests[0];
                 assert.ok(sent, `${scenario.name} should send a request`);
                 if (sent.body instanceof FormData) {

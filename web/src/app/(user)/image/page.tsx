@@ -1312,7 +1312,8 @@ export default function ImagePage() {
         const itemStartedAt = performance.now();
         try {
             if (!active()) throw new Error("登录状态已变化");
-            const result = snapshot.references.length ? await requestEdit(snapshot.requestConfig, snapshot.text, snapshot.references) : await requestGeneration(snapshot.requestConfig, snapshot.text);
+            const owner = { ownerToken: token, active };
+            const result = snapshot.references.length ? await requestEdit(snapshot.requestConfig, snapshot.text, snapshot.references, owner) : await requestGeneration(snapshot.requestConfig, snapshot.text, owner);
             if (!active()) throw new Error("登录状态已变化");
             const image = result[0];
             if (!image) throw new Error("接口没有返回图片");
