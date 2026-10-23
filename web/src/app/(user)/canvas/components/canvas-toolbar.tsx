@@ -1,7 +1,7 @@
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode, RefObject } from "react";
 import { useRef, useState } from "react";
 import { Button, Segmented, Switch } from "antd";
-import { CircleDot, Download, Eraser, FolderOpen, Globe2, Grid2x2, Hand, Image as ImageIcon, Info, Layers3, Library, Moon, MousePointer2, Music2, Palette, Redo2, Settings2, Square, Sun, Trash2, Type, Undo2, Upload, Video } from "lucide-react";
+import { CircleDot, Download, Eraser, FolderOpen, Globe2, Grid2x2, Hand, Image as ImageIcon, Info, LayoutGrid, Layers3, Library, Link2, Link2Off, Magnet, Moon, MousePointer2, Music2, Palette, Redo2, Settings2, Square, Sun, Trash2, Type, Undo2, Upload, Video } from "lucide-react";
 
 import { canvasThemes, type CanvasBackgroundMode, type CanvasColorTheme, type CanvasTheme } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -14,6 +14,8 @@ export function CanvasToolbar({
     canRedo,
     backgroundMode,
     showImageInfo,
+    showConnections,
+    snapToGrid,
     onAddImage,
     onAddVideo,
     onAddAudio,
@@ -31,6 +33,9 @@ export function CanvasToolbar({
     onCanvasToolChange,
     onBackgroundModeChange,
     onShowImageInfoChange,
+    onShowConnectionsChange,
+    onSnapToGridChange,
+    onArrangeCanvas,
     onOpenAssetLibrary,
     onOpenMyAssets,
 }: {
@@ -40,6 +45,8 @@ export function CanvasToolbar({
     canRedo: boolean;
     backgroundMode: CanvasBackgroundMode;
     showImageInfo: boolean;
+    showConnections?: boolean;
+    snapToGrid?: boolean;
     onAddImage: () => void;
     onAddVideo: () => void;
     onAddAudio: () => void;
@@ -57,6 +64,9 @@ export function CanvasToolbar({
     onCanvasToolChange: (tool: "select" | "pan") => void;
     onBackgroundModeChange: (mode: CanvasBackgroundMode) => void;
     onShowImageInfoChange: (show: boolean) => void;
+    onShowConnectionsChange?: (show: boolean) => void;
+    onSnapToGridChange?: (snap: boolean) => void;
+    onArrangeCanvas?: () => void;
     onOpenAssetLibrary: () => void;
     onOpenMyAssets: () => void;
 }) {
@@ -71,7 +81,7 @@ export function CanvasToolbar({
     const dockStyle = { background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.toolbar.item, boxShadow: colorTheme === "dark" ? "0 18px 45px rgba(0,0,0,.32)" : "0 16px 40px rgba(28,25,23,.12)" };
     const hoverStyle = { background: theme.toolbar.itemHover, color: theme.toolbar.activeText };
     const activeStyle = { background: theme.toolbar.activeBg, color: theme.toolbar.activeText };
-    const tip = hovered ? toolLabel(hovered) : "";
+    const tip = hovered ? toolLabel(hovered, showConnections) : "";
 
     return (
         <div className="pointer-events-none absolute bottom-5 z-50 flex justify-center" style={{ left: 300, right: 16 }}>
@@ -140,6 +150,16 @@ export function CanvasToolbar({
                 >
                     <Palette className="size-4.5" />
                 </ToolbarButton>
+                {onArrangeCanvas ? (
+                    <ToolbarButton id="tool-arrange" label="整理画板" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onArrangeCanvas}>
+                        <LayoutGrid className="size-4.5" />
+                    </ToolbarButton>
+                ) : null}
+                {typeof showConnections === "boolean" && onShowConnectionsChange ? (
+                    <ToolbarButton id="tool-connections" label={showConnections ? "隐藏节点连线" : "显示节点连线"} hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={() => onShowConnectionsChange(!showConnections)}>
+                        {showConnections ? <Link2 className="size-4.5" /> : <Link2Off className="size-4.5" />}
+                    </ToolbarButton>
+                ) : null}
                 {selectedCount ? (
                     <>
                         <Divider theme={theme} />
@@ -209,6 +229,24 @@ export function CanvasToolbar({
                             },
                         ]}
                     />
+                    {typeof snapToGrid === "boolean" && onSnapToGridChange ? (
+                        <div className="mt-3 flex items-center justify-between gap-3 rounded-lg px-1.5 py-1">
+                            <span className="inline-flex min-w-0 items-center gap-1.5 text-[11px] font-medium opacity-65">
+                                <Magnet className="size-3.5" />
+                                网格吸附 48px
+                            </span>
+                            <Switch size="small" checked={snapToGrid} onChange={onSnapToGridChange} />
+                        </div>
+                    ) : null}
+                    {typeof showConnections === "boolean" && onShowConnectionsChange ? (
+                        <div className="mt-1 flex items-center justify-between gap-3 rounded-lg px-1.5 py-1">
+                            <span className="inline-flex min-w-0 items-center gap-1.5 text-[11px] font-medium opacity-65">
+                                {showConnections ? <Link2 className="size-3.5" /> : <Link2Off className="size-3.5" />}
+                                显示连线
+                            </span>
+                            <Switch size="small" checked={showConnections} onChange={onShowConnectionsChange} />
+                        </div>
+                    ) : null}
                     <div className="mt-3 flex items-center justify-between gap-3 rounded-lg px-1.5 py-1">
                         <span className="inline-flex min-w-0 items-center gap-1.5 text-[11px] font-medium opacity-65">
                             <Info className="size-3.5" />
@@ -303,7 +341,7 @@ function DockTip({ label, x, theme }: { label: string; x: number; theme: CanvasT
     );
 }
 
-function toolLabel(id: string) {
+function toolLabel(id: string, showConnections?: boolean) {
     if (id === "tool-select") return "选择";
     if (id === "tool-pan") return "移动";
     if (id === "tool-undo") return "撤销";
@@ -320,6 +358,8 @@ function toolLabel(id: string) {
     if (id === "tool-library") return "素材库";
     if (id === "tool-assets") return "我的素材";
     if (id === "tool-style") return "画布外观";
+    if (id === "tool-arrange") return "整理画板";
+    if (id === "tool-connections") return showConnections ? "隐藏节点连线" : "显示节点连线";
     if (id === "tool-download") return "批量下载";
     if (id === "tool-delete") return "删除选中";
     if (id === "tool-clear") return "清空画布";

@@ -6,6 +6,8 @@ import vm from "node:vm";
 import test from "node:test";
 import ts from "typescript";
 
+import { snapNodesToCanvasGrid } from "../app/(user)/canvas/utils/canvas-layout.ts";
+
 const page = readFileSync(new URL("../app/(user)/canvas/[id]/canvas-client-page.tsx", import.meta.url), "utf8");
 const dialog = process.env.CANVAS_STORE_BASELINE
     ? execFileSync("git", ["show", `${process.env.CANVAS_STORE_BASELINE}:web/src/app/(user)/canvas/components/canvas-delete-projects-dialog.tsx`], { cwd: fileURLToPath(new URL("../../..", import.meta.url)), encoding: "utf8" })
@@ -20,15 +22,47 @@ function callback(source, name, context) {
     return exports.run;
 }
 
-test("pointerup persists the final pointer coordinates even before React commits setNodes", () => {
-    let nodes = [{ id: "n", type: "image", position: { x: 10, y: 20 } }];
+function dragContext(snapToGrid) {
+    const nodes = [{ id: "n", type: "image", position: { x: 10, y: 20 } }];
     const writes = [];
     const ref = { current: nodes };
-    const finish = callback(page, "finishNodeDrag", { rafRef: { current: null }, dragRef: { current: { isDraggingNode: true, hasMoved: true, startX: 0, startY: 0, initialSelectedNodes: [{ id: "n", x: 10, y: 20 }], clickedGroupId: null } }, historyPausedRef: { current: true }, nodeDraggingRef: { current: true }, viewportRef: { current: { k: 2 } }, nodesRef: ref, persistCurrentCanvasRef: { current: next => writes.push(next) }, setNodes: updater => { /* React has not committed this queued update yet. */ }, setIsNodeDragging() {}, setDropTargetGroupId() {}, findGroupDropTarget: () => null, findContainingGroupId: () => undefined, CanvasNodeType: { Group: "group" }, setDialogNodeId() {} });
+    const context = {
+        rafRef: { current: null },
+        dragRef: { current: { isDraggingNode: true, hasMoved: true, startX: 0, startY: 0, initialSelectedNodes: [{ id: "n", x: 10, y: 20 }], clickedGroupId: null } },
+        historyPausedRef: { current: true },
+        nodeDraggingRef: { current: true },
+        viewportRef: { current: { k: 2 } },
+        nodesRef: ref,
+        persistCurrentCanvasRef: { current: next => writes.push(next) },
+        setNodes: updater => { /* React has not committed this queued update yet. */ },
+        setIsNodeDragging() {},
+        setDropTargetGroupId() {},
+        findGroupDropTarget: () => null,
+        findContainingGroupId: () => undefined,
+        CanvasNodeType: { Group: "group" },
+        setDialogNodeId() {},
+        snapToGridRef: { current: snapToGrid },
+        snapNodesToCanvasGrid,
+    };
+    return { context, writes };
+}
+
+test("pointerup persists the final pointer coordinates even before React commits setNodes", () => {
+    const { context, writes } = dragContext(false);
+    const finish = callback(page, "finishNodeDrag", context);
     finish(100, 60);
     assert.equal(writes.length, 1);
     assert.equal(writes[0][0].position.x, 60);
     assert.equal(writes[0][0].position.y, 50);
+});
+
+test("grid snap on pointerup moves the node to the nearest grid point before persisting", () => {
+    const { context, writes } = dragContext(true);
+    const finish = callback(page, "finishNodeDrag", context);
+    finish(100, 60);
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0][0].position.x, 48);
+    assert.equal(writes[0][0].position.y, 48);
 });
 
 test("delete dialog waits for remote deletion and keeps selection and local data after failure", async () => {

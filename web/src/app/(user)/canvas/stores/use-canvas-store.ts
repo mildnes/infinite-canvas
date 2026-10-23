@@ -34,6 +34,8 @@ export type CanvasProject = {
     pendingAgentRequest?: CanvasPendingAgentRequest;
     backgroundMode: CanvasBackgroundMode;
     showImageInfo: boolean;
+    showConnections: boolean;
+    snapToGrid: boolean;
     viewport: ViewportTransform;
     sidePanel: CanvasSidePanelState;
     agentPanel: CanvasSidePanelState;
@@ -51,7 +53,7 @@ type CanvasStore = {
     openProject: (id: string) => CanvasProject | null;
     renameProject: (id: string, title: string) => void;
     deleteProjects: (ids: string[]) => Promise<void>;
-    updateProject: (id: string, patch: Partial<Pick<CanvasProject, "nodes" | "connections" | "chatSessions" | "activeChatId" | "agentConfig" | "autoTitlePending" | "backgroundMode" | "showImageInfo" | "viewport" | "sidePanel" | "agentPanel" | "pendingAgentRequest">>) => void;
+    updateProject: (id: string, patch: Partial<Pick<CanvasProject, "nodes" | "connections" | "chatSessions" | "activeChatId" | "agentConfig" | "autoTitlePending" | "backgroundMode" | "showImageInfo" | "showConnections" | "snapToGrid" | "viewport" | "sidePanel" | "agentPanel" | "pendingAgentRequest">>) => void;
     syncWithRemote: (token: string, syncEnabled: boolean) => Promise<void>;
     setSyncEnabled: (enabled: boolean) => void;
     retrySaves: () => Promise<void>;
@@ -411,6 +413,8 @@ export const useCanvasStore = create<CanvasStore>()(
                     pendingAgentRequest: options?.pendingAgentRequest,
                     backgroundMode: "lines",
                     showImageInfo: false,
+                    showConnections: true,
+                    snapToGrid: false,
                     viewport: initialViewport,
                     sidePanel: DEFAULT_CANVAS_SIDE_PANEL,
                     agentPanel: options?.pendingAgentRequest ? { ...DEFAULT_CANVAS_AGENT_PANEL, open: true } : DEFAULT_CANVAS_AGENT_PANEL,
@@ -437,6 +441,8 @@ export const useCanvasStore = create<CanvasStore>()(
                     autoTitlePending: false,
                     backgroundMode: source.backgroundMode || "lines",
                     showImageInfo: source.showImageInfo || false,
+                    showConnections: source.showConnections ?? true,
+                    snapToGrid: source.snapToGrid ?? false,
                     viewport: source.viewport || initialViewport,
                     sidePanel: source.sidePanel || DEFAULT_CANVAS_SIDE_PANEL,
                     agentPanel: source.agentPanel || DEFAULT_CANVAS_AGENT_PANEL,

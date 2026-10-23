@@ -21,7 +21,7 @@ description: 当前项目后续值得处理的事项
 
 ## 前端类型检查后续（独立任务）
 
-- [ ] 清理剩余 4 个 TypeScript 错误：`image-storage.ts` 两处未定义的 `token`、画布工具栏缺 `onEditText`、助手面板 `canvasId`／`onSelectNodeIds` 回调不一致；用户已要求本轮交 Hermes 处理，暂不改变这些运行行为。
+- [x] 剩余 4 个 TypeScript 错误已在 `4a2973b` 修复（`image-storage.ts` 未定义 `token`、工具栏 `onEditText`、助手面板 `canvasId`／`onSelectNodeIds`），`tsc --noEmit` 当前为 0 诊断；真实浏览器交互验收仍由 Hermes 执行。
 
 ## 本轮验收后续
 

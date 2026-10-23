@@ -38,6 +38,7 @@ import { canUploadCanvasMediaToServer, nodeNeedsCloudUpload, repairCanvasProject
 import { applyCameraPrompt } from "../utils/canvas-camera";
 import { canvasMediaRequestPrompt, submitCanvasImageRequest, submitCanvasVideoRequest } from "../utils/canvas-media-requests";
 import { GROUP_PADDING, findContainingGroupId, findGroupDropTarget, getNodeBounds, snapNodesIntoGroup } from "../utils/canvas-group";
+import { arrangeCanvasNodes, snapNodesToCanvasGrid } from "../utils/canvas-layout";
 import { App, Button, Dropdown, Modal, Slider } from "antd";
 import { isCogVideoX3Model, modelKey, supportsVideoAudioGeneration, supportsVideoFrameReferences } from "@/lib/video-model-capabilities";
 import { isMimoVoiceCloneModel } from "@/lib/mimo-tts";
@@ -125,6 +126,7 @@ type PendingPanoramaImport = {
 type CanvasHistoryEntry = Pick<CanvasClipboard, "nodes" | "connections"> & {
     backgroundMode: CanvasBackgroundMode;
     showImageInfo: boolean;
+    showConnections: boolean;
 };
 
 const VIDEO_NODE_MAX_WIDTH = 420;
@@ -403,6 +405,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const [isMiniMapOpen, setIsMiniMapOpen] = useState(false);
     const [backgroundMode, setBackgroundMode] = useState<CanvasBackgroundMode>("lines");
     const [showImageInfo, setShowImageInfo] = useState(false);
+    const [showConnections, setShowConnections] = useState(true);
+    const [snapToGrid, setSnapToGrid] = useState(false);
     const [sidePanel, setSidePanel] = useState(() => DEFAULT_CANVAS_SIDE_PANEL);
     const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
@@ -533,20 +537,22 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     activeProjectIdRef.current = projectId;
     const consumedAgentRequestProjectRef = useRef<string | null>(null);
     const connectionsRef = useRef(connections);
+    const snapToGridRef = useRef(snapToGrid);
+    snapToGridRef.current = snapToGrid;
     const selectedNodeIdsRef = useRef(selectedNodeIds);
     const viewportRef = useRef(viewport);
     const loadedProjectRef = useRef<{ id: string; token: string } | null>(null);
     const restoringProjectRef = useRef(false);
-    const latestCanvasStateRef = useRef({ connections, chatSessions, activeChatId, agentConfig, backgroundMode, showImageInfo, sidePanel, agentPanel });
+    const latestCanvasStateRef = useRef({ connections, chatSessions, activeChatId, agentConfig, backgroundMode, showImageInfo, showConnections, snapToGrid, sidePanel, agentPanel });
     const persistCurrentCanvasRef = useRef<(latestNodes?: CanvasNodeData[]) => void>(() => {});
     useLayoutEffect(() => {
-        latestCanvasStateRef.current = { connections, chatSessions, activeChatId, agentConfig, backgroundMode, showImageInfo, sidePanel, agentPanel };
+        latestCanvasStateRef.current = { connections, chatSessions, activeChatId, agentConfig, backgroundMode, showImageInfo, showConnections, snapToGrid, sidePanel, agentPanel };
         persistCurrentCanvasRef.current = (latestNodes = nodesRef.current) => {
             if (!projectLoaded || restoringProjectRef.current || loadedProjectRef.current?.id !== projectId || loadedProjectRef.current.token !== useUserStore.getState().token) return;
             updateProject(projectId, { ...latestCanvasStateRef.current, nodes: latestNodes, viewport: viewportRef.current });
             void flushCanvasSaves().catch((error) => message.error(error instanceof Error ? error.message : "画布保存失败，请重试"));
         };
-    }, [activeChatId, agentConfig, agentPanel, backgroundMode, chatSessions, connections, message, projectId, projectLoaded, showImageInfo, sidePanel, updateProject]);
+    }, [activeChatId, agentConfig, agentPanel, backgroundMode, chatSessions, connections, message, projectId, projectLoaded, showConnections, showImageInfo, sidePanel, snapToGrid, updateProject]);
 
     useEffect(() => {
         const flush = () => persistCurrentCanvasRef.current();
@@ -574,8 +580,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             connections: connectionsRef.current,
             backgroundMode,
             showImageInfo,
+            showConnections,
         }),
-        [backgroundMode, showImageInfo],
+        [backgroundMode, showConnections, showImageInfo],
     );
 
     const cleanupCanvasFiles = useCallback(
@@ -669,6 +676,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             setAgentConfig(project.agentConfig || null);
             setBackgroundMode(project.backgroundMode);
             setShowImageInfo(project.showImageInfo || false);
+            setShowConnections(project.showConnections ?? true);
+            setSnapToGrid(project.snapToGrid ?? false);
             setViewport(project.viewport);
             setSidePanel(project.sidePanel || DEFAULT_CANVAS_SIDE_PANEL);
             const restoredAgentPanel = project.agentPanel || DEFAULT_CANVAS_AGENT_PANEL;
@@ -684,6 +693,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 connections: project.connections,
                 backgroundMode: project.backgroundMode,
                 showImageInfo: project.showImageInfo || false,
+                showConnections: project.showConnections ?? true,
             };
             setHistoryState({ canUndo: false, canRedo: false });
             loadedProjectRef.current = { id: projectId, token: ownerToken };
@@ -713,7 +723,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         if (!projectLoaded || applyingHistoryRef.current || historyPausedRef.current) return;
         const next = createHistoryEntry();
         const previous = lastHistoryRef.current;
-        if (previous?.nodes === next.nodes && previous.connections === next.connections && previous.backgroundMode === next.backgroundMode && previous.showImageInfo === next.showImageInfo) return;
+        if (previous?.nodes === next.nodes && previous.connections === next.connections && previous.backgroundMode === next.backgroundMode && previous.showImageInfo === next.showImageInfo && previous.showConnections === next.showConnections) return;
 
         if (historyCommitTimerRef.current) clearTimeout(historyCommitTimerRef.current);
         historyCommitTimerRef.current = setTimeout(() => {
@@ -744,12 +754,12 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 historyCommitTimerRef.current = null;
             }
         };
-    }, [backgroundMode, cleanupCanvasFiles, connections, createHistoryEntry, nodes, projectLoaded, showImageInfo]);
+    }, [backgroundMode, cleanupCanvasFiles, connections, createHistoryEntry, nodes, projectLoaded, showConnections, showImageInfo]);
 
     useEffect(() => {
         if (!projectLoaded || historyPausedRef.current || restoringProjectRef.current || loadedProjectRef.current?.id !== projectId || loadedProjectRef.current.token !== useUserStore.getState().token) return;
-        updateProject(projectId, { nodes, connections, chatSessions, activeChatId, agentConfig, backgroundMode, showImageInfo });
-    }, [activeChatId, agentConfig, backgroundMode, chatSessions, connections, nodes, projectId, projectLoaded, showImageInfo, updateProject]);
+        updateProject(projectId, { nodes, connections, chatSessions, activeChatId, agentConfig, backgroundMode, showImageInfo, showConnections, snapToGrid });
+    }, [activeChatId, agentConfig, backgroundMode, chatSessions, connections, nodes, projectId, projectLoaded, showConnections, showImageInfo, snapToGrid, updateProject]);
 
     useEffect(() => {
         if (!projectLoaded) return;
@@ -1417,6 +1427,18 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         return group.id;
     }, []);
 
+    const arrangeCanvas = useCallback(() => {
+        const arranged = arrangeCanvasNodes(nodesRef.current);
+        const changed = arranged.some((node, index) => node.position.x !== nodesRef.current[index].position.x || node.position.y !== nodesRef.current[index].position.y);
+        if (!changed) return;
+        nodesRef.current = arranged;
+        setNodes(arranged);
+        setSelectedConnectionId(null);
+        setContextMenu(null);
+        persistCurrentCanvasRef.current(arranged);
+        message.success("已整理画板");
+    }, [message]);
+
     const copySelectedNodes = useCallback(() => {
         const selectedIds = selectedNodeIdsRef.current;
         if (!selectedIds.size) return;
@@ -1535,6 +1557,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         setConnections(entry.connections);
         setBackgroundMode(entry.backgroundMode);
         setShowImageInfo(entry.showImageInfo);
+        setShowConnections(entry.showConnections);
         setSelectedNodeIds(new Set());
         setSelectedConnectionId(null);
         setContextMenu(null);
@@ -1688,9 +1711,10 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     const groupId = findContainingGroupId(node, moved);
                     return node.metadata?.groupId === groupId ? node : { ...node, metadata: { ...node.metadata, groupId } };
             });
-            nodesRef.current = finalNodes;
-            setNodes(finalNodes);
-            persistCurrentCanvasRef.current(finalNodes);
+            const settledNodes = snapToGridRef.current ? snapNodesToCanvasGrid(finalNodes, movedIds) : finalNodes;
+            nodesRef.current = settledNodes;
+            setNodes(settledNodes);
+            persistCurrentCanvasRef.current(settledNodes);
         } else if (dragRef.current.hasMoved) {
             persistCurrentCanvasRef.current(nodesRef.current);
         }
@@ -4553,7 +4577,7 @@ const generateAngleNode = useCallback(
                     onDrop={handleDrop}
                 >
                     <svg className="absolute left-0 top-0 h-[10000px] w-[10000px] overflow-visible" style={{ pointerEvents: "none", transform: "translateZ(0)", zIndex: 6 }}>
-                        {connections
+                        {showConnections ? (connections
                             .filter((connection) => {
                                 const from = nodeById.get(connection.fromNodeId);
                                 const to = nodeById.get(connection.toNodeId);
@@ -4585,7 +4609,7 @@ const generateAngleNode = useCallback(
                                         }}
                                     />
                                 );
-                            })}
+                            })) : null}
                         {connectingParams ? <ActiveConnectionPath node={nodeById.get(connectingParams.nodeId)} handle={connectingParams} mouseWorld={mouseWorld} target={connectionTargetNodeId ? nodeById.get(connectionTargetNodeId) : undefined} /> : null}
                     </svg>
 
@@ -4783,6 +4807,8 @@ const generateAngleNode = useCallback(
                     canRedo={historyState.canRedo}
                     backgroundMode={backgroundMode}
                     showImageInfo={showImageInfo}
+                    showConnections={showConnections}
+                    snapToGrid={snapToGrid}
                     onAddImage={() => createNode(CanvasNodeType.Image)}
                     onAddVideo={() => createNode(CanvasNodeType.Video)}
                     onAddAudio={() => createNode(CanvasNodeType.Audio)}
@@ -4799,6 +4825,9 @@ const generateAngleNode = useCallback(
                     onCanvasToolChange={setCanvasTool}
                     onBackgroundModeChange={setBackgroundMode}
                     onShowImageInfoChange={setShowImageInfo}
+                    onShowConnectionsChange={setShowConnections}
+                    onSnapToGridChange={setSnapToGrid}
+                    onArrangeCanvas={arrangeCanvas}
                     onOpenAssetLibrary={() => {
                         setAssetPickerTab("library");
                         setAssetPickerOpen(true);
