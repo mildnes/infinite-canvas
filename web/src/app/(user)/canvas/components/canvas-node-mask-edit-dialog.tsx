@@ -41,7 +41,7 @@ export function CanvasNodeMaskEditDialog({
     onModelChange: (model: string, channelId?: string) => void;
     onMissingConfig: () => void;
     onClose: () => void;
-    onConfirm: (payload: CanvasImageMaskEditPayload) => void;
+    onConfirm: (payload: CanvasImageMaskEditPayload) => void | Promise<void>;
 }) {
     const maskCanvasRef = useRef<HTMLCanvasElement>(null);
     const previewCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -52,6 +52,7 @@ export function CanvasNodeMaskEditDialog({
     const [mode, setMode] = useState<DrawMode>("paint");
     const [error, setError] = useState("");
     const [submitting, setSubmitting] = useState(false);
+    const submittingRef = useRef(false);
 
     useEffect(() => {
         if (!open) return;
@@ -59,7 +60,7 @@ export function CanvasNodeMaskEditDialog({
         setBrushSize(defaultBrushSize);
         setMode("paint");
         setError("");
-        setSubmitting(false);
+        setSubmitting(submittingRef.current);
         void readImageMeta(dataUrl).then(setImage);
     }, [dataUrl, open]);
 
@@ -119,17 +120,20 @@ export function CanvasNodeMaskEditDialog({
     };
 
     const submit = async () => {
+        if (submittingRef.current) return;
         const nextPrompt = prompt.trim();
         const canvas = maskCanvasRef.current;
         if (!nextPrompt) return setError("请输入修改要求");
         if (!canvas) return;
         if (!canvasHasPaint(canvas)) return setError("请先涂抹局部区域");
+        submittingRef.current = true;
         setSubmitting(true);
         try {
-            onConfirm({ prompt: nextPrompt, markedDataUrl: await buildMarkedReference(dataUrl, canvas), model, channelId });
+            await onConfirm({ prompt: nextPrompt, markedDataUrl: await buildMarkedReference(dataUrl, canvas), model, channelId });
         } catch {
             setError("生成标记参考图失败");
         } finally {
+            submittingRef.current = false;
             setSubmitting(false);
         }
     };

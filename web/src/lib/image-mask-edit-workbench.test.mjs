@@ -33,7 +33,7 @@ test("画布局部编辑复用前缀常量，不再内联同一段文案", () =>
 test("局部重绘对话框提交结束时用 finally 复位 submitting", () => {
     const submit = dialogSource.match(/const submit = async \(\) => \{[\s\S]*?\n    \};/);
     assert.ok(submit, "submit handler not found");
-    assert.match(submit[0], /finally \{\s*setSubmitting\(false\);\s*\}/,
+    assert.match(submit[0], /finally \{\s*submittingRef\.current = false;\s*setSubmitting\(false\);\s*\}/,
         "actual submit body:\n" + submit[0]);
     assert.ok(!/catch \{\s*setSubmitting\(false\);/.test(submit[0]),
         "submitting must be reset in finally, not only in the catch branch");

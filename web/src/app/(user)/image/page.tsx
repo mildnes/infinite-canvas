@@ -3,6 +3,7 @@
 import {
     AlertCircle,
     BookOpen,
+    Brush,
     CheckSquare,
     ChevronDown,
     ChevronUp,
@@ -34,7 +35,9 @@ import { ImageSettingsPanel, imageFormatLabel, imageQualityLabel, imageSizeLabel
 import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/app/(user)/canvas/components/asset-picker-modal";
+import { CanvasNodeMaskEditDialog, type CanvasImageMaskEditPayload } from "@/app/(user)/canvas/components/canvas-node-mask-edit-dialog";
 import { canvasThemes } from "@/lib/canvas-theme";
+import { IMAGE_MASK_EDIT_PROMPT_PREFIX } from "@/lib/image-reference-prompt";
 import { addCategoryIds, mergeImageCategories, resolveCategoryByName, type GenerationCategory, type DeletedGenerationCategory } from "@/lib/image-log-categories";
 import { resolveMissingTaskOutcome, WORKBENCH_TASK_INTERRUPTED_AFTER_MS } from "@/lib/workbench-task-sync";
 import { imageOutputCapabilityForConfig, normalizeImageOutputFormat, resolveImageOutputFormat } from "@/lib/image-output-format";
@@ -163,6 +166,7 @@ export default function ImagePage() {
     const [workbenchLayout, setWorkbenchLayoutState] = useState<WorkbenchLayout>("side");
     const [promptDialogOpen, setPromptDialogOpen] = useState(false);
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
+    const [maskEditTarget, setMaskEditTarget] = useState<{ image: GeneratedImage; model: string; channelMode: AiConfig["channelMode"]; channelId: string; quality: string; size: string; open: boolean } | null>(null);
     const [workflowDrawerOpen, setWorkflowDrawerOpen] = useState(false);
     const [selectedLogIds, setSelectedLogIds] = useState<string[]>([]);
     const [categoryAssignmentOpen, setCategoryAssignmentOpen] = useState(false);
@@ -232,7 +236,8 @@ export default function ImagePage() {
 
     useEffect(() => {
         if (token) accountHistorySyncEnabledRef.current = true;
-    }, [token]);
+        setMaskEditTarget(null);
+    }, [token, userId]);
 
     useEffect(() => {
         effectiveConfigRef.current = effectiveConfig;
@@ -453,9 +458,62 @@ export default function ImagePage() {
         await submitGenerationBatch(snapshot);
     };
 
+    const openMaskEdit = async (log: GenerationLog | GenerationResult, image: GeneratedImage) => {
+        try {
+            const source = "summaryOnly" in log ? await loadCompleteImageLog(log) : log;
+            const nextModel = source.config.imageModel || source.model || model;
+            const channelMode = source.config.channelMode || effectiveConfig.channelMode;
+            setMaskEditTarget({
+                image,
+                model: nextModel,
+                channelMode,
+                channelId: resolveImageChannelId({ ...effectiveConfig, channelMode }, nextModel, imageTaskChannelId(source.task), source.config.imageChannelId, source.config.activeChannelId, effectiveConfig.imageChannelId, effectiveConfig.activeChannelId),
+                quality: source.config.quality || effectiveConfig.quality,
+                size: source.config.size || effectiveConfig.size,
+                open: true,
+            });
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "读取完整记录失败，请重试");
+        }
+    };
+
+    const submitMaskEdit = async (payload: CanvasImageMaskEditPayload) => {
+        const target = maskEditTarget;
+        if (!target) return;
+        const active = () => useUserStore.getState().token === token;
+        if (!active()) return;
+        try {
+            const snapshot = buildRequestSnapshot({
+                promptText: `${IMAGE_MASK_EDIT_PROMPT_PREFIX}${payload.prompt.trim()}`,
+                referenceItems: [],
+                taskCount: 1,
+                configOverride: {
+                    channelMode: target.channelMode,
+                    models: target.channelMode === "remote" ? effectiveConfig.publicChannels.flatMap((channel) => channel.models || []) : effectiveConfig.models,
+                    imageModel: payload.model || target.model,
+                    imageChannelId: payload.channelId || target.channelId,
+                    quality: target.quality,
+                    size: target.size,
+                },
+                workflowRef: null,
+            });
+            if (!snapshot) return;
+            const stored = await uploadImage(payload.markedDataUrl, { token });
+            if (!active()) return;
+            const markedReference = { id: nanoid(), name: "mask-edit.png", type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey, temporary: true };
+            const submitted = await submitGenerationBatch({ ...snapshot, references: [markedReference] });
+            if (!active()) return;
+            if (!submitted) throw new Error("局部重绘失败");
+            setMaskEditTarget((value) => active() && value ? { ...value, open: false } : value);
+        } catch (error) {
+            if (active()) message.error(error instanceof Error ? error.message : "局部重绘失败");
+        }
+    };
+
     const submitPersistentGenerationBatch = async (snapshot: RequestSnapshot) => {
-        const workflowToken = snapshot.workflowRef ? useUserStore.getState().token : "";
-        const active = () => !snapshot.workflowRef || useUserStore.getState().token === workflowToken;
+        const ownerToken = token;
+        const active = () => useUserStore.getState().token === ownerToken;
+        if (!active()) return false;
         setPreviewLog(null);
         const taskCount = Math.max(1, Number(snapshot.displayConfig.count) || 1);
         const pendingLogs = Array.from({ length: taskCount }, (_, index) => {
@@ -481,25 +539,27 @@ export default function ImagePage() {
                 lastPolledAt: Date.now(),
             });
         });
-        setResults((value) => mergePendingLogResults(value, pendingLogs));
+        setResults((value) => active() ? mergePendingLogResults(value, pendingLogs) : value);
         setNow(Date.now());
 
-        const settled = await Promise.allSettled(pendingLogs.map((log, index) => createPersistentImageTask(log, snapshot, index, taskCount, workflowToken)));
-        if (!active()) return;
+        const settled = await Promise.allSettled(pendingLogs.map((log, index) => createPersistentImageTask(log, snapshot, index, taskCount, ownerToken)));
+        if (!active()) return false;
         const createdCount = settled.filter((item) => item.status === "fulfilled").length;
         if (createdCount) message.success(`已创建 ${createdCount} 个图片任务`);
         if (createdCount < pendingLogs.length) message.warning(`${pendingLogs.length - createdCount} 个图片任务创建失败`);
+        return createdCount > 0;
     };
 
-    const createPersistentImageTask = async (pendingLog: GenerationLog, snapshot: RequestSnapshot, index: number, taskCount: number, workflowToken: string) => {
-        const active = () => !snapshot.workflowRef || useUserStore.getState().token === workflowToken;
+    const createPersistentImageTask = async (pendingLog: GenerationLog, snapshot: RequestSnapshot, index: number, taskCount: number, ownerToken: string) => {
+        const active = () => useUserStore.getState().token === ownerToken;
         try {
+            if (!active()) throw new Error("登录状态已变化");
             let task: CanvasImageTask;
             if (snapshot.workflowRef) {
-                if (!workflowToken) throw new Error("工作流生成需要先登录");
+                if (!ownerToken) throw new Error("工作流生成需要先登录");
                 const referenceImages = await Promise.all(snapshot.references.map(imageToDataUrl));
                 if (!active()) throw new Error("登录状态已变化");
-                const created = await submitWorkflowTask(workflowToken, {
+                const created = await submitWorkflowTask(ownerToken, {
                     ref: snapshot.workflowRef,
                     expectedCapability: "image",
                     prompt: snapshot.text,
@@ -523,37 +583,40 @@ export default function ImagePage() {
                     { source: "image-workbench", sourceId: pendingLog.id, clientTaskId: imageLogTaskId(pendingLog) },
                 );
             }
+            if (!active()) throw new Error("登录状态已变化");
             const nextLog = { ...pendingLog, task, lastPolledAt: Date.now() };
             await saveLog(nextLog, active);
             if (!active()) throw new Error("登录状态已变化");
-            setResults((value) => updateResultByLogId(value, pendingLog.id, { taskLogId: nextLog.id, task, progress: task.progress, lastPolledAt: nextLog.lastPolledAt }));
+            setResults((value) => active() ? updateResultByLogId(value, pendingLog.id, { taskLogId: nextLog.id, task, progress: task.progress, lastPolledAt: nextLog.lastPolledAt }) : value);
             return nextLog;
         } catch (error) {
             if (!active()) throw error;
             const nextLog = { ...pendingLog, status: "失败" as const, durationMs: Date.now() - pendingLog.createdAt, failCount: 1, errors: [errorMessage(error)], errorDetails: [errorDetail(error)], lastPolledAt: Date.now() };
             await saveLog(nextLog, active);
             if (!active()) throw error;
-            setResults((value) => updateResultByLogId(value, pendingLog.id, { status: "failed", error: nextLog.errors[0], errorDetail: nextLog.errorDetails?.[0], durationMs: nextLog.durationMs, lastPolledAt: nextLog.lastPolledAt }));
+            setResults((value) => active() ? updateResultByLogId(value, pendingLog.id, { status: "failed", error: nextLog.errors[0], errorDetail: nextLog.errorDetails?.[0], durationMs: nextLog.durationMs, lastPolledAt: nextLog.lastPolledAt }) : value);
             throw error;
         }
     };
     const submitGenerationBatch = async (snapshot: RequestSnapshot) => {
+        const ownerToken = token;
+        const active = () => useUserStore.getState().token === ownerToken;
+        if (!active()) return false;
         if (snapshot.workflowRef) {
-            await submitPersistentGenerationBatch(snapshot);
-            return;
+            return submitPersistentGenerationBatch(snapshot);
         }
         if (usesBackendImageTasks(snapshot.requestConfig)) {
-            await submitPersistentGenerationBatch(snapshot);
-            return;
+            return submitPersistentGenerationBatch(snapshot);
         }
         setPreviewLog(null);
         const taskCount = Math.max(1, Number(snapshot.displayConfig.count) || 1);
         const taskIds = Array.from({ length: taskCount }, () => nanoid());
         const pendingTasks = taskIds.map((id) => createPendingResult(id, snapshot));
-        setResults((value) => [...pendingTasks, ...value]);
+        setResults((value) => active() ? [...pendingTasks, ...value] : value);
         setNow(Date.now());
 
         const tasks = taskIds.map(async (id, index) => {
+            if (!active()) return false;
             const taskStartedAt = performance.now();
             try {
                 const image = await runGenerationTask(id, {
@@ -563,8 +626,9 @@ export default function ImagePage() {
                         seedIndex: index,
                         seedCount: taskCount,
                     } as any,
-                });
+                }, active);
 
+                if (!active()) return false;
                 if (!image) {
                     throw new Error("接口没有返回图片");
                 }
@@ -575,7 +639,7 @@ export default function ImagePage() {
                 };
                 
                 // 更新结果状态
-                setResults((value) => updateResult(value, id, { image: durableImage }));
+                setResults((value) => active() ? updateResult(value, id, { image: durableImage }) : value);
                 
                 // 立即保存单张成功日志
                 await saveLog(
@@ -592,10 +656,13 @@ export default function ImagePage() {
                         errors: [],
                         errorDetails: [],
                         categoryIds: activeResultCategoryId ? [activeResultCategoryId] : [],
-                    }),
+                    }), active,
                 );
+                if (!active()) return false;
                 message.success("图片已生成");
+                return true;
             } catch (err) {
+                if (!active()) return false;
                 const errMsg = errorMessage(err);
                 const errDetail = errorDetail(err);
                 
@@ -614,16 +681,19 @@ export default function ImagePage() {
                         errors: [errMsg],
                         errorDetails: [errDetail],
                         categoryIds: activeResultCategoryId ? [activeResultCategoryId] : [],
-                    }),
+                    }), active,
                 );
+                if (!active()) return false;
                 message.error(errMsg || "生成失败");
+                return false;
             } finally {
                 // 任务完成，从进行中状态移除
-                setResults((value) => value.filter((item) => item.id !== id));
+                if (active()) setResults((value) => active() ? value.filter((item) => item.id !== id) : value);
             }
         });
 
-        await Promise.allSettled(tasks);
+        const settled = await Promise.allSettled(tasks);
+        return active() && settled.some((item) => item.status === "fulfilled" && item.value);
     };
 
     const downloadImage = async (image: GeneratedImage, index: number) => {
@@ -1207,7 +1277,7 @@ export default function ImagePage() {
         message.success("提示词已复制");
     };
 
-    const buildRequestSnapshot = ({ promptText = prompt, referenceItems = references, taskCount = generationCount, configOverride, workflowRef = config.imageWorkflowRef }: { promptText?: string; referenceItems?: ReferenceImage[]; taskCount?: number; configOverride?: Partial<GenerationLogConfig>; workflowRef?: WorkflowRef | null } = {}) => {
+    const buildRequestSnapshot = ({ promptText = prompt, referenceItems = references, taskCount = generationCount, configOverride, workflowRef = config.imageWorkflowRef }: { promptText?: string; referenceItems?: ReferenceImage[]; taskCount?: number; configOverride?: Partial<AiConfig>; workflowRef?: WorkflowRef | null } = {}) => {
         const text = promptText.trim();
         if (!text && !workflowRef) {
             message.error("请输入生图提示词");
@@ -1238,18 +1308,21 @@ export default function ImagePage() {
         };
     };
 
-    const runGenerationTask = async (resultId: string, snapshot: RequestSnapshot) => {
+    const runGenerationTask = async (resultId: string, snapshot: RequestSnapshot, active: () => boolean) => {
         const itemStartedAt = performance.now();
         try {
+            if (!active()) throw new Error("登录状态已变化");
             const result = snapshot.references.length ? await requestEdit(snapshot.requestConfig, snapshot.text, snapshot.references) : await requestGeneration(snapshot.requestConfig, snapshot.text);
+            if (!active()) throw new Error("登录状态已变化");
             const image = result[0];
             if (!image) throw new Error("接口没有返回图片");
             const meta = image.width && image.height && image.mimeType ? { width: image.width, height: image.height, mimeType: image.mimeType } : await readImageMeta(image.dataUrl);
+            if (!active()) throw new Error("登录状态已变化");
             const nextImage: GeneratedImage = { ...image, durationMs: performance.now() - itemStartedAt, width: meta.width, height: meta.height, bytes: image.bytes || getDataUrlByteSize(image.dataUrl), mimeType: image.mimeType || meta.mimeType };
-            setResults((value) => updateResult(value, resultId, { status: "success", image: nextImage, durationMs: nextImage.durationMs }));
+            setResults((value) => active() ? updateResult(value, resultId, { status: "success", image: nextImage, durationMs: nextImage.durationMs }) : value);
             return nextImage;
         } catch (error) {
-            setResults((value) => updateResult(value, resultId, { status: "failed", error: errorMessage(error), errorDetail: errorDetail(error), durationMs: performance.now() - itemStartedAt }));
+            if (active()) setResults((value) => active() ? updateResult(value, resultId, { status: "failed", error: errorMessage(error), errorDetail: errorDetail(error), durationMs: performance.now() - itemStartedAt }) : value);
             throw error;
         }
     };
@@ -1421,6 +1494,7 @@ export default function ImagePage() {
                             onRetryLog={(log) => void retryLog(log)}
                             onCopyPrompt={copyPrompt}
                             onEdit={addResultToReferences}
+                            onMaskEdit={openMaskEdit}
                             onDownload={downloadImage}
                             onSaveAsset={saveResultToAssets}
                             syncingImageIds={syncingImageIds}
@@ -1466,6 +1540,7 @@ export default function ImagePage() {
                             onRetryLog={(log) => void retryLog(log)}
                             onCopyPrompt={copyPrompt}
                             onEdit={addResultToReferences}
+                            onMaskEdit={openMaskEdit}
                             onDownload={downloadImage}
                             onSaveAsset={saveResultToAssets}
                             syncingImageIds={syncingImageIds}
@@ -1558,6 +1633,19 @@ export default function ImagePage() {
             />
             <PromptSelectDialog open={promptDialogOpen} onOpenChange={setPromptDialogOpen} onSelect={setPrompt} />
             <AssetPickerModal open={assetPickerOpen} defaultTab="my-assets" onInsert={(payload) => void insertPickedAsset(payload)} onClose={() => setAssetPickerOpen(false)} />
+            {maskEditTarget ? (
+                <CanvasNodeMaskEditDialog
+                    dataUrl={maskEditTarget.image.dataUrl}
+                    open={maskEditTarget.open}
+                    config={{ ...effectiveConfig, channelMode: maskEditTarget.channelMode }}
+                    model={maskEditTarget.model}
+                    channelId={maskEditTarget.channelId}
+                    onModelChange={(nextModel, channelId) => setMaskEditTarget((value) => value ? { ...value, model: nextModel, channelId: channelId || "" } : value)}
+                    onMissingConfig={() => openConfigDialog(true)}
+                    onClose={() => setMaskEditTarget((value) => value ? { ...value, open: false } : value)}
+                    onConfirm={submitMaskEdit}
+                />
+            ) : null}
             <Modal
                 title="添加至分类"
                 open={categoryAssignmentOpen}
@@ -1927,6 +2015,7 @@ function ResultsPanel({
     onRetryLog,
     onCopyPrompt,
     onEdit,
+    onMaskEdit,
     onDownload,
     onSaveAsset,
     syncingImageIds,
@@ -1964,6 +2053,7 @@ function ResultsPanel({
     onRetryLog: (log: GenerationLog) => void;
     onCopyPrompt: (text: string) => void | Promise<void>;
     onEdit: (image: GeneratedImage, index: number) => void;
+    onMaskEdit: (log: GenerationLog | GenerationResult, image: GeneratedImage) => void;
     onDownload: (image: GeneratedImage, index: number) => void;
     onSaveAsset: (image: GeneratedImage, index: number) => void;
     syncingImageIds: string[];
@@ -2056,7 +2146,7 @@ function ResultsPanel({
                 <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
                     {results.map((result, index) =>
                         result.status === "success" && result.image ? (
-                            <ResultImageCard key={result.id} result={result} image={result.image} index={index} onCopyPrompt={onCopyPrompt} onEdit={onEdit} onDownload={onDownload} onSaveAsset={onSaveAsset} syncing={syncingImageIds.includes(result.image.id)} onSync={(image) => onSyncResult(result.id, image, index)} />
+                            <ResultImageCard key={result.id} result={result} image={result.image} index={index} onCopyPrompt={onCopyPrompt} onEdit={onEdit} onMaskEdit={(image) => onMaskEdit(result, image)} onDownload={onDownload} onSaveAsset={onSaveAsset} syncing={syncingImageIds.includes(result.image.id)} onSync={(image) => onSyncResult(result.id, image, index)} />
                         ) : result.status === "failed" ? (
                             <FailedImageCard key={result.id} result={result} error={result.error || "生成失败"} onCopyPrompt={onCopyPrompt} onRetry={() => onRetry(result)} onDelete={() => onDeleteResult(result)} />
                         ) : (
@@ -2089,6 +2179,7 @@ function ResultsPanel({
                             onRetry={() => onRetryLog(log)}
                             onCopyPrompt={onCopyPrompt}
                             onEdit={onEdit}
+                            onMaskEdit={(image) => onMaskEdit(log, image)}
                             onDownload={onDownload}
                             onSaveAsset={onSaveAsset}
                             syncing={syncingImageIds.includes(log.images.find((image) => Boolean(image.dataUrl))?.id || "")}
@@ -2220,6 +2311,7 @@ function ResultImageCard({
     index,
     onCopyPrompt,
     onEdit,
+    onMaskEdit,
     onDownload,
     onSaveAsset,
     syncing,
@@ -2230,6 +2322,7 @@ function ResultImageCard({
     index: number;
     onCopyPrompt: (text: string) => void | Promise<void>;
     onEdit: (image: GeneratedImage, index: number) => void;
+    onMaskEdit: (image: GeneratedImage) => void;
     onDownload: (image: GeneratedImage, index: number) => void;
     onSaveAsset: (image: GeneratedImage, index: number) => void;
     syncing: boolean;
@@ -2258,6 +2351,7 @@ function ResultImageCard({
                     <Button size="small" title="同步到云端存储" icon={<CloudUpload className="size-3.5" />} loading={syncing} disabled={image.storageKey?.startsWith("server:")} onClick={() => onSync(image)} />
                     <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => void onSaveAsset(image, index)} />
                     <Button size="small" icon={<PenLine className="size-3.5" />} onClick={() => void onEdit(image, index)} />
+                    <Button size="small" title="局部重绘" icon={<Brush className="size-3.5" />} onClick={() => onMaskEdit(image)} />
                     <Button size="small" icon={<Download className="size-3.5" />} onClick={() => onDownload(image, index)} />
                 </div>
             </div>
@@ -2369,6 +2463,7 @@ function HistoryLogCard({
     onRetry,
     onCopyPrompt,
     onEdit,
+    onMaskEdit,
     onDownload,
     onSaveAsset,
     syncing,
@@ -2388,6 +2483,7 @@ function HistoryLogCard({
     onRetry: () => void;
     onCopyPrompt: (text: string) => void | Promise<void>;
     onEdit: (image: GeneratedImage, index: number) => void;
+    onMaskEdit: (image: GeneratedImage) => void;
     onDownload: (image: GeneratedImage, index: number) => void;
     onSaveAsset: (image: GeneratedImage, index: number) => void;
     syncing: boolean;
@@ -2504,6 +2600,11 @@ function HistoryLogCard({
                     <Button size="small" icon={<RotateCcw className="size-3.5" />} onClick={() => closeThen(onRetry)}>
                         重试
                     </Button>
+                    {firstImage ? (
+                        <Button size="small" icon={<Brush className="size-3.5" />} onClick={() => closeThen(() => onMaskEdit(firstImage))}>
+                            局部重绘
+                        </Button>
+                    ) : null}
                     <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => setCategoryOpen((value) => !value)}>
                         分类
                     </Button>
