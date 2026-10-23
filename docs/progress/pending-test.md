@@ -5,6 +5,14 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
+## 画布缩放卡顿
+
+- [实现] 滚轮缩放与拖拽平移期间直接更新 transform 层和共享 viewport/scale ref，静默 150ms 或手势结束时才提交一次 React viewport；`--canvas-inverse-scale` 同步直写，浮层逆缩放保持可用。缩放锚点、范围与步进不变，viewport 持久化和 minimap 仍在提交后更新。
+- [实现] `CanvasNode` 不再接收连续 `scale` prop，改用共享 `scaleRef` 供 resize 读取最新缩放；hover、重试、预览、上下文菜单、面板与内容渲染回调稳定化，空引用数组常量化，避免缩放期间全节点重渲染。
+- [先红后绿] 新增手势渲染计数与页面接线测试在旧实现上 4/4 失败（包括每 tick 提交 30 次、无 transform 层、无共享 scale ref）；实现后 4/4 通过，30 次 wheel 手势期间页面提交 0 次、子节点渲染 0 次，静默后提交 1 次；pan 手势期间 0 次提交，pointerup 提交 1 次。
+- [本机验证] 前端 84 文件 / 518 项全部通过；`npx tsc --noEmit` 0 诊断；`npx next build` 成功；`git diff --check c2530a6..HEAD` 无输出。
+- [ ] Hermes 验收：在 48 节点以上画布滚动缩放、拖拽平移与滚轮后立即 resize，确认节点不闪烁、resize 坐标正确、提示词面板/双击菜单逆缩放正常、minimap 与缩放百分比在手势后一致，viewport 刷新后保持。
+
 ## WebDAV 内网访问开关
 
 - [实现] 管理端 WebDAV 提供方新增「允许访问内网」开关，默认关闭；默认仍走 SSRF 安全 transport，显式开启后改用禁用代理的直连 transport。普通 WebDAV 读写与媒体完整性读取／修复共用 provider 设置，S3 配置不显示该选项。

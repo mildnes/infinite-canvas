@@ -42,7 +42,7 @@ const CanvasPanoramaViewer = dynamic(() => import("./canvas-panorama-viewer"), {
 
 type CanvasNodeProps = {
     data: CanvasNodeData;
-    scale: number;
+    scaleRef: React.RefObject<number>;
     isSelected: boolean;
     isRelated: boolean;
     isFocusRelated: boolean;
@@ -107,7 +107,7 @@ type NodeContentRendererProps = {
 
 export const CanvasNode = React.memo(function CanvasNode({
     data,
-    scale,
+    scaleRef,
     isSelected,
     isRelated,
     isFocusRelated,
@@ -174,6 +174,7 @@ export const CanvasNode = React.memo(function CanvasNode({
         currentHeight: 0,
         keepRatio: false,
         ratio: 1,
+        scale: 1,
     });
 
     useEffect(() => {
@@ -243,8 +244,8 @@ export const CanvasNode = React.memo(function CanvasNode({
         (event: MouseEvent) => {
             if (!resizeRef.current.isResizing) return;
 
-            const dx = (event.clientX - resizeRef.current.startX) / scale;
-            const dy = (event.clientY - resizeRef.current.startY) / scale;
+            const dx = (event.clientX - resizeRef.current.startX) / resizeRef.current.scale;
+            const dy = (event.clientY - resizeRef.current.startY) / resizeRef.current.scale;
             const minWidth = 220;
             const minHeight = 160;
             const startRight = resizeRef.current.startLeft + resizeRef.current.startWidth;
@@ -282,7 +283,7 @@ export const CanvasNode = React.memo(function CanvasNode({
             resizeRef.current.currentHeight = height;
             onResize(data.id, width, height, position);
         },
-        [data.id, onResize, scale],
+        [data.id, onResize],
     );
 
     const handleResizeUp = useCallback(() => {
@@ -312,6 +313,7 @@ export const CanvasNode = React.memo(function CanvasNode({
             currentHeight: data.height,
             keepRatio: (isCanvasImageNodeType(data.type) && !data.metadata?.freeResize) || data.type === CanvasNodeType.Video,
             ratio: (data.metadata?.naturalWidth || data.width) / (data.metadata?.naturalHeight || data.height || 1),
+            scale: scaleRef.current,
         };
         window.addEventListener("mousemove", handleResizeMove);
         window.addEventListener("mouseup", handleResizeUp);
