@@ -45,7 +45,7 @@ export type RepairCanvasMediaResult = {
 };
 
 type MediaRepairCache = Map<string, Promise<{ ref: CanvasMediaRef; uploaded: boolean }>>;
-type MediaRepairOptions = { allowUpload?: boolean; filename?: string; cloudWaitMs?: number; ownerToken?: string };
+type MediaRepairOptions = { allowUpload?: boolean; filename?: string; cloudWaitMs?: number; ownerToken?: string; uploadReadiness?: () => Promise<boolean> };
 
 const UPLOAD_CONCURRENCY = 3;
 
@@ -133,6 +133,17 @@ export async function canUploadCanvasMediaToServer(timeoutMs = 10_000, token = u
     if (!config) return false;
     const userProvider = config.allowUserProvider ? loadUserStorageProvider() : null;
     return canUseGlobalStorage(config) || Boolean(userProvider);
+}
+
+function prepareMediaRepairOptions(options: MediaRepairOptions) {
+    const ownerToken = options.ownerToken ?? useUserStore.getState().token;
+    let decision: Promise<boolean> | undefined;
+    return {
+        ...options,
+        ownerToken,
+        // Share one lazy decision across the pass without delaying canvases that have no media.
+        uploadReadiness: options.uploadReadiness ?? (() => decision ??= canUploadCanvasMediaToServer(options.cloudWaitMs, ownerToken)),
+    };
 }
 
 export function nodeNeedsCloudUpload(node: CanvasNodeData) {
@@ -253,10 +264,11 @@ function applyRefToMetadata(metadata: CanvasNodeMetadata, ref: CanvasMediaRef): 
 }
 
 function sameRef(a: CanvasMediaRef, b: CanvasMediaRef) {
+    const sameMediaError = (a.mediaError || "") === (b.mediaError || "");
     a = normalizeCanvasMediaRefForPersistence(a);
     b = normalizeCanvasMediaRefForPersistence(b);
     return (
-        (a.content || "") === (b.content || "") &&
+        sameMediaError && (a.content || "") === (b.content || "") &&
         (a.storageKey || "") === (b.storageKey || "") &&
         a.mediaStatus === b.mediaStatus &&
         (a.mediaError || "") === (b.mediaError || "")
@@ -360,6 +372,14 @@ export async function repairCanvasMediaRef(
     kind: "image" | "media",
     options: MediaRepairOptions = {},
 ): Promise<{ ref: CanvasMediaRef; changed: boolean; uploaded: boolean }> {
+    return repairCanvasMediaRefWithOptions(ref, kind, prepareMediaRepairOptions(options));
+}
+
+async function repairCanvasMediaRefWithOptions(
+    ref: CanvasMediaRef,
+    kind: "image" | "media",
+    options: ReturnType<typeof prepareMediaRepairOptions>,
+): Promise<{ ref: CanvasMediaRef; changed: boolean; uploaded: boolean }> {
     const ownerToken = options.ownerToken ?? useUserStore.getState().token;
     const unchanged = () => ({ ref, changed: false, uploaded: false });
     if (useUserStore.getState().token !== ownerToken) return unchanged();
@@ -373,7 +393,7 @@ export async function repairCanvasMediaRef(
     let mediaError = ref.mediaError;
     let uploaded = false;
     const loginPending = Boolean(useUserStore.getState().token && !useUserStore.getState().isReady);
-    const canUpload = allowUpload && (await canUploadCanvasMediaToServer(options.cloudWaitMs, ownerToken));
+    const canUpload = allowUpload && await options.uploadReadiness();
     if (useUserStore.getState().token !== ownerToken) return unchanged();
 
     // 1) server: pointer
@@ -581,7 +601,7 @@ async function mapPool<T, R>(items: T[], limit: number, worker: (item: T, index:
 }
 
 export async function repairCanvasNodesMedia(nodes: CanvasNodeData[], options: MediaRepairOptions = {}, cache?: MediaRepairCache) {
-    options = { ...options, ownerToken: options.ownerToken ?? useUserStore.getState().token };
+    options = prepareMediaRepairOptions(options);
     let changed = false;
     let uploaded = 0;
     let broken = 0;
@@ -596,7 +616,7 @@ export async function repairCanvasNodesMedia(nodes: CanvasNodeData[], options: M
 }
 
 export async function repairCanvasSessionsMedia(sessions: CanvasAssistantSession[], options: MediaRepairOptions = {}, cache?: MediaRepairCache) {
-    options = { ...options, ownerToken: options.ownerToken ?? useUserStore.getState().token };
+    options = prepareMediaRepairOptions(options);
     let changed = false;
     let uploaded = 0;
     let broken = 0;
@@ -652,7 +672,7 @@ export async function repairCanvasProjectMedia(
     sessions: CanvasAssistantSession[] = [],
     options: MediaRepairOptions = {},
 ): Promise<RepairCanvasMediaResult> {
-    options = { ...options, ownerToken: options.ownerToken ?? useUserStore.getState().token };
+    options = prepareMediaRepairOptions(options);
     const cache: MediaRepairCache = new Map();
     const nodeResult = await repairCanvasNodesMedia(nodes, options, cache);
     const sessionResult = await repairCanvasSessionsMedia(sessions, options, cache);

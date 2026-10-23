@@ -36,6 +36,7 @@ function createUserStore(initial) {
 
 function loadMediaModule(options = {}) {
     const userStore = createUserStore(options.user || { token: "A-token", user: null, isReady: false });
+    const timers = options.timers || { setTimeout, clearTimeout };
     const uploads = [];
     const warnings = [];
     let releaseUpload = () => {};
@@ -92,11 +93,11 @@ function loadMediaModule(options = {}) {
                 const finish = (value) => {
                     if (settled) return;
                     settled = true;
-                    clearTimeout(timeout);
+                    timers.clearTimeout(timeout);
                     unsubscribe();
                     resolve(value);
                 };
-                const timeout = setTimeout(() => finish(false), timeoutMs);
+                const timeout = timers.setTimeout(() => finish(false), timeoutMs);
                 unsubscribe = subscribe(() => {
                     if (ready()) finish(true);
                 });
@@ -137,6 +138,156 @@ function loadMediaModule(options = {}) {
     );
     return { api: exports, userStore, uploads, warnings, releaseUpload, releaseBlob, uploadTokens, blobReads: () => blobReads };
 }
+
+function createReadinessClock() {
+    let now = 0;
+    let scheduled = 0;
+    const timers = new Map();
+    const flush = () => new Promise((resolve) => setImmediate(resolve));
+    return {
+        timers: {
+            setTimeout(callback, timeoutMs) {
+                const id = ++scheduled;
+                timers.set(id, { at: now + timeoutMs, callback });
+                return id;
+            },
+            clearTimeout: (id) => timers.delete(id),
+        },
+        elapsed: () => now,
+        scheduled: () => scheduled,
+        flush,
+        async finish(pending) {
+            let settled = false;
+            let result;
+            let failure;
+            pending.then((value) => { result = value; settled = true; }, (error) => { failure = error; settled = true; });
+            for (let step = 0; step < 50; step += 1) {
+                await flush();
+                if (settled) {
+                    if (failure) throw failure;
+                    return result;
+                }
+                assert.ok(timers.size, "repair 未结束却没有待触发的就绪计时器");
+                now = Math.min(...Array.from(timers.values(), (timer) => timer.at));
+                for (const [id, timer] of timers) {
+                    if (timer.at > now) continue;
+                    timers.delete(id);
+                    timer.callback();
+                }
+            }
+            assert.fail("repair 超过虚拟时钟推进上限");
+        },
+    };
+}
+
+const localOnlyNodes = () => Array.from({ length: 6 }, (_, index) => ({
+    id: `local-${index}`,
+    type: "image",
+    metadata: { storageKey: `image:local-${index}`, content: "blob:local-preview", mediaStatus: "local-only" },
+}));
+
+const localOnlySessions = () => [{
+    id: "session",
+    messages: [{
+        id: "message",
+        images: [{ id: "assistant-image", dataUrl: "blob:local-preview", storageKey: "image:assistant-image" }],
+        references: [{ id: "assistant-ref", dataUrl: "blob:local-preview", storageKey: "image:assistant-ref" }],
+    }],
+}];
+
+test("六个 local-only 节点的一次 repair 仅等待一次超时并保留重试原因", async () => {
+    const clock = createReadinessClock();
+    const f = loadMediaModule({ timers: clock.timers });
+    const nodes = localOnlyNodes();
+    const result = await clock.finish(f.api.repairCanvasNodesMedia(nodes, { allowUpload: true, cloudWaitMs: 10_000 }));
+    assert.equal(clock.elapsed(), 10_000, "六个引用应共用一次 10000ms 等待");
+    assert.equal(clock.scheduled(), 1, "一次节点 repair 只能创建一个就绪等待");
+    assert.equal(f.uploads.length, 0);
+    for (const [index, node] of result.nodes.entries()) {
+        assert.equal(node.metadata.storageKey, nodes[index].metadata.storageKey);
+        assert.equal(node.metadata.mediaStatus, "local-only");
+        assert.equal(node.metadata.mediaError, "登录态未就绪，稍后自动重试");
+    }
+    f.userStore.setState({ user: { id: "A" }, isReady: true });
+    const retried = await clock.finish(f.api.repairCanvasNodesMedia(result.nodes, { allowUpload: true, cloudWaitMs: 10_000 }));
+    assert.equal(retried.uploaded, 6, "下一轮 repair 必须重新判定，不能缓存上一轮的超时结果");
+    assert.equal(clock.scheduled(), 1);
+});
+
+test("project 的节点和助手媒体共用同一次就绪超时", async () => {
+    const clock = createReadinessClock();
+    const f = loadMediaModule({ timers: clock.timers });
+    const result = await clock.finish(f.api.repairCanvasProjectMedia(localOnlyNodes(), localOnlySessions(), { allowUpload: true, cloudWaitMs: 10_000 }));
+    assert.equal(clock.elapsed(), 10_000, "节点与助手引用不能分阶段累积等待");
+    assert.equal(clock.scheduled(), 1);
+    assert.equal(result.uploaded, 0);
+    assert.equal(result.sessions[0].messages[0].images[0].storageKey, "image:assistant-image");
+    assert.equal(result.sessions[0].messages[0].references[0].storageKey, "image:assistant-ref");
+});
+
+test("已有本地预览的节点在就绪超时后也写回可区分的重试原因", async () => {
+    const clock = createReadinessClock();
+    const f = loadMediaModule({ timers: clock.timers });
+    const result = await clock.finish(f.api.repairCanvasProjectMedia(localOnlyNodes().slice(0, 1), [], { allowUpload: true, cloudWaitMs: 10_000 }));
+    assert.equal(result.nodes[0].metadata.mediaStatus, "local-only");
+    assert.equal(result.nodes[0].metadata.mediaError, "登录态未就绪，稍后自动重试");
+    assert.equal(result.changed, true, "仅超时原因改变时也必须回写节点");
+});
+
+test("共享等待期间登录就绪后所有节点和助手媒体仍成功上传", async () => {
+    const clock = createReadinessClock();
+    const f = loadMediaModule({ timers: clock.timers });
+    const pending = f.api.repairCanvasProjectMedia(localOnlyNodes(), localOnlySessions(), { allowUpload: true, cloudWaitMs: 10_000 });
+    await clock.flush();
+    const scheduledBeforeReady = clock.scheduled();
+    assert.equal(f.uploads.length, 0, "尚未就绪不能提前上传");
+    f.userStore.setState({ user: { id: "A" }, isReady: true });
+    const result = await clock.finish(pending);
+    assert.equal(scheduledBeforeReady, 1, "多个引用必须订阅同一次就绪等待");
+    assert.equal(clock.elapsed(), 0, "就绪事件应结束等待，无需等到超时");
+    assert.equal(result.uploaded, 8);
+    assert.equal(f.uploads.length, 8);
+    assert.ok(f.uploadTokens.every((token) => token === "A-token"));
+    assert.ok(result.nodes.every((node) => node.metadata.storageKey === "server:uploaded" && node.metadata.mediaStatus === "ok"));
+    assert.equal(result.sessions[0].messages[0].images[0].storageKey, "server:uploaded");
+    assert.equal(result.sessions[0].messages[0].references[0].storageKey, "server:uploaded");
+});
+
+test("共享就绪等待期间切号不上传也不返回旧账号的改写", async () => {
+    const clock = createReadinessClock();
+    const f = loadMediaModule({ timers: clock.timers });
+    const nodes = localOnlyNodes();
+    const sessions = localOnlySessions();
+    const pending = f.api.repairCanvasProjectMedia(nodes, sessions, { allowUpload: true, cloudWaitMs: 10_000 });
+    await clock.flush();
+    f.userStore.setState({ token: "B-token", user: { id: "B" }, isReady: true });
+    const result = await clock.finish(pending);
+    assert.equal(f.uploads.length, 0);
+    assert.equal(result.changed, false);
+    assert.equal(result.nodes, nodes);
+    assert.equal(result.sessions, sessions);
+});
+
+test("禁止上传的 repair 不等待就绪并保留本地引用", async () => {
+    const clock = createReadinessClock();
+    const f = loadMediaModule({ timers: clock.timers });
+    const result = await clock.finish(f.api.repairCanvasProjectMedia(localOnlyNodes(), localOnlySessions(), { allowUpload: false, cloudWaitMs: 10_000 }));
+    assert.equal(clock.elapsed(), 0);
+    assert.equal(clock.scheduled(), 0);
+    assert.equal(f.uploads.length, 0);
+    assert.ok(result.nodes.every((node) => node.metadata.mediaStatus === "local-only"));
+});
+
+test("没有媒体引用的画板不额外等待登录就绪", async () => {
+    const clock = createReadinessClock();
+    const f = loadMediaModule({ timers: clock.timers });
+    const nodes = [{ id: "text", type: "text", metadata: { content: "只含文字" } }];
+    const result = await clock.finish(f.api.repairCanvasProjectMedia(nodes, [], { allowUpload: true, cloudWaitMs: 10_000 }));
+    assert.equal(clock.elapsed(), 0);
+    assert.equal(clock.scheduled(), 0);
+    assert.equal(result.nodes[0], nodes[0]);
+    assert.equal(result.changed, false);
+});
 
 function runBackgroundRepair(f, { nodes, sessions = [], loadedToken = "A-token" }) {
     const start = pageSource.indexOf("    useEffect(() => {\n        if (!projectLoaded || !userReady");
