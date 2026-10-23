@@ -9,6 +9,8 @@ import type { ViewportTransform } from "../types";
 type InfiniteCanvasProps = {
     containerRef: React.RefObject<HTMLDivElement | null>;
     viewport: ViewportTransform;
+    viewportRef: React.MutableRefObject<ViewportTransform>;
+    scaleRef: React.MutableRefObject<number>;
     tool: "select" | "pan";
     backgroundMode?: CanvasBackgroundMode;
     onViewportChange: (viewport: ViewportTransform) => void;
@@ -20,7 +22,7 @@ type InfiniteCanvasProps = {
     children: React.ReactNode;
 };
 
-export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = "lines", onViewportChange, onCanvasMouseDown, onCanvasDeselect, onCanvasDoubleClick, onContextMenu, onDrop, children }: InfiniteCanvasProps) {
+export function InfiniteCanvas({ containerRef, viewport, viewportRef, scaleRef, tool, backgroundMode = "lines", onViewportChange, onCanvasMouseDown, onCanvasDeselect, onCanvasDoubleClick, onContextMenu, onDrop, children }: InfiniteCanvasProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const panState = useRef({
         isPanning: false,
@@ -31,19 +33,52 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
         hasMoved: false,
         startedOnBackground: false,
     });
-    const scaleRef = useRef(viewport.k);
     const frameRef = useRef<number | null>(null);
     const nextViewportRef = useRef<ViewportTransform | null>(null);
+    const transformLayerRef = useRef<HTMLDivElement | null>(null);
+    const gestureViewportRef = useRef<ViewportTransform>(viewport);
+    const gestureCommitTimerRef = useRef<number | null>(null);
+    const commitGestureViewportRef = useRef(onViewportChange);
+    const applyGestureViewport = () => {
+        const nextViewport = gestureViewportRef.current;
+        const layer = transformLayerRef.current;
+        if (layer) {
+            layer.style.transform = `translate(${nextViewport.x}px, ${nextViewport.y}px) scale(${nextViewport.k})`;
+            layer.style.setProperty("--canvas-inverse-scale", String(1 / nextViewport.k));
+        }
+        viewportRef.current = nextViewport;
+        scaleRef.current = nextViewport.k;
+    };
+
+    const scheduleGestureCommit = () => {
+        if (gestureCommitTimerRef.current) clearTimeout(gestureCommitTimerRef.current);
+        gestureCommitTimerRef.current = window.setTimeout(() => {
+            gestureCommitTimerRef.current = null;
+            onViewportChange(gestureViewportRef.current);
+        }, 150);
+    };
     const [isSpacePressed, setIsSpacePressed] = useState(false);
     const [isPanning, setIsPanning] = useState(false);
 
     useEffect(() => {
         scaleRef.current = viewport.k;
+        gestureViewportRef.current = viewport;
+        viewportRef.current = viewport;
+        if (gestureCommitTimerRef.current) {
+            clearTimeout(gestureCommitTimerRef.current);
+            gestureCommitTimerRef.current = null;
+        }
+        applyGestureViewport();
     }, [viewport.k]);
+
+    useEffect(() => {
+        commitGestureViewportRef.current = onViewportChange;
+    }, [onViewportChange]);
 
     useEffect(
         () => () => {
             if (frameRef.current) cancelAnimationFrame(frameRef.current);
+            if (gestureCommitTimerRef.current) clearTimeout(gestureCommitTimerRef.current);
         },
         [],
     );
@@ -88,20 +123,26 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
 
         const delta = -event.deltaY;
         const factor = Math.pow(1.1, delta / 100);
-        const newScale = Math.min(Math.max(viewport.k * factor, 0.05), 5);
+        const current = gestureViewportRef.current;
+        const newScale = Math.min(Math.max(current.k * factor, 0.05), 5);
         const rect = containerRef.current?.getBoundingClientRect();
         if (!rect) return;
 
         const mouseX = event.clientX - rect.left;
         const mouseY = event.clientY - rect.top;
-        const worldX = (mouseX - viewport.x) / viewport.k;
-        const worldY = (mouseY - viewport.y) / viewport.k;
-
-        onViewportChange({
+        const worldX = (mouseX - current.x) / current.k;
+        const worldY = (mouseY - current.y) / current.k;
+        gestureViewportRef.current = {
             x: mouseX - worldX * newScale,
             y: mouseY - worldY * newScale,
             k: newScale,
+        };
+        if (frameRef.current) cancelAnimationFrame(frameRef.current);
+        frameRef.current = requestAnimationFrame(() => {
+            frameRef.current = null;
+            applyGestureViewport();
         });
+        scheduleGestureCommit();
     };
 
     const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -123,8 +164,8 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
                 isPanning: true,
                 startX: event.clientX,
                 startY: event.clientY,
-                initialX: viewport.x,
-                initialY: viewport.y,
+                initialX: gestureViewportRef.current.x,
+                initialY: gestureViewportRef.current.y,
                 hasMoved: false,
                 startedOnBackground: isBackgroundClick,
             };
@@ -164,12 +205,15 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
             nextViewportRef.current = {
                 x: panState.current.initialX + dx,
                 y: panState.current.initialY + dy,
-                k: scaleRef.current,
+                k: gestureViewportRef.current.k,
             };
             if (frameRef.current) return;
             frameRef.current = requestAnimationFrame(() => {
                 frameRef.current = null;
-                if (nextViewportRef.current) onViewportChange(nextViewportRef.current);
+                if (nextViewportRef.current) {
+                    gestureViewportRef.current = nextViewportRef.current;
+                    applyGestureViewport();
+                }
             });
         };
 
@@ -182,6 +226,18 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
             panState.current.isPanning = false;
             setIsPanning(false);
             document.body.style.cursor = "";
+            if (panState.current.hasMoved) {
+                if (frameRef.current) {
+                    cancelAnimationFrame(frameRef.current);
+                    frameRef.current = null;
+                    if (nextViewportRef.current) {
+                        gestureViewportRef.current = nextViewportRef.current;
+                        applyGestureViewport();
+                    }
+                }
+                commitGestureViewportRef.current(gestureViewportRef.current);
+                nextViewportRef.current = null;
+            }
         };
 
         window.addEventListener("pointermove", handlePointerMove);
@@ -193,7 +249,7 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
             window.removeEventListener("pointercancel", handlePointerUp);
             document.body.style.cursor = "";
         };
-    }, [onCanvasDeselect, onViewportChange]);
+    }, [onCanvasDeselect]);
 
     useEffect(() => {
         const container = containerRef.current;
@@ -228,6 +284,8 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
             <CanvasGrid viewport={viewport} mode={backgroundMode} />
             <div
                 className="absolute origin-top-left"
+                ref={transformLayerRef}
+                data-canvas-transform-layer="true"
                 style={{ transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.k})`, "--canvas-inverse-scale": 1 / viewport.k } as React.CSSProperties}
             >
                 {children}

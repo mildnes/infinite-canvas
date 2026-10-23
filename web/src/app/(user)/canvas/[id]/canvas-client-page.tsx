@@ -132,6 +132,8 @@ type CanvasHistoryEntry = Pick<CanvasClipboard, "nodes" | "connections"> & {
     showConnections: boolean;
 };
 
+type CanvasNodeResourceReference = import("../utils/canvas-resource-references").CanvasResourceReference;
+
 const VIDEO_NODE_MAX_WIDTH = 420;
 const VIDEO_NODE_MAX_HEIGHT = 420;
 const CONNECTION_HANDLE_HIT_RADIUS = 40;
@@ -139,6 +141,7 @@ const CONNECTION_NODE_HIT_PADDING = 32;
 const NODE_STATUS_LOADING = "loading" as const;
 const NODE_STATUS_SUCCESS = "success" as const;
 const NODE_STATUS_ERROR = "error" as const;
+const EMPTY_REFERENCES: CanvasNodeResourceReference[] = [];
 const AGENT_PRIMARY_SCRIPT_NODE_SIZE = { width: 550, height: 600 };
 const VIDEO_PREVIEW_CONTROL_CLASS = "flex size-9 items-center justify-center rounded-lg text-white transition-colors hover:bg-white/10";
 const IMAGE_PROMPT_REVERSE_PRESET = `请根据参考图片反推一段适合用于 AI 生图的提示词。
@@ -545,10 +548,15 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     snapToGridRef.current = snapToGrid;
     const selectedNodeIdsRef = useRef(selectedNodeIds);
     const viewportRef = useRef(viewport);
+    const scaleRef = useRef(viewport.k);
     const loadedProjectRef = useRef<{ id: string; token: string } | null>(null);
     const restoringProjectRef = useRef(false);
     const latestCanvasStateRef = useRef({ connections, chatSessions, activeChatId, agentConfig, backgroundMode, showImageInfo, showConnections, snapToGrid, sidePanel, agentPanel });
     const persistCurrentCanvasRef = useRef<(latestNodes?: CanvasNodeData[]) => void>(() => {});
+    const commitViewport = useCallback((next: ViewportTransform) => {
+        setViewport(next);
+        setContextMenu(null);
+    }, []);
     useLayoutEffect(() => {
         latestCanvasStateRef.current = { connections, chatSessions, activeChatId, agentConfig, backgroundMode, showImageInfo, showConnections, snapToGrid, sidePanel, agentPanel };
         persistCurrentCanvasRef.current = (latestNodes = nodesRef.current) => {
@@ -4360,6 +4368,78 @@ const generateAngleNode = useCallback(
         [canSubmitCanvasMediaRequest, canvasGenerationDefaults, effectiveConfig, message, openConfigDialog, projectId, resolveCanvasImageOutputFormat, resumeNodeTaskPolling],
     );
 
+    const handleNodeHoverStart = useCallback((nodeId: string) => {
+        if (nodeDraggingRef.current) return;
+        setHoveredNodeId(nodeId);
+    }, []);
+
+    const handleNodeHoverEnd = useCallback((nodeId: string) => {
+        setHoveredNodeId((current) => (current === nodeId ? null : current));
+    }, []);
+
+    const handleNodeRetry = useCallback((node: CanvasNodeData) => {
+        void handleRetryNode(node);
+    }, [handleRetryNode]);
+
+    const handleNodeContextMenu = useCallback((event: React.MouseEvent, nodeId: string) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setContextMenu({ type: "node", x: event.clientX, y: event.clientY, nodeId });
+    }, []);
+
+    const renderNodePanel = useCallback((panelNode: CanvasNodeData) =>
+        panelNode.type === CanvasNodeType.Config ? (
+            <CanvasConfigComposer
+                value={panelNode.metadata?.composerContent ?? panelNode.metadata?.prompt ?? ""}
+                inputs={configInputsById.get(panelNode.id) || []}
+                onChange={(composerContent) => handleConfigNodeChange(panelNode.id, { composerContent })}
+                onClose={() => setDialogNodeId(null)}
+            />
+        ) : panelNode.type === CanvasNodeType.Director ? null : (
+            <CanvasNodePromptPanel
+                node={panelNode}
+                isRunning={runningNodeId === panelNode.id}
+                mentionReferences={mentionReferencesByNodeId.get(panelNode.id) || []}
+                connectedNodes={connectedNodesByNodeId.get(panelNode.id) || []}
+                videoFrameOptions={videoFrameOptionsByNodeId.get(panelNode.id) || []}
+                videoResourceOptions={videoResourceOptionsByNodeId.get(panelNode.id) || []}
+                generationDefaults={canvasGenerationDefaults}
+                onPromptChange={handleNodePromptChange}
+                onConfigChange={handleConfigNodeChange}
+                onGenerate={handleGenerateNode}
+                onDisconnectReference={disconnectNodeReference}
+                onStartReferenceSelection={startNodeReferenceSelection}
+                onImageSettingsOpenChange={(open) => {
+                    setNodeImageSettingsOpen(open);
+                    if (open) setToolbarNodeId(null);
+                }}
+            />
+        ), [canvasGenerationDefaults, connectedNodesByNodeId, configInputsById, disconnectNodeReference, handleConfigNodeChange, handleGenerateNode, handleNodePromptChange, mentionReferencesByNodeId, runningNodeId, startNodeReferenceSelection, videoFrameOptionsByNodeId, videoResourceOptionsByNodeId]);
+
+    const renderNodeBody = useCallback((contentNode: CanvasNodeData) =>
+        contentNode.type === CanvasNodeType.Director ? (
+            <CanvasDirectorNodePanel onOpen={() => setOpenDirectorNodeId(contentNode.id)} />
+        ) : (
+            <CanvasConfigNodePanel
+                node={contentNode}
+                isRunning={runningNodeId === contentNode.id}
+                inputSummary={getInputSummary(configInputsById.get(contentNode.id) || [])}
+                videoFrameOptions={videoFrameOptionsByNodeId.get(contentNode.id) || []}
+                videoResourceOptions={videoResourceOptionsByNodeId.get(contentNode.id) || []}
+                generationDefaults={canvasGenerationDefaults}
+                onConfigChange={handleConfigNodeChange}
+                onComposerToggle={() => setDialogNodeId((current) => (current === contentNode.id ? null : contentNode.id))}
+                onGenerate={(nodeId) => {
+                    const target = nodesRef.current.find((item) => item.id === nodeId);
+                    void handleGenerateNode(nodeId, target?.metadata?.generationMode || "image", target?.metadata?.composerContent ?? target?.metadata?.prompt ?? "");
+                }}
+            />
+        ), [canvasGenerationDefaults, configInputsById, handleConfigNodeChange, handleGenerateNode, runningNodeId, videoFrameOptionsByNodeId, videoResourceOptionsByNodeId]);
+
+    const handleNodeViewImage = useCallback((node: CanvasNodeData) => {
+        setPreviewNodeId(node.id);
+    }, []);
+
     const stopCanvasNode = useCallback(async (node: CanvasNodeData) => {
         if (node.metadata?.status !== NODE_STATUS_LOADING || node.metadata.stopState === "stopping") return;
         const taskId = node.type === CanvasNodeType.Video ? canvasVideoTaskId(node.metadata) : node.type === CanvasNodeType.Audio ? node.metadata?.audioTaskId : node.metadata?.imageTaskId;
@@ -4609,12 +4689,11 @@ const generateAngleNode = useCallback(
                 <InfiniteCanvas
                     containerRef={containerRef}
                     viewport={viewport}
+                    viewportRef={viewportRef}
+                    scaleRef={scaleRef}
                     tool={canvasTool}
                     backgroundMode={backgroundMode}
-                    onViewportChange={(next) => {
-                        setViewport(next);
-                        setContextMenu(null);
-                    }}
+                    onViewportChange={commitViewport}
                     onCanvasMouseDown={(event) => {
                         if (!referencePickerNodeId) handleCanvasMouseDown(event);
                     }}
@@ -4669,7 +4748,7 @@ const generateAngleNode = useCallback(
                             key={node.id}
                             data={node}
                             editRequestNonce={editRequestNonces[node.id] ?? 0}
-                            scale={viewport.k}
+                            scaleRef={scaleRef}
                             isSelected={selectedNodeIds.has(node.id)}
                             isRelated={relatedHighlight.nodeIds.has(node.id)}
                             isFocusRelated={activeNodeId === node.id}
@@ -4686,79 +4765,23 @@ const generateAngleNode = useCallback(
                             batchRecovering={collapsingBatchIds.has(node.id)}
                             batchMotion={batchMotionById.get(node.id)}
                             showImageInfo={showImageInfo}
-                            mentionReferences={mentionReferencesByNodeId.get(node.id) || []}
+                            mentionReferences={mentionReferencesByNodeId.get(node.id) || EMPTY_REFERENCES}
                             now={node.metadata?.status === NODE_STATUS_LOADING && !node.metadata.content && (node.type === CanvasNodeType.Video || isCanvasImageNodeType(node.type) || node.type === CanvasNodeType.Audio) ? canvasNow : undefined}
-                            renderPanel={(panelNode) =>
-                                panelNode.type === CanvasNodeType.Config ? (
-                                    <CanvasConfigComposer
-                                        value={panelNode.metadata?.composerContent ?? panelNode.metadata?.prompt ?? ""}
-                                        inputs={configInputsById.get(panelNode.id) || []}
-                                        onChange={(composerContent) => handleConfigNodeChange(panelNode.id, { composerContent })}
-                                        onClose={() => setDialogNodeId(null)}
-                                    />
-                                ) : panelNode.type === CanvasNodeType.Director ? null : (
-                                    <CanvasNodePromptPanel
-                                        node={panelNode}
-                                        isRunning={runningNodeId === panelNode.id}
-                                        mentionReferences={mentionReferencesByNodeId.get(panelNode.id) || []}
-                                        connectedNodes={connectedNodesByNodeId.get(panelNode.id) || []}
-                                        videoFrameOptions={videoFrameOptionsByNodeId.get(panelNode.id) || []}
-                                        videoResourceOptions={videoResourceOptionsByNodeId.get(panelNode.id) || []}
-                                        generationDefaults={canvasGenerationDefaults}
-                                        onPromptChange={handleNodePromptChange}
-                                        onConfigChange={handleConfigNodeChange}
-                                        onGenerate={handleGenerateNode}
-                                        onDisconnectReference={disconnectNodeReference}
-                                        onStartReferenceSelection={startNodeReferenceSelection}
-                                        onImageSettingsOpenChange={(open) => {
-                                            setNodeImageSettingsOpen(open);
-                                            if (open) setToolbarNodeId(null);
-                                        }}
-                                    />
-                                )
-                            }
-                            renderNodeContent={(contentNode) =>
-                                contentNode.type === CanvasNodeType.Director ? (
-                                    <CanvasDirectorNodePanel onOpen={() => setOpenDirectorNodeId(contentNode.id)} />
-                                ) : (
-                                    <CanvasConfigNodePanel
-                                        node={contentNode}
-                                        isRunning={runningNodeId === contentNode.id}
-                                        inputSummary={getInputSummary(configInputsById.get(contentNode.id) || [])}
-                                        videoFrameOptions={videoFrameOptionsByNodeId.get(contentNode.id) || []}
-                                        videoResourceOptions={videoResourceOptionsByNodeId.get(contentNode.id) || []}
-                                        generationDefaults={canvasGenerationDefaults}
-                                        onConfigChange={handleConfigNodeChange}
-                                        onComposerToggle={() => setDialogNodeId((current) => (current === contentNode.id ? null : contentNode.id))}
-                                        onGenerate={(nodeId) => {
-                                            const target = nodesRef.current.find((item) => item.id === nodeId);
-                                            void handleGenerateNode(nodeId, target?.metadata?.generationMode || "image", target?.metadata?.composerContent ?? target?.metadata?.prompt ?? "");
-                                        }}
-                                    />
-                                )
-                            }
+                            renderPanel={renderNodePanel}
+                            renderNodeContent={renderNodeBody}
                             onMouseDown={handleNodeMouseDown}
-                            onHoverStart={(nodeId) => {
-                                if (nodeDraggingRef.current) return;
-                                setHoveredNodeId(nodeId);
-                            }}
-                            onHoverEnd={(nodeId) => {
-                                setHoveredNodeId((current) => (current === nodeId ? null : current));
-                            }}
+                            onHoverStart={handleNodeHoverStart}
+                            onHoverEnd={handleNodeHoverEnd}
                             onConnectStart={handleConnectStart}
                             onResize={handleNodeResize}
                             onContentChange={handleNodeContentChange}
                             onTitleChange={handleNodeTitleChange}
                             onToggleBatch={toggleBatchExpanded}
                             onSetBatchPrimary={setBatchPrimary}
-                            onRetry={(node) => void handleRetryNode(node)}
-                            onViewImage={(node) => setPreviewNodeId(node.id)}
+                            onRetry={handleNodeRetry}
+                            onViewImage={handleNodeViewImage}
                             onSelectReference={selectNodeReference}
-                            onContextMenu={(event, id) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                setContextMenu({ type: "node", x: event.clientX, y: event.clientY, nodeId: id });
-                            }}
+                            onContextMenu={handleNodeContextMenu}
                         />
                     ))}
 
