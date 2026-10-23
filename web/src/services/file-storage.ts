@@ -65,9 +65,11 @@ export async function downloadRemoteMedia(url: string) {
     return blob;
 }
 
-export async function uploadRemoteMediaToServer(url: string, filename: string): Promise<UploadedFile> {
-    const ownerToken = useUserStore.getState().token;
+export async function uploadRemoteMediaToServer(url: string, filename: string, tokenOverride?: string): Promise<UploadedFile> {
+    const ownerToken = tokenOverride ?? useUserStore.getState().token;
+    if (useUserStore.getState().token !== ownerToken) throw new Error("登录状态已变化");
     const blob = await downloadRemoteMedia(url);
+    if (useUserStore.getState().token !== ownerToken) throw new Error("登录状态已变化");
     if (ownerToken) return persistGeneratedMediaBlob(blob, filename, url, ownerToken);
     return uploadMediaBlobToServer(blob, filename);
 }

@@ -45,7 +45,7 @@ export type RepairCanvasMediaResult = {
 };
 
 type MediaRepairCache = Map<string, Promise<{ ref: CanvasMediaRef; uploaded: boolean }>>;
-type MediaRepairOptions = { allowUpload?: boolean; filename?: string; cloudWaitMs?: number };
+type MediaRepairOptions = { allowUpload?: boolean; filename?: string; cloudWaitMs?: number; ownerToken?: string };
 
 const UPLOAD_CONCURRENCY = 3;
 
@@ -104,19 +104,18 @@ function isForeignBlob(content?: string) {
 const sharedMediaRepairs = new Map<string, { expiresAt: number; promise: Promise<{ ref: CanvasMediaRef; uploaded: boolean }> }>();
 const SHARED_MEDIA_REPAIR_TTL_MS = 60_000;
 
-function sharedMediaRepairOwner() {
-    const { token } = useUserStore.getState();
+function sharedMediaRepairOwner(token: string) {
     if (!token) return "anonymous";
     return `token:${token}`;
 }
 
-function sharedMediaRepairKey(kind: "image" | "media", ref: CanvasMediaRef) {
+function sharedMediaRepairKey(kind: "image" | "media", ref: CanvasMediaRef, ownerToken: string) {
     const key = mediaRepairCacheKey(kind, ref);
-    return key ? `${sharedMediaRepairOwner()}:${key}` : "";
+    return key ? `${sharedMediaRepairOwner(ownerToken)}:${key}` : "";
 }
 
-export async function canUploadCanvasMediaToServer(timeoutMs = 10_000) {
-    const token = useUserStore.getState().token;
+export async function canUploadCanvasMediaToServer(timeoutMs = 10_000, token = useUserStore.getState().token) {
+    if (useUserStore.getState().token !== token) return false;
     if (!token) return false;
     const initialState = useUserStore.getState();
     if (!initialState.isReady) {
@@ -130,6 +129,7 @@ export async function canUploadCanvasMediaToServer(timeoutMs = 10_000) {
         if (!useUserStore.getState().user) return false;
     }
     const config = await loadStorageConfig().catch(() => null);
+    if (useUserStore.getState().token !== token) return false;
     if (!config) return false;
     const userProvider = config.allowUserProvider ? loadUserStorageProvider() : null;
     return canUseGlobalStorage(config) || Boolean(userProvider);
@@ -277,12 +277,15 @@ async function repairCanvasMediaRefOnce(
     options: MediaRepairOptions,
     cache?: MediaRepairCache,
 ) {
+    options = { ...options, ownerToken: options.ownerToken ?? useUserStore.getState().token };
+    if (useUserStore.getState().token !== options.ownerToken) return { ref, changed: false, uploaded: false };
     const key = mediaRepairCacheKey(kind, ref);
     if (key && cache?.has(key)) {
         const shared = await cache.get(key)!;
+        if (useUserStore.getState().token !== options.ownerToken) return { ref, changed: false, uploaded: false };
         return { ref: shared.ref, changed: !sameRef(ref, shared.ref), uploaded: false };
     }
-    const sharedKey = sharedMediaRepairKey(kind, ref);
+    const sharedKey = sharedMediaRepairKey(kind, ref, options.ownerToken);
     const sharedEntry = sharedKey ? sharedMediaRepairs.get(sharedKey) : undefined;
     if (sharedEntry && sharedEntry.expiresAt <= Date.now()) {
         sharedMediaRepairs.delete(sharedKey);
@@ -300,41 +303,51 @@ async function repairCanvasMediaRefOnce(
     }
     if (key) cache?.set(key, pending);
     const repaired = await pending;
+    if (useUserStore.getState().token !== options.ownerToken) return { ref, changed: false, uploaded: false };
     return { ref: repaired.ref, changed: !sameRef(ref, repaired.ref), uploaded: repaired.uploaded };
 }
 
-async function tryUploadImageSource(source: string | Blob, filename: string) {
+function assertRepairOwner(ownerToken: string) {
+    if (useUserStore.getState().token !== ownerToken) throw new Error("登录状态已变化");
+}
+
+async function tryUploadImageSource(source: string | Blob, filename: string, ownerToken = useUserStore.getState().token) {
+    assertRepairOwner(ownerToken);
     if (typeof source === "string" && isHttpUrl(source)) {
-        return uploadRemoteImageToServer(source, filename);
+        return uploadRemoteImageToServer(source, filename, ownerToken);
     }
     try {
         if (typeof source === "string" && (isDataUrl(source) || isBlobUrl(source))) {
-            return await uploadImage(source);
+            return await uploadImage(source, { token: ownerToken });
         }
         if (typeof source !== "string") {
-            return await uploadImage(source);
+            return await uploadImage(source, { token: ownerToken });
         }
-        return await uploadRemoteImageToServer(source, filename);
+        return await uploadRemoteImageToServer(source, filename, ownerToken);
     } catch {
+        assertRepairOwner(ownerToken);
         // Cloud unavailable/unauthenticated: still persist locally so refresh keeps the image.
         if (typeof source === "string" && isHttpUrl(source)) throw new Error("远程图片上传失败");
         return uploadImage(source, { localOnly: true });
     }
 }
 
-async function tryUploadMediaSource(source: string | Blob, filename: string) {
+async function tryUploadMediaSource(source: string | Blob, filename: string, ownerToken = useUserStore.getState().token) {
+    assertRepairOwner(ownerToken);
     if (typeof source === "string" && isHttpUrl(source)) {
-        return uploadRemoteMediaToServer(source, filename);
+        return uploadRemoteMediaToServer(source, filename, ownerToken);
     }
     if (typeof source !== "string") {
-        return uploadMediaBlob(source, filename);
+        return uploadMediaBlob(source, filename, ownerToken);
     }
     if (isDataUrl(source) || isBlobUrl(source)) {
         const response = await fetch(source);
         if (!response.ok) throw new Error(`读取媒体失败：${response.status}`);
-        return uploadMediaBlob(await response.blob(), filename);
+        const blob = await response.blob();
+        assertRepairOwner(ownerToken);
+        return uploadMediaBlob(blob, filename, ownerToken);
     }
-    return uploadRemoteMediaToServer(source, filename);
+    return uploadRemoteMediaToServer(source, filename, ownerToken);
 }
 
 /**
@@ -347,6 +360,9 @@ export async function repairCanvasMediaRef(
     kind: "image" | "media",
     options: MediaRepairOptions = {},
 ): Promise<{ ref: CanvasMediaRef; changed: boolean; uploaded: boolean }> {
+    const ownerToken = options.ownerToken ?? useUserStore.getState().token;
+    const unchanged = () => ({ ref, changed: false, uploaded: false });
+    if (useUserStore.getState().token !== ownerToken) return unchanged();
     const allowUpload = options.allowUpload ?? true;
     const filename = options.filename || (kind === "image" ? "canvas-image.png" : "canvas-media.bin");
     const originalContent = (ref.content || "").trim();
@@ -357,7 +373,8 @@ export async function repairCanvasMediaRef(
     let mediaError = ref.mediaError;
     let uploaded = false;
     const loginPending = Boolean(useUserStore.getState().token && !useUserStore.getState().isReady);
-    const canUpload = allowUpload && (await canUploadCanvasMediaToServer(options.cloudWaitMs));
+    const canUpload = allowUpload && (await canUploadCanvasMediaToServer(options.cloudWaitMs, ownerToken));
+    if (useUserStore.getState().token !== ownerToken) return unchanged();
 
     // 1) server: pointer
     if (isServerKey(storageKey)) {
@@ -385,7 +402,7 @@ export async function repairCanvasMediaRef(
     else if (isDataUrl(content)) {
         // Always materialize data URLs into local/server storage so refresh does not drop multi-MB base64 nodes.
         try {
-            const result = kind === "image" ? await tryUploadImageSource(content, filename) : await tryUploadMediaSource(content, filename);
+            const result = kind === "image" ? await tryUploadImageSource(content, filename, ownerToken) : await tryUploadMediaSource(content, filename, ownerToken);
             storageKey = result.storageKey;
             content = isServerKey(result.storageKey) ? serverContentUrl(result.storageKey) || result.url : result.url;
             uploaded = isServerKey(result.storageKey);
@@ -410,10 +427,12 @@ export async function repairCanvasMediaRef(
     // 4) local IndexedDB keys
     else if (storageKey && ((kind === "image" && isLocalImageKey(storageKey)) || (kind === "media" && isLocalMediaKey(storageKey)))) {
         const localBlob = kind === "image" ? await getImageBlob(storageKey).catch(() => null) : await getMediaBlob(storageKey).catch(() => null);
+        if (useUserStore.getState().token !== ownerToken) return unchanged();
         if (localBlob) {
             if (canUpload) {
                 try {
-                    const result = kind === "image" ? await tryUploadImageSource(localBlob, filename) : await tryUploadMediaSource(localBlob, filename);
+                    const result = kind === "image" ? await tryUploadImageSource(localBlob, filename, ownerToken) : await tryUploadMediaSource(localBlob, filename, ownerToken);
+                    if (useUserStore.getState().token !== ownerToken) return unchanged();
                     storageKey = result.storageKey;
                     content = isServerKey(result.storageKey)
                         ? serverContentUrl(result.storageKey) || (isHttpUrl(result.url) ? displayUrl(result.url) : result.url)
@@ -459,7 +478,7 @@ export async function repairCanvasMediaRef(
     else if (isBlobUrl(content)) {
         if (!isForeignBlob(content) && canUpload) {
             try {
-                const result = kind === "image" ? await tryUploadImageSource(content, filename) : await tryUploadMediaSource(content, filename);
+                const result = kind === "image" ? await tryUploadImageSource(content, filename, ownerToken) : await tryUploadMediaSource(content, filename, ownerToken);
                 storageKey = result.storageKey;
                 content = isServerKey(result.storageKey) ? serverContentUrl(result.storageKey) || result.url : result.url;
                 uploaded = isServerKey(result.storageKey);
@@ -494,6 +513,7 @@ export async function repairCanvasMediaRef(
         mediaError = "媒体仅存于原浏览器本地，已失效";
     }
 
+    if (useUserStore.getState().token !== ownerToken) return unchanged();
     const next: CanvasMediaRef = {
         ...ref,
         content,
@@ -532,6 +552,7 @@ export async function repairCanvasNodeMedia(node: CanvasNodeData, options: Media
         },
         isImage ? "image" : "media",
         {
+            ...options,
             allowUpload: options.allowUpload,
             filename: `canvas-${node.type}-${node.id}.${isImage ? "png" : node.type === CanvasNodeType.Audio ? "mp3" : "mp4"}`,
         },
@@ -560,6 +581,7 @@ async function mapPool<T, R>(items: T[], limit: number, worker: (item: T, index:
 }
 
 export async function repairCanvasNodesMedia(nodes: CanvasNodeData[], options: MediaRepairOptions = {}, cache?: MediaRepairCache) {
+    options = { ...options, ownerToken: options.ownerToken ?? useUserStore.getState().token };
     let changed = false;
     let uploaded = 0;
     let broken = 0;
@@ -574,6 +596,7 @@ export async function repairCanvasNodesMedia(nodes: CanvasNodeData[], options: M
 }
 
 export async function repairCanvasSessionsMedia(sessions: CanvasAssistantSession[], options: MediaRepairOptions = {}, cache?: MediaRepairCache) {
+    options = { ...options, ownerToken: options.ownerToken ?? useUserStore.getState().token };
     let changed = false;
     let uploaded = 0;
     let broken = 0;
@@ -586,7 +609,7 @@ export async function repairCanvasSessionsMedia(sessions: CanvasAssistantSession
                 const repaired = await repairCanvasMediaRefOnce(
                     { content: image.dataUrl, storageKey: image.storageKey },
                     "image",
-                    { allowUpload: options.allowUpload, filename: "assistant-image.png" },
+                    { ...options, filename: "assistant-image.png" },
                     cache,
                 );
                 if (repaired.changed) changed = true;
@@ -604,7 +627,7 @@ export async function repairCanvasSessionsMedia(sessions: CanvasAssistantSession
                 const repaired = await repairCanvasMediaRefOnce(
                     { content: reference.dataUrl || reference.url, storageKey: reference.storageKey },
                     kind,
-                    { allowUpload: options.allowUpload, filename: "assistant-reference.bin" },
+                    { ...options, filename: "assistant-reference.bin" },
                     cache,
                 );
                 if (repaired.changed) changed = true;
@@ -629,9 +652,11 @@ export async function repairCanvasProjectMedia(
     sessions: CanvasAssistantSession[] = [],
     options: MediaRepairOptions = {},
 ): Promise<RepairCanvasMediaResult> {
+    options = { ...options, ownerToken: options.ownerToken ?? useUserStore.getState().token };
     const cache: MediaRepairCache = new Map();
     const nodeResult = await repairCanvasNodesMedia(nodes, options, cache);
     const sessionResult = await repairCanvasSessionsMedia(sessions, options, cache);
+    if (useUserStore.getState().token !== options.ownerToken) return { nodes, sessions, changed: false, uploaded: 0, broken: 0 };
     return {
         nodes: nodeResult.nodes,
         sessions: sessionResult.sessions,
@@ -639,6 +664,43 @@ export async function repairCanvasProjectMedia(
         uploaded: nodeResult.uploaded + sessionResult.uploaded,
         broken: nodeResult.broken + sessionResult.broken,
     };
+}
+
+/** Apply only unchanged media fields to live state; never restore removed nodes or old chat text. */
+export function mergeCanvasMediaRepair(
+    nodes: CanvasNodeData[],
+    sessions: CanvasAssistantSession[],
+    originalNodes: CanvasNodeData[],
+    originalSessions: CanvasAssistantSession[],
+    repaired: RepairCanvasMediaResult,
+) {
+    function patch<T extends object>(current: T, original: T, next: T, fields: readonly (keyof T)[]): T {
+        if (fields.some((field) => current[field] !== original[field])) return current;
+        const changes = fields.filter((field) => next[field] !== original[field]);
+        return changes.length ? { ...current, ...Object.fromEntries(changes.map((field) => [field, next[field]])) } : current;
+    }
+    function mergeById<T extends { id: string }>(current: T[], original: T[], next: T[], merge: (current: T, original: T, next: T) => T): T[] {
+        const before = new Map(original.map((item) => [item.id, item]));
+        const after = new Map(next.map((item) => [item.id, item]));
+        return current.map((item) => before.has(item.id) && after.has(item.id) ? merge(item, before.get(item.id)!, after.get(item.id)!) : item);
+    }
+    const nextNodes = mergeById(nodes, originalNodes, repaired.nodes, (node, original, next) => ({
+        ...node,
+        metadata: patch(node.metadata || {}, original.metadata || {}, next.metadata || {}, [
+            "content", "storageKey", "originalUrl", "mediaStatus", "mediaError", "mimeType", "bytes", "naturalWidth", "naturalHeight", "durationMs",
+        ]),
+    }));
+    const nextSessions = mergeById(sessions, originalSessions, repaired.sessions, (session, original, next) => ({
+        ...session,
+        messages: mergeById(session.messages, original.messages, next.messages, (message, before, after) => ({
+            ...message,
+            images: mergeById(message.images || [], before.images || [], after.images || [], (image, previous, updated) =>
+                patch(image, previous, updated, ["dataUrl", "storageKey"])),
+            references: mergeById(message.references || [], before.references || [], after.references || [], (reference, previous, updated) =>
+                patch(reference, previous, updated, ["dataUrl", "url", "storageKey"])),
+        })),
+    }));
+    return { nodes: nextNodes, sessions: nextSessions };
 }
 
 export function reportCanvasLocalOnlyMedia(nodes: CanvasNodeData[], ownerId: string) {

@@ -258,14 +258,16 @@ export async function uploadImage(input: string | Blob, options: UploadImageOpti
     return { url: urlObj, storageKey, width: meta.width, height: meta.height, bytes: blob.size, mimeType: blob.type || meta.mimeType };
 }
 
-export async function uploadRemoteImageToServer(url: string, filename: string): Promise<UploadedImage> {
-    const ownerToken = useUserStore.getState().token;
+export async function uploadRemoteImageToServer(url: string, filename: string, tokenOverride?: string): Promise<UploadedImage> {
+    const ownerToken = tokenOverride ?? useUserStore.getState().token;
+    if (useUserStore.getState().token !== ownerToken) throw new Error("登录状态已变化");
     const response = await fetch(getProxyUrl(url));
     if (!response.ok) {
         const payload = await response.json().catch(() => null) as { msg?: string } | null;
         throw new Error(payload?.msg || "代理图片拉取失败：" + response.status);
     }
     const blob = await response.blob();
+    if (useUserStore.getState().token !== ownerToken) throw new Error("登录状态已变化");
     if (ownerToken) return persistGeneratedImageBlob(blob, filename, url, ownerToken);
     const config = await loadStorageConfig();
     const userProvider = config.allowUserProvider ? loadUserStorageProvider() : null;

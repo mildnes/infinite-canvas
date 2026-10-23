@@ -39,17 +39,26 @@ function loadMediaModule(options = {}) {
     const uploads = [];
     const warnings = [];
     let releaseUpload = () => {};
+    let releaseBlob = () => {};
+    let blobReads = 0;
+    const uploadTokens = [];
     const uploadGate = options.gateUpload ? new Promise((resolve) => { releaseUpload = resolve; }) : Promise.resolve();
+    const blobGate = options.gateBlob ? new Promise((resolve) => { releaseBlob = resolve; }) : Promise.resolve();
     const imageStorage = {
         canUseGlobalStorage: (config) => config.mode === "server_sqlite_s3" && Boolean(userStore.getState().user),
-        getImageBlob: async () => options.localBlob === false ? null : new Blob(["image"], { type: "image/png" }),
+        getImageBlob: async () => {
+            blobReads += 1;
+            await blobGate;
+            return options.localBlob === false ? null : new Blob(["image"], { type: "image/png" });
+        },
         getProxyUrl: (url) => url,
         loadStorageConfig: async () => ({ mode: "server_sqlite_s3", allowUserProvider: false, allowUserGlobalProvider: true, autoSyncAllAssets: true }),
         loadUserStorageProvider: () => null,
         resolveImageUrl: async (storageKey) => storageKey?.startsWith("server:") ? `/api/files/${storageKey.slice(7)}/content` : "blob:local-preview",
         setImageBlob: async () => "blob:stored-preview",
-        uploadImage: async () => {
+        uploadImage: async (_source, uploadOptions = {}) => {
             uploads.push("image");
+            uploadTokens.push(uploadOptions.token);
             await uploadGate;
             return { storageKey: "server:uploaded", url: "/api/files/uploaded/content", width: 1, height: 1, bytes: 5, mimeType: "image/png" };
         },
@@ -59,7 +68,12 @@ function loadMediaModule(options = {}) {
         },
     };
     const fileStorage = {
-        getMediaBlob: async () => null,
+        getMediaBlob: async () => {
+            if (!options.mediaBlob) return null;
+            blobReads += 1;
+            await blobGate;
+            return new Blob(["media"], { type: "video/mp4" });
+        },
         resolveMediaUrl: async () => "",
         setMediaBlob: async () => "",
         uploadMediaBlob: async () => {
@@ -121,8 +135,109 @@ function loadMediaModule(options = {}) {
         }).outputText,
         context,
     );
-    return { api: exports, userStore, uploads, warnings, releaseUpload };
+    return { api: exports, userStore, uploads, warnings, releaseUpload, releaseBlob, uploadTokens, blobReads: () => blobReads };
 }
+
+function runBackgroundRepair(f, { nodes, sessions = [], loadedToken = "A-token" }) {
+    const start = pageSource.indexOf("    useEffect(() => {\n        if (!projectLoaded || !userReady");
+    assert.ok(start >= 0, "用户就绪补跑 effect 应存在");
+    const end = pageSource.indexOf("\n\n    useEffect", start);
+    const state = { nodes, sessions };
+    const context = {
+        ...f.api,
+        useEffect: (effect) => effect(),
+        projectLoaded: true, userReady: true, currentAccountId: "A", currentUserToken: "A-token",
+        projectId: "board", activeProjectIdRef: { current: "board" },
+        loadedProjectRef: { current: { id: "board", token: loadedToken } },
+        nodesRef: { current: nodes }, latestCanvasStateRef: { current: { chatSessions: sessions } },
+        useUserStore: f.userStore, message: { success() {}, warning() {} },
+        setNodes: (next) => { state.nodes = typeof next === "function" ? next(state.nodes) : next; },
+        setChatSessions: (next) => { state.sessions = typeof next === "function" ? next(state.sessions) : next; },
+        syncAssistantReferences: (next) => next,
+    };
+    vm.runInNewContext(ts.transpileModule(pageSource.slice(start, end), {
+        compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+    }).outputText, context);
+    return { state, context };
+}
+
+test("读取本地 blob 期间切号不上传 A 的媒体，也不返回云端改写", async () => {
+    const f = loadMediaModule({ user: { token: "A-token", user: { id: "A" }, isReady: true }, gateBlob: true });
+    const node = { id: "local", type: "image", metadata: { storageKey: "image:private-A", content: "blob:local", mediaStatus: "local-only" } };
+    const pending = f.api.repairCanvasProjectMedia([node], [], { allowUpload: true });
+    while (!f.blobReads()) await delay(1);
+    f.userStore.setState({ token: "B-token", user: { id: "B" }, isReady: true });
+    f.releaseBlob();
+    const result = await pending;
+    assert.equal(f.uploads.length, 0, "A repair 在 IndexedDB 返回后必须取消，不能借用 B token 上传");
+    assert.equal(result.nodes[0].metadata.storageKey, "image:private-A");
+});
+
+test("repair 上传明确绑定启动账号，迟到响应不改写节点", async () => {
+    const f = loadMediaModule({ user: { token: "A-token", user: { id: "A" }, isReady: true }, gateUpload: true });
+    const node = { id: "local", type: "image", metadata: { storageKey: "image:A", content: "blob:local", mediaStatus: "local-only" } };
+    const pending = f.api.repairCanvasProjectMedia([node], [], { allowUpload: true });
+    while (!f.uploads.length) await delay(1);
+    assert.equal(f.uploadTokens[0], "A-token");
+    f.userStore.setState({ token: "B-token", user: { id: "B" }, isReady: true });
+    f.releaseUpload();
+    const result = await pending;
+    assert.equal(result.nodes[0].metadata.storageKey, "image:A", "切号后的迟到上传结果必须丢弃");
+});
+
+test("视频本地 blob 读取期间切号也停止媒体上传", async () => {
+    const f = loadMediaModule({ user: { token: "A-token", user: { id: "A" }, isReady: true }, gateBlob: true, mediaBlob: true });
+    const node = { id: "video", type: "video", metadata: { storageKey: "file:private-A", mediaStatus: "local-only" } };
+    const pending = f.api.repairCanvasProjectMedia([node], [], { allowUpload: true });
+    while (!f.blobReads()) await delay(1);
+    f.userStore.setState({ token: "B-token", user: { id: "B" }, isReady: true });
+    f.releaseBlob();
+    const result = await pending;
+    assert.equal(f.uploads.length, 0);
+    assert.equal(result.nodes[0].metadata.storageKey, "file:private-A");
+});
+
+test("当前已加载画板仍属于旧 token 时，不启动新账号后台 repair", async () => {
+    const f = loadMediaModule({ user: { token: "A-token", user: { id: "A" }, isReady: true } });
+    runBackgroundRepair(f, { loadedToken: "previous-token", nodes: [
+        { id: "local", type: "image", metadata: { storageKey: "image:previous", mediaStatus: "local-only" } },
+    ] });
+    await delay(30);
+    assert.equal(f.uploads.length, 0);
+});
+
+test("后台 repair 等待期间增删移动节点、改内容和聊天均保留", async () => {
+    const f = loadMediaModule({ user: { token: "A-token", user: { id: "A" }, isReady: true }, gateUpload: true });
+    const nodes = ["moved", "edited", "deleted"].map((id) => ({
+        id, type: "image", x: 0, metadata: { content: "blob:local", storageKey: `image:${id}`, mediaStatus: "local-only", prompt: "old" },
+    }));
+    const sessions = [{ id: "session", title: "old", messages: [
+        { id: "message", text: "old", images: [{ id: "image", dataUrl: "blob:local", storageKey: "image:moved" }] },
+    ] }];
+    const fEffect = runBackgroundRepair(f, { nodes, sessions });
+    while (!f.uploads.length) await delay(1);
+    const latest = [
+        { ...nodes[0], x: 150, metadata: { ...nodes[0].metadata, prompt: "new prompt" } },
+        { ...nodes[1], metadata: { ...nodes[1].metadata, content: "/api/files/user-edit/content", storageKey: "server:user-edit" } },
+        { id: "new", type: "text", metadata: { content: "new node" } },
+    ];
+    fEffect.state.nodes = latest;
+    fEffect.context.nodesRef.current = latest;
+    fEffect.state.sessions = [{ ...sessions[0], title: "new title", messages: [
+        { ...sessions[0].messages[0], text: "edited chat" }, { id: "new-message", text: "new chat" },
+    ] }];
+    f.releaseUpload();
+    await delay(40);
+    assert.deepEqual(fEffect.state.nodes.map((n) => n.id), ["moved", "edited", "new"]);
+    assert.equal(fEffect.state.nodes[0].x, 150);
+    assert.equal(fEffect.state.nodes[0].metadata.prompt, "new prompt");
+    assert.equal(fEffect.state.nodes[0].metadata.storageKey, "server:uploaded");
+    assert.equal(fEffect.state.nodes[1].metadata.storageKey, "server:user-edit");
+    assert.equal(fEffect.state.sessions[0].title, "new title");
+    assert.equal(fEffect.state.sessions[0].messages[0].text, "edited chat");
+    assert.equal(fEffect.state.sessions[0].messages[1].text, "new chat");
+    assert.equal(fEffect.state.sessions[0].messages[0].images[0].storageKey, "server:uploaded");
+});
 
 test("登录态未就绪时，可上传判定会等待用户就绪而不是立即返回 false", async () => {
     const f = loadMediaModule();
