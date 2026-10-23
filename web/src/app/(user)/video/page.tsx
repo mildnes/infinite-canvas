@@ -180,6 +180,7 @@ export default function VideoPage() {
     const referenceImageLimit = klingOmni === "text-to-video" ? 0 : klingOmni === "image-to-video" ? 2 : klingOmni === "transformation" ? 4 : isKlingWorkbench && klingOmni !== "reference-to-video" ? 2 : referenceLimits.images;
     const videoReferenceLimit = klingAcceptsVideoReferences ? 1 : referenceLimits.videos;
     const pendingLogCount = logs.filter((log) => log.status === "生成中" && log.task && !log.video).length;
+    const hasPendingTasks = shouldPollVideoTasks({ pendingCount, pendingLogCount, results });
     const usesBackendVideoTasks = (value: AiConfig) => value.channelMode === "remote" || (value.channelMode === "local" && Boolean(token));
 
     const restorePendingLogResults = (sourceLogs: GenerationLog[]) => {
@@ -203,10 +204,10 @@ export default function VideoPage() {
     };
 
     useEffect(() => {
-        if (!pendingCount && !pendingLogCount) return;
+        if (!hasPendingTasks) return;
         const timer = window.setInterval(() => setNow(Date.now()), 1000);
         return () => window.clearInterval(timer);
-    }, [pendingCount, pendingLogCount]);
+    }, [hasPendingTasks]);
 
     useEffect(() => {
         setResults((current) => {
@@ -233,7 +234,7 @@ export default function VideoPage() {
     }, [logs]);
 
     useEffect(() => {
-        if (!pendingLogCount) return;
+        if (!hasPendingTasks) return;
         const controller = new AbortController();
         const context = { token: token || "", signal: controller.signal };
         const timer = window.setInterval(() => {
@@ -243,7 +244,7 @@ export default function VideoPage() {
             controller.abort();
             window.clearInterval(timer);
         };
-    }, [pendingLogCount, token, userId]);
+    }, [hasPendingTasks, token, userId]);
 
     useEffect(() => {
         try {
@@ -1079,7 +1080,7 @@ export default function VideoPage() {
 
     const pollPendingLogOnce = async (log: GenerationLog, resumeConfig: AiConfig, context: WorkflowPollContext) => {
         const run = taskRunsRef.current.get(log.id) || beginTaskRun(taskRunsRef.current, log.id, log.providerWorkflowRef ? "workflow" : "video", videoLogTaskId(log), context.token);
-        const active = () => !context.signal.aborted && currentTaskRun(taskRunsRef.current, log.id, run, useUserStore.getState().token) && !run.stopping;
+        const active = () => !context.signal.aborted && currentTaskRun(taskRunsRef.current, log.id, run, useUserStore.getState().token);
         if (!active()) return;
         pollingLogIdsRef.current.add(log.id);
         const startedAt = log.createdAt || Date.now();
@@ -1121,7 +1122,8 @@ export default function VideoPage() {
                 const nextLog = { ...baseLog, status: "成功" as const, video, error: undefined, errorDetail: undefined };
                 await finalizeGenerationLog(nextLog, active);
                 if (!active()) return;
-                setResults((value) => value.filter((item) => item.taskLogId !== log.id && item.id !== log.id));
+                const logId = log.id;
+                setResults((value) => (active() ? value.filter((item) => item.taskLogId !== logId && item.id !== logId) : value));
                 return;
             }
             await saveGenerationLog(baseLog, active);
@@ -2717,6 +2719,10 @@ function updateResult(results: GenerationResult[], id: string, next: Partial<Gen
 
 function updateResultByLogId(results: GenerationResult[], logId: string, next: Partial<GenerationResult>) {
     return results.map((item) => ((item.taskLogId === logId || item.id === logId) && item.status === "pending" ? { ...item, ...next } : item));
+}
+
+function shouldPollVideoTasks({ pendingCount, pendingLogCount, results }: { pendingCount: number; pendingLogCount: number; results: GenerationResult[] }) {
+    return pendingCount > 0 || pendingLogCount > 0 || results.some((item) => item.status === "pending" && item.stopState === "stopping");
 }
 
 function selectedVideoLogVideos(logs: GenerationLog[], selectedLogIds: Set<string>): GeneratedVideo[] {
