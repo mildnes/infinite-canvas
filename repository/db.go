@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,6 +49,12 @@ func DB() (*gorm.DB, error) {
 		if driver == "sqlite" && dsn != ":memory:" {
 			_ = os.MkdirAll(filepath.Dir(dsn), 0755)
 		}
+		if driver == "sqlite" {
+			dsn, dbErr = prepareSQLiteDSN(dsn)
+			if dbErr != nil {
+				return
+			}
+		}
 		if isPostgresDriver(driver) {
 			dbErr = ensurePostgresDatabase(dsn)
 			if dbErr != nil {
@@ -89,6 +96,43 @@ func DB() (*gorm.DB, error) {
 		)
 	})
 	return db, dbErr
+}
+
+func prepareSQLiteDSN(dsn string) (string, error) {
+	path, query, _ := strings.Cut(dsn, "?")
+	if isSQLiteMemoryDSN(path, query) {
+		return dsn, nil
+	}
+	params, err := url.ParseQuery(query)
+	if err != nil {
+		return "", err
+	}
+	pragmas := make([]string, 0, len(params["_pragma"])+1)
+	for _, pragma := range params["_pragma"] {
+		if !strings.HasPrefix(strings.ToLower(strings.Join(strings.Fields(pragma), "")), "journal_mode") {
+			pragmas = append(pragmas, pragma)
+		}
+	}
+	params["_pragma"] = append(pragmas, "journal_mode(WAL)")
+	params.Set("_txlock", "immediate")
+	return path + "?" + params.Encode(), nil
+}
+
+func isSQLiteMemoryDSN(path, query string) bool {
+	path = strings.TrimSpace(path)
+	if strings.EqualFold(path, ":memory:") || strings.EqualFold(path, "file::memory:") {
+		return true
+	}
+	params, err := url.ParseQuery(query)
+	if err != nil {
+		return false
+	}
+	for _, mode := range params["mode"] {
+		if strings.EqualFold(strings.TrimSpace(mode), "memory") {
+			return true
+		}
+	}
+	return false
 }
 
 func dialector(driver string, dsn string) gorm.Dialector {

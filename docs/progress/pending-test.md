@@ -5,6 +5,13 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
+## SQLite 事务锁与 WAL
+
+- [实现] SQLite 打开路径统一改写 DSN，追加 `_pragma=journal_mode(WAL)` 与 `_txlock=immediate`：事务开始即取写锁，避免读事务升级为写时 `SQLITE_BUSY` 失败并残留事务。仍使用纯 Go 驱动 `glebarez/sqlite`，未换驱动、未改 `go.mod`／`go.sum`、未改数据库结构。
+- [实现] 改写幂等：已有 `busy_timeout` 等参数保留且不重复追加同名 journal_mode pragma，`cache=shared`、`_time_limit` 等其它参数原样保留；`:memory:`、`file::memory:` 与 `mode=memory` 纯内存库跳过改写，避免共享缓存被破坏。库文件路径部分逐字不变。
+- [本机验证] DSN 改写与真实临时库 pragma 生效用例通过，幂等改写重复运行结果一致；`go test ./... -count=1` 435 项通过，`gofmt -l` 对改动文件无输出，`git diff --check` 通过。真实文件与 WAL 门禁用例在 macOS 上明确 SKIP，需在 Go 1.25 Linux 容器执行。
+- [ ] Hermes 验收：测试实例低峰期开启 WAL／immediate 后观察并发写不再出现 `database is locked`／事务残留，`PRAGMA integrity_check` 正常；按建议压测命令验证后再上生产，回滚为恢复原 DSN 并重启。本次未执行容器全量与并发压测，未触碰生产库。
+
 ## AI 调用日志正文上限
 
 - [实现] `aiLogRequestTextLimit` 由 64 KiB 调整为 256 KiB，长提示词与多参考图请求的正文可完整保留到 AI 调用日志；截断按 UTF-8 原始字节计算，超限时追加截断标记。日志仍写入 `AI_LOG_DIR`（默认 `data/logs/ai-calls`）按日期分文件，未改数据库结构。
