@@ -21,7 +21,8 @@ export function snapNodesToCanvasGrid(nodes: CanvasNodeData[], movedIds: Set<str
 }
 
 export function arrangeCanvasNodes(nodes: CanvasNodeData[]): CanvasNodeData[] {
-    const targets = nodes.filter((node) => !node.metadata?.groupId && !node.metadata?.batchRootId);
+    const declaredBatchChildIds = new Set(nodes.flatMap((node) => node.metadata?.batchChildIds || []));
+    const targets = nodes.filter((node) => !node.metadata?.groupId && !node.metadata?.batchRootId && !declaredBatchChildIds.has(node.id));
     if (!targets.length) return nodes;
     const startX = Math.min(...targets.map((node) => node.position.x));
     const startY = Math.min(...targets.map((node) => node.position.y));
@@ -48,6 +49,19 @@ export function arrangeCanvasNodes(nodes: CanvasNodeData[]): CanvasNodeData[] {
             const dy = target.y - group.position.y;
             nodes
                 .filter((node) => node.metadata?.groupId === group.id && !positions.has(node.id))
+                .forEach((node) => positions.set(node.id, { x: node.position.x + dx, y: node.position.y + dy }));
+        });
+    targets
+        .filter((node) => node.metadata?.isBatchRoot || (node.metadata?.batchChildIds?.length ?? 0) > 0)
+        .forEach((root) => {
+            const target = positions.get(root.id);
+            if (!target) return;
+            const dx = target.x - root.position.x;
+            const dy = target.y - root.position.y;
+            if (!dx && !dy) return;
+            const declared = new Set(root.metadata?.batchChildIds || []);
+            nodes
+                .filter((node) => !positions.has(node.id) && (declared.has(node.id) || node.metadata?.batchRootId === root.id))
                 .forEach((node) => positions.set(node.id, { x: node.position.x + dx, y: node.position.y + dy }));
         });
     return nodes.map((node) => (positions.has(node.id) ? { ...node, position: positions.get(node.id)! } : node));

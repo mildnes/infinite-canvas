@@ -49,6 +49,81 @@ test("整理画板按四列网格排列并让组内子节点跟随", () => {
     assert.deepEqual(byId.get("child").position, { x: 292, y: 392 });
     assert.deepEqual(byId.get("n5").position, { x: 40, y: 312 });
     assert.deepEqual(byId.get("batchRoot").position, { x: 584, y: 312 });
-    assert.deepEqual(byId.get("batchChild").position, { x: 840, y: 840 });
+    assert.deepEqual(byId.get("batchChild").position, { x: 624, y: 352 });
+    assert.deepEqual(
+        {
+            dx: byId.get("batchChild").position.x - byId.get("batchRoot").position.x,
+            dy: byId.get("batchChild").position.y - byId.get("batchRoot").position.y,
+        },
+        { dx: 40, dy: 40 },
+    );
     assert.deepEqual(nodes[0].position, { x: 500, y: 400 });
+});
+
+test("整理画板仅凭 batchChildIds 声明也会让批量子节点跟随", () => {
+    const nodes = [
+        node("other", { x: 100, y: 100 }),
+        node("root", { x: 800, y: 800 }, { metadata: { isBatchRoot: true, batchChildIds: ["child"] } }),
+        node("child", { x: 840, y: 840 }),
+    ];
+    const arranged = arrangeCanvasNodes(nodes);
+    const byId = new Map(arranged.map((item) => [item.id, item]));
+
+    assert.deepEqual(byId.get("root").position, { x: 272, y: 100 });
+    assert.deepEqual(byId.get("child").position, { x: 312, y: 140 });
+});
+
+test("整理画板仅凭 batchRootId 声明也会让批量子节点跟随", () => {
+    const nodes = [
+        node("other", { x: 100, y: 100 }),
+        node("root", { x: 800, y: 800 }, { metadata: { isBatchRoot: true } }),
+        node("child", { x: 840, y: 840 }, { metadata: { batchRootId: "root" } }),
+    ];
+    const arranged = arrangeCanvasNodes(nodes);
+    const byId = new Map(arranged.map((item) => [item.id, item]));
+
+    assert.deepEqual(byId.get("root").position, { x: 272, y: 100 });
+    assert.deepEqual(byId.get("child").position, { x: 312, y: 140 });
+    assert.deepEqual(
+        {
+            dx: byId.get("child").position.x - byId.get("root").position.x,
+            dy: byId.get("child").position.y - byId.get("root").position.y,
+        },
+        { dx: 40, dy: 40 },
+    );
+});
+
+test("整理画板时组节点与批次根节点各自跟随自己的子节点", () => {
+    const nodes = [
+        node("group", { x: 40, y: 40 }, { type: "group", width: 200, height: 200 }),
+        node("groupChild", { x: 80, y: 80 }, { metadata: { groupId: "group" } }),
+        node("batchRoot", { x: 800, y: 800 }, { metadata: { isBatchRoot: true, batchChildIds: ["batchChild"] } }),
+        node("batchChild", { x: 840, y: 840 }, { metadata: { batchRootId: "batchRoot" } }),
+    ];
+    const arranged = arrangeCanvasNodes(nodes);
+    const byId = new Map(arranged.map((item) => [item.id, item]));
+
+    assert.deepEqual(byId.get("group").position, { x: 40, y: 40 });
+    assert.deepEqual(byId.get("groupChild").position, { x: 80, y: 80 });
+    assert.deepEqual(byId.get("batchRoot").position, { x: 312, y: 40 });
+    assert.deepEqual(byId.get("batchChild").position, { x: 352, y: 80 });
+    assert.deepEqual(
+        {
+            dx: byId.get("batchChild").position.x - byId.get("batchRoot").position.x,
+            dy: byId.get("batchChild").position.y - byId.get("batchRoot").position.y,
+        },
+        { dx: 40, dy: 40 },
+    );
+});
+
+test("整理画板时双向声明的批量子节点只平移一次", () => {
+    const nodes = [
+        node("other", { x: 100, y: 100 }),
+        node("root", { x: 800, y: 800 }, { metadata: { isBatchRoot: true, batchChildIds: ["child", "child"] } }),
+        node("child", { x: 840, y: 840 }, { metadata: { batchRootId: "root" } }),
+    ];
+    const arranged = arrangeCanvasNodes(nodes);
+    const byId = new Map(arranged.map((item) => [item.id, item]));
+
+    assert.deepEqual(byId.get("child").position, { x: 312, y: 140 });
 });
