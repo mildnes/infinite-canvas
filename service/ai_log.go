@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	aiLogRequestTextLimit = 64 * 1024
+	aiLogRequestTextLimit = 256 * 1024
 	aiLogErrorTextLimit   = 16 * 1024
 	aiLogScannerMax       = 16 * 1024 * 1024
 	defaultAILogCron      = "0 3 * * *"
