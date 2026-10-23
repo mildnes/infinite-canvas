@@ -32,11 +32,11 @@ func newWebDAVClient(provider model.StorageProvider) (*gowebdav.Client, error) {
 
 func webDAVStorageTransport(provider model.StorageProvider) http.RoundTripper {
 	if !provider.AllowPrivateNetwork {
-		return SafeProxyHTTPClient().Transport
+		return newWebDAVArmoredTransport(provider, SafeProxyHTTPClient().Transport, webDAVProviderBreakers)
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
-	return transport
+	return newWebDAVArmoredTransport(provider, transport, webDAVProviderBreakers)
 }
 
 func cleanStoragePath(value string) (string, error) {

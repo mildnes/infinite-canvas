@@ -4,13 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
 
 var safeProxyHTTPClient = newSafeProxyHTTPClient()
+
+const defaultSSRFDialTimeout = 5 * time.Second
 
 func SafeProxyHTTPClient() *http.Client {
 	return safeProxyHTTPClient
@@ -18,7 +22,10 @@ func SafeProxyHTTPClient() *http.Client {
 func newSafeProxyHTTPClient() *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
-	transport.DialContext = safeProxyDialContext
+	dialTimeout := ssrfDialTimeout()
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		return safeProxyDialContext(ctx, network, address, dialTimeout)
+	}
 	return &http.Client{
 		Transport: transport,
 		Timeout:   5 * time.Minute,
@@ -35,7 +42,21 @@ func newSafeProxyHTTPClient() *http.Client {
 	}
 }
 
-func safeProxyDialContext(ctx context.Context, network, address string) (net.Conn, error) {
+func ssrfDialTimeout() time.Duration {
+	raw, found := os.LookupEnv("SSRF_DIAL_TIMEOUT")
+	raw = strings.TrimSpace(raw)
+	if !found || raw == "" {
+		return defaultSSRFDialTimeout
+	}
+	value, err := time.ParseDuration(raw)
+	if err != nil || value <= 0 {
+		log.Printf("invalid SSRF_DIAL_TIMEOUT=%q, using %s", raw, defaultSSRFDialTimeout)
+		return defaultSSRFDialTimeout
+	}
+	return value
+}
+
+func safeProxyDialContext(ctx context.Context, network, address string, timeout ...time.Duration) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
@@ -49,8 +70,12 @@ func safeProxyDialContext(ctx context.Context, network, address string) (net.Con
 			return nil, errors.New("禁止访问本地或内网地址")
 		}
 	}
+	dialTimeout := defaultSSRFDialTimeout
+	if len(timeout) > 0 && timeout[0] > 0 {
+		dialTimeout = timeout[0]
+	}
 	dialer := net.Dialer{
-		Timeout:   30 * time.Second,
+		Timeout:   dialTimeout,
 		KeepAlive: 30 * time.Second,
 	}
 	var lastErr error
