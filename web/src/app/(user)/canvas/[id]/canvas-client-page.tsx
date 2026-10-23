@@ -5807,7 +5807,8 @@ function applyNodeConfigPatch(node: CanvasNodeData, patch: Partial<CanvasNodeDat
     const safePatch = patch || {};
     const isPanorama = isPanoramaNodeType(node.type);
     const next = { ...node, metadata: { ...node.metadata, ...safePatch, ...(isPanorama ? { size: PANORAMA_IMAGE_SIZE } : {}) } };
-    const spec = isPanorama ? NODE_DEFAULT_SIZE[CanvasNodeType.Panorama] : node.type === CanvasNodeType.Video ? NODE_DEFAULT_SIZE[CanvasNodeType.Video] : NODE_DEFAULT_SIZE[CanvasNodeType.Image];
+    const videoSide = Math.max(node.width, node.height);
+    const spec = isPanorama ? NODE_DEFAULT_SIZE[CanvasNodeType.Panorama] : node.type === CanvasNodeType.Video ? { width: videoSide, height: videoSide } : NODE_DEFAULT_SIZE[CanvasNodeType.Image];
     const size = !isPanorama && typeof safePatch.size === "string" && !node.metadata?.content ? nodeSizeFromRatio(safePatch.size, spec.width, spec.height) : null;
     return size && (isCanvasImageNodeType(node.type) || node.type === CanvasNodeType.Video) ? { ...next, ...size, position: { x: node.position.x + node.width / 2 - size.width / 2, y: node.position.y + node.height / 2 - size.height / 2 } } : next;
 }
