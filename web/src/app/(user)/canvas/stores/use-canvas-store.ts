@@ -85,6 +85,8 @@ const deletingProjectIds = new Set<string>();
 const MAX_SAVE_WAIT_MS = 2000;
 const sanitizedNodes = new WeakMap<CanvasNodeData[], CanvasNodeData[]>();
 const sanitizedSessions = new WeakMap<CanvasAssistantSession[], CanvasAssistantSession[]>();
+// Only an explicit retry may resolve the exact draft it restored.
+const retryDrafts = new WeakMap<CanvasProject, CanvasProject>();
 
 function persistentProject(project: CanvasProject): CanvasProject {
     let nodes = sanitizedNodes.get(project.nodes);
@@ -142,6 +144,8 @@ async function flushProjectSave(id: string): Promise<void> {
     if (!queued) return;
     cancelProjectSaves([id]);
     const project = useCanvasStore.getState().projects.find((item) => item.id === id) || queued;
+    const retryDraft = retryDrafts.get(project);
+    if (useCanvasStore.getState().conflictDrafts.some((draft) => draft.id === id && draft !== retryDraft)) return;
     const owner = currentStorageOwnerId();
     const epoch = ownerEpoch;
     const token = useUserStore.getState().token;
@@ -152,11 +156,14 @@ async function flushProjectSave(id: string): Promise<void> {
             const saved = await saveCanvasProject(token, persistentProject(project), project.serverUpdatedAt ?? "");
             if (!current() || !saved) return;
             failedProjectSaves.delete(id);
-            useCanvasStore.setState((state) => ({
-                projects: state.projects.map((latest) => latest.id !== id ? latest : latest === project ? canonicalProject(saved) : { ...latest, serverUpdatedAt: saved.updatedAt }),
-                syncError: failedProjectSaves.size ? state.syncError : null,
-                conflictDrafts: state.conflictDrafts.filter((draft) => draft.id !== id),
-            }));
+            useCanvasStore.setState((state) => {
+                const conflictDrafts = state.conflictDrafts.filter((draft) => draft !== retryDraft);
+                return {
+                    projects: state.projects.map((latest) => latest.id !== id ? latest : latest === project ? canonicalProject(saved) : { ...latest, serverUpdatedAt: saved.updatedAt }),
+                    syncError: failedProjectSaves.size || conflictDrafts.length ? state.syncError : null,
+                    conflictDrafts,
+                };
+            });
         } catch (error) {
             if (!current()) return;
             failedProjectSaves.add(id);
@@ -578,7 +585,10 @@ export const useCanvasStore = create<CanvasStore>()(
                 if (drafts.length) set((state) => ({
                     projects: state.projects.map((project) => {
                         const draft = drafts.find((item) => item.id === project.id);
-                        return draft ? { ...draft, serverUpdatedAt: project.serverUpdatedAt, pendingSave: true } : project;
+                        if (!draft) return project;
+                        const restored = { ...draft, serverUpdatedAt: project.serverUpdatedAt, pendingSave: true };
+                        retryDrafts.set(restored, draft);
+                        return restored;
                     }),
                     restoreVersion: state.restoreVersion + 1,
                 }));

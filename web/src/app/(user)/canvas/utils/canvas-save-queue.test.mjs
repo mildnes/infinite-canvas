@@ -55,8 +55,8 @@ function fixture() {
     const api = {
         listCanvasProjects: async () => [initial],
         syncCanvasProjects: async (_token, values) => values,
-        saveCanvasProject: async (token, value) => {
-            saves.push({ token, value, at: time });
+        saveCanvasProject: async (token, value, baseUpdatedAt) => {
+            saves.push({ token, value, baseUpdatedAt, at: time });
             inFlight++;
             maxInFlight = Math.max(maxInFlight, inFlight);
             try {
@@ -233,4 +233,109 @@ test("持续编辑超过 2 秒仍会在 max timer 到期后落地，后续 burst
     assert.ok(f.saves.some(save => save.value.title === "burst-24"), "last burst update must eventually save");
     for (const id of [...f.pendingSaves.keys()]) f.release(id);
     await tick();
+});
+
+const conflict = () => Object.assign(new Error("conflict"), {
+    status: 409,
+    data: { currentProject: { ...project("remote"), updatedAt: "2029-01-01T00:00:00Z" } },
+});
+
+async function conflictDuringSave(f) {
+    await tick();
+    f.useCanvasStore.getState().renameProject("p", "first");
+    await f.advance(400);
+    f.useCanvasStore.getState().renameProject("p", "last");
+    f.fail(conflict());
+    f.release(1);
+    await tick();
+    f.fail(undefined);
+}
+
+test("409 停止自动续刷 canonical remote，最后编辑保留为冲突草稿", async () => {
+    const f = fixture();
+    await conflictDuringSave(f);
+    await f.advance(2500);
+    assert.deepEqual(f.saves.map(save => save.value.title), ["first"]);
+    assert.equal(f.useCanvasStore.getState().projects[0].title, "remote");
+    assert.equal(f.useCanvasStore.getState().conflictDrafts[0]?.title, "last");
+    assert.ok(f.useCanvasStore.getState().syncError);
+});
+
+test("409 后的新编辑保持本地且不自动发送，显式重试恢复草稿并使用 canonical CAS", async () => {
+    const f = fixture();
+    await conflictDuringSave(f);
+    f.useCanvasStore.getState().renameProject("p", "after-conflict");
+    await f.advance(2500);
+    assert.deepEqual(f.saves.map(save => save.value.title), ["first"]);
+    assert.equal(f.useCanvasStore.getState().projects[0].title, "after-conflict");
+    assert.equal(f.useCanvasStore.getState().conflictDrafts[0]?.title, "last");
+    const retry = f.useCanvasStore.getState().retrySaves();
+    await tick();
+    assert.equal(f.saves.at(-1).value.title, "last");
+    assert.equal(f.saves.at(-1).baseUpdatedAt, "2029-01-01T00:00:00Z");
+    assert.equal(f.useCanvasStore.getState().conflictDrafts[0]?.title, "last");
+    f.release(2);
+    await retry;
+    assert.equal(f.useCanvasStore.getState().projects[0].title, "last");
+    assert.equal(f.useCanvasStore.getState().conflictDrafts.length, 0);
+    assert.equal(f.useCanvasStore.getState().syncError, null);
+});
+
+test("成功响应保留保存开始后出现的未解决草稿，显式重试失败仍保留草稿", async () => {
+    const f = fixture();
+    await tick();
+    f.useCanvasStore.getState().renameProject("p", "first");
+    await f.advance(400);
+    f.useCanvasStore.setState({ conflictDrafts: [project("unresolved")] });
+    f.release(1);
+    await tick();
+    assert.equal(f.useCanvasStore.getState().conflictDrafts[0]?.title, "unresolved");
+    const retry = f.useCanvasStore.getState().retrySaves();
+    await tick();
+    f.fail(new Error("offline"));
+    f.release(2);
+    await retry;
+    assert.equal(f.useCanvasStore.getState().conflictDrafts[0]?.title, "unresolved");
+    assert.equal(f.useCanvasStore.getState().projects[0].pendingSave, true);
+});
+
+test("显式重试期间的新编辑在草稿保存成功后串行发送，并沿用新 CAS", async () => {
+    const f = fixture();
+    await conflictDuringSave(f);
+    const retry = f.useCanvasStore.getState().retrySaves();
+    await tick();
+    f.useCanvasStore.getState().renameProject("p", "during-retry");
+    f.release(2);
+    await retry;
+    await tick();
+    assert.deepEqual(f.saves.map(save => save.value.title), ["first", "last", "during-retry"]);
+    assert.equal(f.saves[2].baseUpdatedAt, "2030-01-01T00:00:02Z");
+    assert.equal(f.useCanvasStore.getState().conflictDrafts.length, 0);
+    assert.equal(f.maxInFlight, 1);
+    f.release(3);
+    await tick();
+    assert.equal(f.useCanvasStore.getState().projects[0].title, "during-retry");
+    assert.equal(f.useCanvasStore.getState().projects[0].pendingSave, false);
+});
+
+test("显式重试再次 409 时保留最新编辑为新草稿，并停止后续自动请求", async () => {
+    const f = fixture();
+    await conflictDuringSave(f);
+    const retry = f.useCanvasStore.getState().retrySaves();
+    await tick();
+    f.useCanvasStore.getState().renameProject("p", "latest-retry-draft");
+    f.fail(conflict());
+    f.release(2);
+    await retry;
+    await f.advance(2500);
+    assert.deepEqual(f.saves.map(save => save.value.title), ["first", "last"]);
+    assert.equal(f.useCanvasStore.getState().projects[0].title, "remote");
+    assert.equal(f.useCanvasStore.getState().conflictDrafts[0]?.title, "latest-retry-draft");
+    f.fail(undefined);
+    const secondRetry = f.useCanvasStore.getState().retrySaves();
+    await tick();
+    assert.equal(f.saves[2].value.title, "latest-retry-draft");
+    f.release(3);
+    await secondRetry;
+    assert.equal(f.useCanvasStore.getState().conflictDrafts.length, 0);
 });
