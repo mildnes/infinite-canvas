@@ -69,7 +69,7 @@ export function InfiniteCanvas({ containerRef, viewport, viewportRef, scaleRef, 
             gestureCommitTimerRef.current = null;
         }
         applyGestureViewport();
-    }, [viewport.k]);
+    }, [viewport]);
 
     useEffect(() => {
         commitGestureViewportRef.current = onViewportChange;

@@ -193,3 +193,106 @@ test("pan gestures update transform without React commits and commit on pointeru
         restoreDom(context);
     }
 });
+
+for (const gesture of ["wheel", "pan"]) {
+    test(`same-scale external viewport changes synchronize the next ${gesture} gesture`, async (t) => {
+        const context = setupDom();
+        const root = createRoot(context.dom.window.document.getElementById("root"));
+        t.after(async () => {
+            try {
+                await act(async () => root.unmount());
+            } finally {
+                restoreDom(context);
+            }
+        });
+        const container = { current: null };
+        const viewportRef = { current: { x: 0, y: 0, k: 1 } };
+        const scaleRef = { current: 1 };
+        let pageCommits = 0;
+        let pageRenders = 0;
+        let nodeRenders = 0;
+        let setExternalViewport;
+        const node = React.createElement(function TestNode() {
+            nodeRenders += 1;
+            return React.createElement("div", { "data-node-id": "node-1" }, "node");
+        });
+        function Page() {
+            const [viewport, setViewport] = React.useState({ x: 0, y: 0, k: 1 });
+            setExternalViewport = setViewport;
+            pageRenders += 1;
+            return React.createElement(
+                InfiniteCanvas,
+                {
+                    containerRef: container,
+                    viewport,
+                    viewportRef,
+                    scaleRef,
+                    tool: gesture === "pan" ? "pan" : "select",
+                    onViewportChange: (next) => {
+                        pageCommits += 1;
+                        setViewport(next);
+                    },
+                },
+                node,
+            );
+        }
+        await act(async () => root.render(React.createElement(Page)));
+        container.current.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1200, height: 800 });
+        container.current.setPointerCapture = () => {};
+        const externalViewport = { x: 500, y: 300, k: 1 };
+        await act(async () => setExternalViewport(externalViewport));
+        const rendersBeforeGesture = { page: pageRenders, node: nodeRenders };
+        const layer = container.current.querySelector("[data-canvas-transform-layer='true']");
+        const mouse = { x: 600, y: 400 };
+        const anchorBefore = worldAt(container.current, externalViewport, mouse.x, mouse.y);
+        let expected;
+
+        if (gesture === "wheel") {
+            const k = externalViewport.k * Math.pow(1.1, 100 / 100);
+            expected = { x: mouse.x - anchorBefore.x * k, y: mouse.y - anchorBefore.y * k, k };
+            await act(async () => {
+                dispatchWheel(container.current, mouse.x, mouse.y, -100);
+                await new Promise((resolve) => setTimeout(resolve, 1));
+            });
+        } else {
+            expected = { x: 508, y: 312, k: 1 };
+            await act(async () => {
+                container.current.dispatchEvent(pointerEvent(context.dom.window, "pointerdown", 100, 100));
+            });
+            await act(async () => {
+                context.dom.window.document.dispatchEvent(pointerEvent(context.dom.window, "pointermove", 108, 112));
+                await new Promise((resolve) => setTimeout(resolve, 1));
+            });
+        }
+
+        const transform = layer.style.transform.match(/translate\(([^,]+)px, ([^)]+)px\) scale\(([^)]+)\)/);
+        assert.ok(transform, "the transform layer must expose its live viewport");
+        const actual = { x: Number(transform[1]), y: Number(transform[2]), k: Number(transform[3]) };
+        assert.deepEqual(actual, expected, `${gesture} must start from the external x=500, y=300 viewport`);
+        assert.deepEqual(viewportRef.current, expected, "persistence must see the latest gesture viewport");
+        assert.equal(scaleRef.current, expected.k, "shared scale must track the live transform");
+        assert.equal(Number(layer.style.getPropertyValue("--canvas-inverse-scale")), 1 / expected.k);
+        if (gesture === "wheel") {
+            const anchorAfter = worldAt(container.current, actual, mouse.x, mouse.y);
+            assert.deepEqual(
+                [anchorAfter.x.toFixed(6), anchorAfter.y.toFixed(6)],
+                [anchorBefore.x.toFixed(6), anchorBefore.y.toFixed(6)],
+                "the mouse world anchor must survive same-scale external panning",
+            );
+        }
+        assert.equal(pageCommits, 0, "gestures must not submit page state before silence or pointerup");
+        assert.equal(pageRenders, rendersBeforeGesture.page, "the page must not re-render during gestures");
+        assert.equal(nodeRenders, rendersBeforeGesture.node, "child nodes must not re-render during gestures");
+
+        await act(async () => {
+            if (gesture === "wheel") {
+                await new Promise((resolve) => setTimeout(resolve, 170));
+            } else {
+                context.dom.window.dispatchEvent(pointerEvent(context.dom.window, "pointerup", 108, 112, { buttons: 0 }));
+            }
+        });
+        assert.equal(pageCommits, 1, "the completed gesture must submit page state exactly once");
+        assert.deepEqual(viewportRef.current, expected, "the React commit must retain the gesture result");
+        assert.equal(nodeRenders, rendersBeforeGesture.node, "the viewport commit must preserve stable child nodes");
+    });
+}
