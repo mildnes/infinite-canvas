@@ -107,6 +107,11 @@ func prepareSQLiteDSN(dsn string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// go-sqlite v1.21.2 uses the same default time format, but this option
+	// returns before parsing _txlock. Omit the equivalent option to apply both.
+	if params.Get("_time_format") == "sqlite" {
+		params.Del("_time_format")
+	}
 	pragmas := make([]string, 0, len(params["_pragma"])+1)
 	for _, pragma := range params["_pragma"] {
 		if !strings.HasPrefix(strings.ToLower(strings.Join(strings.Fields(pragma), "")), "journal_mode") {

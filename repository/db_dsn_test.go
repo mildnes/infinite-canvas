@@ -2,6 +2,7 @@ package repository
 
 import (
 	"database/sql"
+	"errors"
 	"net/url"
 	"path/filepath"
 	"reflect"
@@ -9,10 +10,117 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/tigerowo/infinite-canvas/config"
+	"gorm.io/gorm"
 )
+
+func TestSQLiteImmediateTransactionWithTimeFormat(t *testing.T) {
+	for _, format := range []string{"", "&_time_format=sqlite"} {
+		t.Run("format="+format, func(t *testing.T) {
+			dsn, err := prepareSQLiteDSN(filepath.Join(t.TempDir(), "lock.db") + "?_pragma=busy_timeout(50)" + format)
+			if err != nil {
+				t.Fatal(err)
+			}
+			open := func() *sql.DB {
+				database, err := gorm.Open(dialector("sqlite", dsn), &gorm.Config{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				connection, err := database.DB()
+				if err != nil {
+					t.Fatal(err)
+				}
+				connection.SetMaxOpenConns(1)
+				t.Cleanup(func() { _ = connection.Close() })
+				return connection
+			}
+			first, second := open(), open()
+			tx, err := first.Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			other, err := second.Begin()
+			if err == nil {
+				_ = other.Rollback()
+				t.Error("second BEGIN succeeded: first transaction did not acquire the immediate write lock")
+			} else {
+				var sqliteErr interface{ Code() int }
+				if !errors.As(err, &sqliteErr) || sqliteErr.Code() != 5 {
+					t.Fatalf("second BEGIN error = %v, want SQLITE_BUSY", err)
+				}
+			}
+			if err := tx.Rollback(); err != nil {
+				t.Fatal(err)
+			}
+			other, err = second.Begin()
+			if err != nil {
+				t.Fatalf("BEGIN after lock release: %v", err)
+			}
+			if err := other.Commit(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestSQLiteTimeFormatEncodingPreserved(t *testing.T) {
+	original := filepath.Join(t.TempDir(), "time.db") + "?_time_format=sqlite"
+	dsn, err := prepareSQLiteDSN(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := []time.Time{
+		time.Date(2026, 10, 23, 14, 25, 36, 123456789, time.FixedZone("test", 8*60*60)),
+		time.Date(2026, 10, 23, 6, 25, 36, 0, time.UTC),
+		{},
+	}
+	originalEncodings := make([]string, len(values))
+	for _, candidate := range []string{original, dsn} {
+		database, err := sql.Open("sqlite", candidate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = database.Close() })
+		statement, err := database.Prepare("SELECT CAST(? AS TEXT)")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = statement.Close() })
+		for i, value := range values {
+			var encoded string
+			if err := statement.QueryRow(value).Scan(&encoded); err != nil {
+				t.Fatal(err)
+			}
+			if candidate == original {
+				originalEncodings[i] = encoded
+			} else if encoded != originalEncodings[i] {
+				t.Fatalf("time encoding = %q, original _time_format=sqlite encoding = %q", encoded, originalEncodings[i])
+			}
+		}
+	}
+	if originalEncodings[0] != "2026-10-23 14:25:36.123456789+08:00" {
+		t.Fatalf("unexpected sqlite time encoding: %q", originalEncodings[0])
+	}
+}
+
+func TestSQLiteInvalidTimeFormatStillRejected(t *testing.T) {
+	dsn, err := prepareSQLiteDSN(filepath.Join(t.TempDir(), "invalid-time.db") + "?_time_format=invalid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.Ping(); err == nil || !strings.Contains(err.Error(), `unknown _time_format "invalid"`) {
+		t.Fatalf("invalid format error = %v", err)
+	}
+}
 
 func TestPrepareSQLiteDSN(t *testing.T) {
 	tests := []struct {

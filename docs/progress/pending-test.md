@@ -39,7 +39,10 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 - [实现] SQLite 打开路径统一改写 DSN，追加 `_pragma=journal_mode(WAL)` 与 `_txlock=immediate`：事务开始即取写锁，避免读事务升级为写时 `SQLITE_BUSY` 失败并残留事务。仍使用纯 Go 驱动 `glebarez/sqlite`，未换驱动、未改 `go.mod`／`go.sum`、未改数据库结构。
 - [实现] 改写幂等：已有 `busy_timeout` 等参数保留且不重复追加同名 journal_mode pragma，`cache=shared`、`_time_limit` 等其它参数原样保留；`:memory:`、`file::memory:` 与 `mode=memory` 纯内存库跳过改写，避免共享缓存被破坏。库文件路径部分逐字不变。
+- [审计补修] 锁定驱动 `glebarez/go-sqlite v1.21.2` 在解析 `_time_format=sqlite` 后提前返回，导致 `_txlock` 不生效；该格式与驱动实际默认时间编码相同，因此文件库 DSN 省略此等价参数。非法格式仍由驱动拒绝，内存库不改，未调整依赖。
 - [本机验证] DSN 改写与真实临时库 pragma 生效用例通过，幂等改写重复运行结果一致；`go test ./... -count=1` 435 项通过，`gofmt -l` 对改动文件无输出，`git diff --check` 通过。真实文件与 WAL 门禁用例在 macOS 上明确 SKIP，需在 Go 1.25 Linux 容器执行。
+- [补修先红后绿] 新增双独立 GORM 连接／同一临时文件锁测试：旧实现带 `_time_format=sqlite` 时第二个 `BEGIN` 错误地成功，补修后必须收到 `SQLITE_BUSY`（错误码 5），首个事务回滚后可重新开始并提交。日期编码对比覆盖时区、纳秒、UTC、零值且逐字相同，非法格式仍拒绝。定向重复 10 次共 110 项通过，repository 31 项通过。
+- [本机复验] Go 1.25.0 darwin/arm64 全量 440 项通过、1 项 Linux 专项 `TestGORMOpenRealFileSQLite` 明确跳过；新增双连接锁测试在本机实际执行。改动文件 `gofmt -l` 无输出，全仓遗留 12 个文件不变；`git diff --check` 通过，`go.mod`／`go.sum` 无差异。
 - [ ] Hermes 验收：测试实例低峰期开启 WAL／immediate 后观察并发写不再出现 `database is locked`／事务残留，`PRAGMA integrity_check` 正常；按建议压测命令验证后再上生产，回滚为恢复原 DSN 并重启。本次未执行容器全量与并发压测，未触碰生产库。
 
 ## AI 调用日志正文上限
