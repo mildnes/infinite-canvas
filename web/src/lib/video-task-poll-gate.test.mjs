@@ -78,4 +78,3 @@ function findCallback(name) {
     assert.ok(callback, `应存在回调 ${name}`);
     return callback;
 }
-
