@@ -7,6 +7,7 @@ import { stripReferenceMetadata } from "./prompt-reference-metadata.ts";
 import { buildNodeGenerationContext, buildNodeChatMessages } from "../components/canvas-node-generation.ts";
 import { CanvasNodeType } from "../types.ts";
 import { beginTaskRun, currentTaskRun, acceptsTaskUpdate, isStoppedTask, canvasTaskRetryMode } from "../../../../lib/generation-task-run.ts";
+import { IMAGE_MASK_EDIT_PROMPT_PREFIX } from "../../../../lib/image-reference-prompt.ts";
 
 const page = readFileSync(new URL("../[id]/canvas-client-page.tsx", import.meta.url), "utf8");
 const ast = ts.createSourceFile("canvas.tsx", page, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -130,6 +131,7 @@ function callbackScope(node) {
         const definition = nodes.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name);
         scope[name] = vm.runInNewContext(compile(`(${definition.getText(ast)})`), scope);
     }
+    scope.IMAGE_MASK_EDIT_PROMPT_PREFIX = IMAGE_MASK_EDIT_PROMPT_PREFIX;
     scope.canSubmitCanvasMediaRequest = vm.runInNewContext(compile(`(${callback("canSubmitCanvasMediaRequest")})`), scope);
     return { api, state, scope };
 }
