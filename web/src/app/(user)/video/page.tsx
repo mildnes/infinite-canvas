@@ -2049,6 +2049,7 @@ function ResultsPanel({
     const liveLogIds = new Set(visibleResults.flatMap((result) => [result.taskLogId, result.id]).filter((id): id is string => Boolean(id)));
     const visibleLogs = logs.filter((log) => !liveLogIds.has(log.id) && !videoLogIdentityKeys(log).some((key) => liveResultKeys.has(key)));
     const totalCount = visibleResults.length + visibleLogs.length;
+    const selectedVideos = selectedVideoLogVideos(visibleLogs, new Set(selectedLogIds));
     const allSelected = Boolean(visibleLogs.length) && visibleLogs.every((log) => selectedLogIds.includes(log.id));
     const toggleVisibleLogs = () => onSelectedLogIdsChange(allSelected ? selectedLogIds.filter((id) => !visibleLogs.some((log) => log.id === id)) : Array.from(new Set([...selectedLogIds, ...visibleLogs.map((log) => log.id)])));
 
@@ -2065,6 +2066,7 @@ function ResultsPanel({
                     <Button size="small" icon={<Plus className="size-3.5" />} onClick={onCreateSession}>新建</Button>
                     <Button size="small" icon={<CheckSquare className="size-3.5" />} disabled={!visibleLogs.length} onClick={toggleVisibleLogs}>{allSelected ? "取消" : "全选"}</Button>
                     <Button size="small" danger icon={<Trash2 className="size-3.5" />} disabled={!selectedLogIds.length} onClick={onDeleteSelected}>删除</Button>
+                    <Button size="small" icon={<Download className="size-3.5" />} disabled={!selectedVideos.length} onClick={() => selectedVideos.forEach(onDownload)}>下载</Button>
                 </div>
             </div>
             {totalCount ? (
@@ -2715,6 +2717,10 @@ function updateResult(results: GenerationResult[], id: string, next: Partial<Gen
 
 function updateResultByLogId(results: GenerationResult[], logId: string, next: Partial<GenerationResult>) {
     return results.map((item) => ((item.taskLogId === logId || item.id === logId) && item.status === "pending" ? { ...item, ...next } : item));
+}
+
+function selectedVideoLogVideos(logs: GenerationLog[], selectedLogIds: Set<string>): GeneratedVideo[] {
+    return logs.flatMap((log) => selectedLogIds.has(log.id) && log.video ? [log.video] : []);
 }
 
 function mergePendingLogResults(results: GenerationResult[], logs: GenerationLog[]) {

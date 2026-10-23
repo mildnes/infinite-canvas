@@ -1984,6 +1984,7 @@ function ResultsPanel({
     const categoryGroups = categories.map((category) => ({ category, logs: baseVisibleLogs.filter((log) => log.categoryIds.includes(category.id)) }));
     const activeCategory = activeCategoryId ? categories.find((category) => category.id === activeCategoryId) : null;
     const visibleLogs = resultViewMode === "category" ? (activeCategoryId ? baseVisibleLogs.filter((log) => log.categoryIds.includes(activeCategoryId)) : baseVisibleLogs.filter((log) => !log.categoryIds.length)) : baseVisibleLogs;
+    const selectedImages = selectedImageLogImages(visibleLogs, new Set(selectedLogIds));
     const totalCount = results.length + (resultViewMode === "category" ? (activeCategoryId ? visibleLogs.length : categories.length + visibleLogs.length) : visibleLogs.length);
     const shouldShowGrid = totalCount > 0;
     const allVisibleLogsSelected = Boolean(visibleLogs.length) && visibleLogs.every((log) => selectedLogIds.includes(log.id));
@@ -2042,6 +2043,9 @@ function ResultsPanel({
                     </Button>
                     <Button size="small" danger icon={<Trash2 className="size-3.5" />} disabled={!selectedLogIds.length} onClick={onDeleteSelected}>
                         删除
+                    </Button>
+                    <Button size="small" icon={<Download className="size-3.5" />} disabled={!selectedImages.length} onClick={() => selectedImages.forEach(onDownload)}>
+                        下载
                     </Button>
                     <Button size="small" icon={<FolderPlus className="size-3.5" />} disabled={!selectedLogIds.length} onClick={onAddSelectedToCategory}>
                         添加至分类
@@ -2602,6 +2606,10 @@ function updateResult(results: GenerationResult[], id: string, next: Partial<Gen
 function updateResultByLogId(results: GenerationResult[], logId: string, next: Partial<GenerationResult>) {
     const keys = new Set(uniqueStrings([logId, ...imageTaskIdentityKeys(next.task)]));
     return results.map((item) => (imageResultIdentityKeys(item).some((key) => keys.has(key)) ? { ...item, ...next } : item));
+}
+
+function selectedImageLogImages(logs: GenerationLog[], selectedLogIds: Set<string>): GeneratedImage[] {
+    return logs.flatMap((log) => selectedLogIds.has(log.id) ? log.images.filter((image) => Boolean(image.dataUrl)) : []);
 }
 
 function mergePendingLogResults(results: GenerationResult[], logs: GenerationLog[]) {
