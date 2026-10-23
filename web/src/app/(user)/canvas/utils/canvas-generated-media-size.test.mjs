@@ -5,6 +5,7 @@ import test from "node:test";
 import {
     IMAGE_NODE_DEFAULT_SIZE,
     VIDEO_NODE_DEFAULT_SIZE,
+    applyGeneratedMediaSize,
     centerResizedNodeSize,
     isGeneratedMediaNode,
     resolveGeneratedMediaSize,
@@ -80,10 +81,20 @@ test("real media callbacks are guarded by currentSrc and preserve video duration
 test("page consumes loaded media identity and skips auto-sizing once the user resized the node", () => {
     const handler = extractFunction(pageSource, "handleNodeResize");
     assert.ok(/loadedNode/.test(handler), handler);
-    assert.ok(/resolveGeneratedMediaSize\(node, width, height\)/.test(handler), handler);
-    assert.ok(/centerResizedNodeSize\(node, autoSize\)/.test(handler), handler);
+    assert.ok(/applyGeneratedMediaSize\(node, width, height\)/.test(handler), handler);
     assert.match(handler, /position\s*\|\|\s*node\.position/);
     assert.match(handler, /freeResize:\s*true/);
+});
+
+test("auto-sizing records the real natural dimensions for later manual resize", () => {
+    const node = { type: "image", width: 420, height: 236, position: { x: 100, y: 200 }, metadata: { imageTaskId: "client_image_task_1", prompt: "keep" } };
+    const patch = applyGeneratedMediaSize(node, 3840, 2160);
+    assert.ok(patch);
+    assert.equal(patch.metadata.prompt, "keep");
+    assert.equal(patch.metadata.naturalWidth, 3840);
+    assert.equal(patch.metadata.naturalHeight, 2160);
+    assert.ok(Math.abs(patch.width / patch.height - 16 / 9) < 0.001);
+    assert.equal(applyGeneratedMediaSize({ ...node, metadata: { ...node.metadata, freeResize: true } }, 3840, 2160), null);
 });
 
 test("generated image and video nodes use the shared 420x236 default while local uploads may use natural size", () => {

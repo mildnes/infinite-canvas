@@ -4,7 +4,7 @@ import { fitNodeSize } from "./canvas-node-size";
 export const IMAGE_NODE_DEFAULT_SIZE = { width: 420, height: 236 } as const;
 export const VIDEO_NODE_DEFAULT_SIZE = { width: 420, height: 236 } as const;
 
-type GeneratedMediaSizeInput = Pick<CanvasNodeData, "type" | "width" | "height" | "metadata">;
+type GeneratedMediaSizeInput = Pick<CanvasNodeData, "type" | "width" | "height" | "position" | "metadata">;
 
 export function isGeneratedMediaNode(node: Pick<CanvasNodeData, "type" | "metadata">) {
     if (node.type !== CanvasNodeType.Image && node.type !== CanvasNodeType.Video) return false;
@@ -27,5 +27,18 @@ export function centerResizedNodeSize(node: Pick<CanvasNodeData, "width" | "heig
             x: node.position.x + node.width / 2 - size.width / 2,
             y: node.position.y + node.height / 2 - size.height / 2,
         },
+    };
+}
+
+export function applyGeneratedMediaSize(
+    node: GeneratedMediaSizeInput,
+    naturalWidth: number,
+    naturalHeight: number,
+): Partial<Pick<CanvasNodeData, "width" | "height" | "position" | "metadata">> | null {
+    const size = resolveGeneratedMediaSize(node, naturalWidth, naturalHeight);
+    if (!size) return null;
+    return {
+        ...centerResizedNodeSize(node, size),
+        metadata: { ...node.metadata, naturalWidth, naturalHeight },
     };
 }
