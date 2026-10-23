@@ -164,7 +164,10 @@ async function flushProjectSave(id: string): Promise<void> {
         }
     })();
     projectSavesInFlight.set(id, request);
-    try { await request; } finally { if (projectSavesInFlight.get(id) === request) projectSavesInFlight.delete(id); }
+    try { await request; } finally {
+        if (projectSavesInFlight.get(id) === request) projectSavesInFlight.delete(id);
+        if (pendingProjectSaves.has(id)) void flushProjectSave(id);
+    }
 }
 
 export async function flushCanvasSaves() {
