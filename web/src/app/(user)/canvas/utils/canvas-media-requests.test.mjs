@@ -6,6 +6,7 @@ import ts from "typescript";
 import { stripReferenceMetadata } from "./prompt-reference-metadata.ts";
 import { buildNodeGenerationContext, buildNodeChatMessages } from "../components/canvas-node-generation.ts";
 import { CanvasNodeType } from "../types.ts";
+import { shouldOverwriteCanvasNode } from "./canvas-regeneration.ts";
 import { beginTaskRun, currentTaskRun, acceptsTaskUpdate, isStoppedTask, canvasTaskRetryMode } from "../../../../lib/generation-task-run.ts";
 import { IMAGE_MASK_EDIT_PROMPT_PREFIX } from "../../../../lib/image-reference-prompt.ts";
 
@@ -114,6 +115,7 @@ function callbackScope(node) {
     const state = { nodes: [node], writes: 0, notices: [], running: [] };
     const scope = {
         ...api, Error, CanvasNodeType, canvasTaskRetryMode, nodesRef: { current: state.nodes }, connectionsRef: { current: [] }, effectiveConfig: config, canvasGenerationDefaults: config,
+        shouldOverwriteCanvasNode,
         startNodeTaskRun: () => ({ controller: new AbortController() }), guardNodeTaskResponse: () => {}, nodeRunActive: () => true,
         useUserStore: { getState: () => ({ token: "test" }) },
         isCanvasImageNodeType: (type) => ["image", "panorama"].includes(type), isPanoramaNodeType: (type) => type === "panorama",

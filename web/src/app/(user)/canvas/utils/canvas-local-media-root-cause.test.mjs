@@ -405,7 +405,7 @@ test("登录态未就绪时，可上传判定会等待用户就绪而不是立�
 
 test("用户 store 在 token 水合后显式从 isReady=false 进入就绪，并在失败时也结束等待", () => {
     assert.ok(
-        /const token = get\(\)\.token;[\s\S]*?if \(!token\)[\s\S]*?set\(\{ user: null, isReady: true \}\)[\s\S]*?set\(\{ isLoading: true, isReady: false \}\)/.test(useUserSource),
+        /const token = get\(\)\.token;[\s\S]*?if \(!token\)[\s\S]*?set\(\{ user: null, isReady: true \}\)[\s\S]*?const knownUser = get\(\)\.user;[\s\S]*?set\(knownUser \? \{ isLoading: true \} : \{ isLoading: true, isReady: false \}\)/.test(useUserSource),
         "hydrateUser 必须先读取已水合 token，再显式进入加载态",
     );
     assert.ok(
@@ -413,8 +413,8 @@ test("用户 store 在 token 水合后显式从 isReady=false 进入就绪，并
         "persist 水合超时也必须结束就绪等待，避免永久卡住",
     );
     assert.ok(
-        /hydrateUser[\s\S]*?set\(\{ isLoading: true, isReady: false \}\)/.test(useUserSource),
-        "hydrateUser 开始请求时必须把 isReady 置回 false，避免水合完成后的旧 isReady=true 提前放行",
+        /const knownUser = get\(\)\.user;[\s\S]*?set\(knownUser \? \{ isLoading: true \} : \{ isLoading: true, isReady: false \}\)/.test(useUserSource),
+        "hydrateUser 仅在首次水合时把 isReady 置回 false，刷新已知用户时保持 owner 稳定",
     );
 });
 

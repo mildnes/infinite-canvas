@@ -6,8 +6,9 @@ const ACCOUNT_STORE_KEYS = new Set(["infinite-canvas:canvas_store", "infinite-ca
 
 export function currentStorageOwnerId(): string | null {
     const { token, user, isReady } = useUserStore.getState();
+    if (user?.id) return user.id;
     if (!isReady) return null;
-    return token ? user?.id || null : "anon";
+    return token ? null : "anon";
 }
 
 export async function waitForStorageOwner(timeoutMs = 12000) {

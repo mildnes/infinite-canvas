@@ -63,7 +63,8 @@ export const useUserStore = create<UserStore>()(
                     set({ user: null, isReady: true });
                     return;
                 }
-                set({ isLoading: true, isReady: false });
+                const knownUser = get().user;
+                set(knownUser ? { isLoading: true } : { isLoading: true, isReady: false });
                 try {
                     const user = await fetchCurrentUser(token);
                     if (get().token !== token) return;

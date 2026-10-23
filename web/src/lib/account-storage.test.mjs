@@ -88,6 +88,49 @@ test("real canvas store switches A / anon / B / A without cross-account upload o
     assert.ok(!f.operations.some(([action, key]) => action === "get" && key === canvasKey));
 });
 
+test("same-account user refresh keeps canvas owner stable without clearing or rehydrating", async () => {
+    const f = fixture();
+    f.seed(canvasKey, "A", [project("A-local")]);
+    const store = f.load("../app/(user)/canvas/stores/use-canvas-store.ts").useCanvasStore;
+    await tick();
+    const before = f.operations.filter(([action, key]) => action === "get" && key === canvasKey + ":A").length;
+    const projects = store.getState().projects;
+
+    f.user.setState({ isReady: false });
+    await tick();
+    f.user.setState({ isReady: true });
+    await tick();
+
+    assert.equal(store.getState().ownerUserId, "A");
+    assert.equal(store.getState().projects[0]?.id, "A-local");
+    assert.equal(store.getState().projects, projects, "same-account refresh must not replace canvas state");
+    assert.equal(
+        f.operations.filter(([action, key]) => action === "get" && key === canvasKey + ":A").length,
+        before,
+        "same-account refresh must not rehydrate the canvas store",
+    );
+});
+
+test("real account switch still resets and rehydrates exactly one new owner", async () => {
+    const f = fixture();
+    f.seed(canvasKey, "A", [project("A-local")]);
+    f.seed(canvasKey, "B", [project("B-local")]);
+    const store = f.load("../app/(user)/canvas/stores/use-canvas-store.ts").useCanvasStore;
+    await tick();
+    const before = f.operations.filter(([action, key]) => action === "get" && key === canvasKey + ":B").length;
+
+    f.switchOwner("B");
+    await tick();
+
+    assert.equal(store.getState().ownerUserId, "B");
+    assert.equal(store.getState().projects[0]?.id, "B-local");
+    assert.equal(
+        f.operations.filter(([action, key]) => action === "get" && key === canvasKey + ":B").length,
+        before + 1,
+        "a real owner change must trigger one rehydrate for the new account",
+    );
+});
+
 test("real asset store switches owners without merging A assets or tombstones into B", async () => {
     const f = fixture();
     f.seed(assetKey, "A", [asset("A-local")]); f.seed(assetKey, "B", [asset("B-local")]);
