@@ -1,6 +1,6 @@
 "use client";
 
-import { App, Button, Form, Input, Modal, Segmented, Select, Switch } from "antd";
+import { App, Button, Form, Input, Modal, Radio, Segmented, Select, Switch } from "antd";
 import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
 
@@ -518,6 +518,22 @@ export function AppConfigModal() {
                                 onChange={(event) => updateConfig("canvasImageCount", event.target.value)}
                                 onBlur={(event) => updateConfig("canvasImageCount", normalizeImageCount(event.target.value))}
                             />
+                        </Form.Item>
+                        <Form.Item label="节点再生成方式" className="mb-4 md:col-span-3">
+                            <Radio.Group
+                                value={config.nodeRegenerateBehavior || "new-node"}
+                                onChange={(event) => updateConfig("nodeRegenerateBehavior", event.target.value)}
+                                className="grid w-full gap-3 md:grid-cols-2"
+                            >
+                                <Radio value="overwrite">
+                                    <span className="font-medium">覆盖当前节点</span>
+                                    <span className="mt-1 block text-xs text-stone-500">保留节点位置、尺寸和连线，用新结果替换当前内容。</span>
+                                </Radio>
+                                <Radio value="new-node">
+                                    <span className="font-medium">新建衍生节点</span>
+                                    <span className="mt-1 block text-xs text-stone-500">保留当前节点，并在画布上创建关联的新结果。</span>
+                                </Radio>
+                            </Radio.Group>
                         </Form.Item>
                         {geminiTts ? (
                             <Form.Item label="默认 Gemini 音色" className="mb-4">

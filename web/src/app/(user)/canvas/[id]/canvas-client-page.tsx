@@ -39,6 +39,7 @@ import { applyCameraPrompt } from "../utils/canvas-camera";
 import { canvasMediaRequestPrompt, submitCanvasImageRequest, submitCanvasVideoRequest } from "../utils/canvas-media-requests";
 import { GROUP_PADDING, findContainingGroupId, findGroupDropTarget, getNodeBounds, snapNodesIntoGroup } from "../utils/canvas-group";
 import { arrangeCanvasNodes, snapNodesToCanvasGrid } from "../utils/canvas-layout";
+import { prepareCanvasNodeOverwrite, shouldOverwriteCanvasNode } from "../utils/canvas-regeneration";
 import { App, Button, Dropdown, Modal, Slider } from "antd";
 import { isCogVideoX3Model, modelKey, supportsVideoAudioGeneration, supportsVideoFrameReferences } from "@/lib/video-model-capabilities";
 import { isMimoVoiceCloneModel } from "@/lib/mimo-tts";
@@ -3165,6 +3166,7 @@ const generateAngleNode = useCallback(
     const handleGenerateNode = useCallback(
         async (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => {
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
+            const overwriteExisting = shouldOverwriteCanvasNode(effectiveConfig.nodeRegenerateBehavior, mode, sourceNode);
             const workflowRef = mode === "text" ? undefined : sourceNode?.metadata?.workflowRef;
             const baseGenerationConfig = mode === "image" || mode === "video" ? canvasGenerationDefaults : effectiveConfig;
             const rawGenerationConfig = buildGenerationConfig(baseGenerationConfig, sourceNode, mode);
@@ -3196,7 +3198,7 @@ const generateAngleNode = useCallback(
                 setRunningNodeId(null);
                 return;
             }
-            const markSourceStatus = !isCanvasImageNodeType(sourceNode?.type) && !editingTextNode;
+            const markSourceStatus = (!isCanvasImageNodeType(sourceNode?.type) && !editingTextNode) || overwriteExisting;
             const statusPrompt = sourceNode?.type === CanvasNodeType.Config ? effectivePrompt : prompt;
             if (!effectivePrompt && (mode === "text" || (mode === "audio" && !workflowRef))) {
                 setRunningNodeId(null);
@@ -3204,7 +3206,11 @@ const generateAngleNode = useCallback(
             }
             let pendingChildIds: string[] = [];
             const generationStartedAt = Date.now();
-            if (markSourceStatus) setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, prompt: statusPrompt, status: NODE_STATUS_LOADING, startedAt: generationStartedAt, durationMs: undefined, errorDetails: undefined } } : node)));
+            if (markSourceStatus) setNodes((prev) => prev.map((node) => {
+                if (node.id !== nodeId) return node;
+                const loadingNode: CanvasNodeData = { ...node, metadata: { prompt: statusPrompt, status: NODE_STATUS_LOADING, startedAt: generationStartedAt, durationMs: undefined, errorDetails: undefined } };
+                return overwriteExisting ? prepareCanvasNodeOverwrite(node, loadingNode) : { ...node, metadata: { ...node.metadata, ...loadingNode.metadata } };
+            }));
 
             try {
                 if (mode === "image" && isPanoramaNodeType(sourceNode?.type)) {
@@ -3381,22 +3387,22 @@ const generateAngleNode = useCallback(
                     const parentPosition = sourceNode?.position || { x: 0, y: 0 };
                     const gap = 96;
                     const rowGap = 36;
-                    const rootId = isEmptyImageNode ? nodeId : nanoid();
+                    const rootId = overwriteExisting ? nodeId : isEmptyImageNode ? nodeId : nanoid();
                     const childIds = count > 1 ? Array.from({ length: count }, () => nanoid()) : [];
                     const targetIds = count > 1 ? childIds : [rootId];
                     const targetTaskIds = Object.fromEntries(targetIds.map((id) => [id, `client_image_task_${id}-${nanoid(6)}`]));
                     const primaryTargetId = targetIds[0];
                     pendingChildIds = isEmptyImageNode ? childIds : [rootId, ...childIds];
-                    const rootNode: CanvasNodeData = {
+                    const generatedRootNode: CanvasNodeData = {
                         id: rootId,
                         type: CanvasNodeType.Image,
                         title: effectivePrompt.slice(0, 32) || "Generated Image",
                         position: {
-                            x: isEmptyImageNode ? parentPosition.x : parentPosition.x + parentConfig.width + gap,
-                            y: parentPosition.y + parentConfig.height / 2 - imageSize.height / 2,
+                            x: isEmptyImageNode || overwriteExisting ? parentPosition.x : parentPosition.x + parentConfig.width + gap,
+                            y: isEmptyImageNode || overwriteExisting ? parentPosition.y : parentPosition.y + parentConfig.height / 2 - imageSize.height / 2,
                         },
-                        width: isEmptyImageNode ? sourceNode?.width || imageSize.width : imageSize.width,
-                        height: isEmptyImageNode ? sourceNode?.height || imageSize.height : imageSize.height,
+                        width: isEmptyImageNode || overwriteExisting ? sourceNode?.width || imageSize.width : imageSize.width,
+                        height: isEmptyImageNode || overwriteExisting ? sourceNode?.height || imageSize.height : imageSize.height,
                         metadata: {
                             prompt: effectivePrompt,
                             cameraControl: sourceNode?.metadata?.cameraControl,
@@ -3413,6 +3419,7 @@ const generateAngleNode = useCallback(
                             imageBatchExpanded: count > 1 ? true : undefined,
                         },
                     };
+                    const rootNode = overwriteExisting && sourceNode ? prepareCanvasNodeOverwrite(sourceNode, generatedRootNode) : generatedRootNode;
                     const childNodes: CanvasNodeData[] = childIds.map((id, index) => ({
                         id,
                         type: CanvasNodeType.Image,
@@ -3425,7 +3432,7 @@ const generateAngleNode = useCallback(
                         height: imageSize.height,
                         metadata: { prompt: effectivePrompt, cameraControl: sourceNode?.metadata?.cameraControl, status: NODE_STATUS_LOADING, startedAt: generationStartedAt, progress: 0, imageTaskId: targetTaskIds[id], batchRootId: count > 1 ? rootId : undefined, ...generationMetadata, workflowRef },
                     }));
-                    const batchConnections = [...(isEmptyImageNode ? [] : [{ id: nanoid(), fromNodeId: nodeId, toNodeId: rootId }]), ...childIds.map((childId) => ({ id: nanoid(), fromNodeId: rootId, toNodeId: childId }))];
+                    const batchConnections = [...(isEmptyImageNode || overwriteExisting ? [] : [{ id: nanoid(), fromNodeId: nodeId, toNodeId: rootId }]), ...childIds.map((childId) => ({ id: nanoid(), fromNodeId: rootId, toNodeId: childId }))];
 
                     setNodes((prev) => [
                         ...prev.map((node) =>
@@ -3444,6 +3451,8 @@ const generateAngleNode = useCallback(
                                             title: rootNode.title,
                                             metadata: { ...node.metadata, ...rootNode.metadata, errorDetails: undefined },
                                         }
+                                        : overwriteExisting
+                                            ? rootNode
                                         : isImageNode
                                             ? {
                                                 ...node,
@@ -3459,7 +3468,7 @@ const generateAngleNode = useCallback(
                                             }
                                 : node,
                         ),
-                        ...(isEmptyImageNode ? [] : [rootNode]),
+                        ...(isEmptyImageNode || overwriteExisting ? [] : [rootNode]),
                         ...childNodes,
                     ]);
                     setConnections((prev) => [...prev, ...batchConnections]);
@@ -3540,21 +3549,22 @@ const generateAngleNode = useCallback(
                     const videoReferenceImages = frameReferencesEnabled ? generationContext.referenceImages : [...generationContext.referenceImages, ...[generationContext.firstFrame, generationContext.lastFrame].filter((image): image is ReferenceImage => Boolean(image))];
                     const spec = nodeSizeFromRatio(videoGenerationConfig.size, NODE_DEFAULT_SIZE[CanvasNodeType.Video].width, NODE_DEFAULT_SIZE[CanvasNodeType.Video].height) || NODE_DEFAULT_SIZE[CanvasNodeType.Video];
                     const isEmptyVideoNode = sourceNode?.type === CanvasNodeType.Video && !sourceNode.metadata?.content;
-                    const videoId = isEmptyVideoNode ? nodeId : nanoid();
+                    const videoId = overwriteExisting ? nodeId : isEmptyVideoNode ? nodeId : nanoid();
                     const clientTaskId = `client_video_task_${videoId}-${nanoid(6)}`;
                     const parent = sourceNode?.position || { x: 0, y: 0 };
-                    const videoNode: CanvasNodeData = {
+                    const generatedVideoNode: CanvasNodeData = {
                         id: videoId,
                         type: CanvasNodeType.Video,
                         title: effectivePrompt.slice(0, 32) || "Generated Video",
-                        position: isEmptyVideoNode ? sourceNode.position : { x: parent.x + (sourceNode?.width || spec.width) + 96, y: parent.y },
-                        width: isEmptyVideoNode ? sourceNode.width : spec.width,
-                        height: isEmptyVideoNode ? sourceNode.height : spec.height,
+                        position: isEmptyVideoNode || overwriteExisting ? sourceNode?.position || parent : { x: parent.x + (sourceNode?.width || spec.width) + 96, y: parent.y },
+                        width: isEmptyVideoNode || overwriteExisting ? sourceNode?.width ?? spec.width : spec.width,
+                        height: isEmptyVideoNode || overwriteExisting ? sourceNode?.height ?? spec.height : spec.height,
                         metadata: { prompt: effectivePrompt, cameraControl: sourceNode?.metadata?.cameraControl, status: NODE_STATUS_LOADING, model: videoGenerationConfig.model, channelId: videoGenerationConfig.videoChannelId || videoGenerationConfig.activeChannelId, workflowRef, size: videoGenerationConfig.size, seconds: videoGenerationConfig.videoSeconds, vquality: videoGenerationConfig.vquality, mode: videoGenerationConfig.videoMode, negativePrompt: videoGenerationConfig.videoNegativePrompt, multiShot: videoGenerationConfig.videoMultiShot, shotType: videoGenerationConfig.videoShotType, generateAudio: videoGenerationConfig.videoGenerateAudio, characterOrientation: videoGenerationConfig.videoCharacterOrientation, watermark: videoGenerationConfig.videoWatermark, references: generationReferenceUrls({ ...generationContext, referenceImages: videoReferenceImages, firstFrame, lastFrame }), firstFrameNodeId: sourceNode?.metadata?.firstFrameNodeId, lastFrameNodeId: sourceNode?.metadata?.lastFrameNodeId, klingImageNodeIds: sourceNode?.metadata?.klingImageNodeIds, klingMultiPrompt: sourceNode?.metadata?.klingMultiPrompt, klingElementList: sourceNode?.metadata?.klingElementList, startedAt: generationStartedAt, progress: 0, videoTaskId: clientTaskId },
                     };
+                    const videoNode = overwriteExisting && sourceNode ? prepareCanvasNodeOverwrite(sourceNode, generatedVideoNode) : generatedVideoNode;
                     pendingChildIds = [videoId];
-                    setNodes((prev) => (isEmptyVideoNode ? prev.map((node) => (node.id === nodeId ? { ...node, ...videoNode } : node)) : [...prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_SUCCESS } } : node)), videoNode]));
-                    if (!isEmptyVideoNode) setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: nodeId, toNodeId: videoId }]);
+                    setNodes((prev) => (isEmptyVideoNode || overwriteExisting ? prev.map((node) => (node.id === nodeId ? videoNode : node)) : [...prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_SUCCESS } } : node)), videoNode]));
+                    if (!isEmptyVideoNode && !overwriteExisting) setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: nodeId, toNodeId: videoId }]);
                     const run = startNodeTaskRun(videoId, workflowRef ? "workflow" : "video", clientTaskId);
                     const videoTask = workflowRef
                         ? await workflowVideoTask(await submitCanvasWorkflowTask(workflowRef, videoGenerationConfig, "video", requestPrompt, [firstFrame, ...videoReferenceImages, lastFrame].filter((image): image is ReferenceImage => Boolean(image)), generationContext.referenceVideos, generationContext.referenceAudios, videoId, projectId, clientTaskId, run.controller.signal))
@@ -3569,21 +3579,22 @@ const generateAngleNode = useCallback(
                     const referenceAudio = workflowRef ? undefined : selectAudioReference(generationConfig, sourceNode?.metadata, generationContext.referenceAudios);
                     const spec = NODE_DEFAULT_SIZE[CanvasNodeType.Audio];
                     const isEmptyAudioNode = sourceNode?.type === CanvasNodeType.Audio && !sourceNode.metadata?.content;
-                    const audioId = isEmptyAudioNode ? nodeId : nanoid();
+                    const audioId = overwriteExisting ? nodeId : isEmptyAudioNode ? nodeId : nanoid();
                     const clientAudioTaskId = `client_audio_task_${audioId}-${nanoid(6)}`;
                     const parent = sourceNode?.position || { x: 0, y: 0 };
-                    const audioNode: CanvasNodeData = {
+                    const generatedAudioNode: CanvasNodeData = {
                         id: audioId,
                         type: CanvasNodeType.Audio,
                         title: effectivePrompt.slice(0, 32) || "Generated Audio",
-                        position: isEmptyAudioNode ? sourceNode.position : { x: parent.x + (sourceNode?.width || spec.width) + 96, y: parent.y + ((sourceNode?.height || spec.height) - spec.height) / 2 },
-                        width: isEmptyAudioNode ? sourceNode.width : spec.width,
-                        height: isEmptyAudioNode ? sourceNode.height : spec.height,
+                        position: isEmptyAudioNode || overwriteExisting ? sourceNode?.position || parent : { x: parent.x + (sourceNode?.width || spec.width) + 96, y: parent.y + ((sourceNode?.height || spec.height) - spec.height) / 2 },
+                        width: isEmptyAudioNode || overwriteExisting ? sourceNode?.width ?? spec.width : spec.width,
+                        height: isEmptyAudioNode || overwriteExisting ? sourceNode?.height ?? spec.height : spec.height,
                         metadata: { prompt: effectivePrompt, status: NODE_STATUS_LOADING, startedAt: generationStartedAt, progress: 0, audioTaskId: clientAudioTaskId, ...buildAudioGenerationMetadata(generationConfig, sourceNode?.metadata), workflowRef },
                     };
+                    const audioNode = overwriteExisting && sourceNode ? prepareCanvasNodeOverwrite(sourceNode, generatedAudioNode) : generatedAudioNode;
                     pendingChildIds = [audioId];
-                    setNodes((prev) => (isEmptyAudioNode ? prev.map((node) => (node.id === nodeId ? { ...node, ...audioNode } : node)) : [...prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_SUCCESS } } : node)), audioNode]));
-                    if (!isEmptyAudioNode) setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: nodeId, toNodeId: audioId }]);
+                    setNodes((prev) => (isEmptyAudioNode || overwriteExisting ? prev.map((node) => (node.id === nodeId ? audioNode : node)) : [...prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_SUCCESS } } : node)), audioNode]));
+                    if (!isEmptyAudioNode && !overwriteExisting) setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: nodeId, toNodeId: audioId }]);
                     const run = startNodeTaskRun(audioId, workflowRef ? "workflow" : "audio", clientAudioTaskId);
                     const task = workflowRef
                         ? await workflowAudioTask(await submitCanvasWorkflowTask(workflowRef, generationConfig, "audio", effectivePrompt, [], [], workflowAudios, audioId, projectId, clientAudioTaskId, run.controller.signal))
@@ -3599,9 +3610,9 @@ const generateAngleNode = useCallback(
                 const parentConfig = NODE_DEFAULT_SIZE[isConfigNode ? CanvasNodeType.Config : CanvasNodeType.Text];
                 const textConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Text];
                 const parentPosition = sourceNode?.position || { x: 0, y: 0 };
-                const childIds = isConfigNode || editingTextNode ? Array.from({ length: textCount }, () => nanoid()) : [];
+                const childIds = isConfigNode || (editingTextNode && !overwriteExisting) ? Array.from({ length: textCount }, () => nanoid()) : [];
                 pendingChildIds = childIds;
-                if (isConfigNode || editingTextNode) {
+                if (isConfigNode || (editingTextNode && !overwriteExisting)) {
                     const childNodes: CanvasNodeData[] = childIds.map((id, index) => ({
                         id,
                         type: CanvasNodeType.Text,
@@ -3635,8 +3646,8 @@ const generateAngleNode = useCallback(
                             ? { ...node, metadata: { ...node.metadata, content: answerByNodeId.get(node.id) || streamed, status: NODE_STATUS_SUCCESS } }
                             : node.id === nodeId && isConfigNode
                                 ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_SUCCESS } }
-                                : node.id === nodeId && !editingTextNode
-                                    ? { ...node, type: CanvasNodeType.Text, title: prompt.slice(0, 32) || "Generated Text", metadata: { ...node.metadata, content: answerByNodeId.get(node.id) || streamed, status: NODE_STATUS_SUCCESS } }
+                                : node.id === nodeId && (!editingTextNode || overwriteExisting)
+                                    ? { ...node, type: CanvasNodeType.Text, title: overwriteExisting ? node.title : prompt.slice(0, 32) || "Generated Text", metadata: { ...node.metadata, content: answerByNodeId.get(node.id) || streamed, status: NODE_STATUS_SUCCESS } }
                                     : node,
                     ),
                 );

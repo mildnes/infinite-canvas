@@ -83,6 +83,7 @@ export type AiConfig = {
     audioModels: string[];
     quality: string;
     imageOutputFormat?: ImageOutputFormatSelection;
+    nodeRegenerateBehavior: "new-node" | "overwrite";
     size: string;
     videoSize: string;
     count: string;
@@ -172,6 +173,7 @@ export const defaultConfig: AiConfig = {
     audioModels: [],
     quality: "auto",
     imageOutputFormat: "png-transparent",
+    nodeRegenerateBehavior: "new-node",
     size: "1:1",
     videoSize: "1280x720",
     count: "1",
