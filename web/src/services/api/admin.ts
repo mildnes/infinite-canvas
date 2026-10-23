@@ -330,6 +330,7 @@ export type AdminStorageProvider = {
     capacityBytes: number;
     capacityCheckedAt: string;
     capacityExceeded: boolean;
+    allowPrivateNetwork?: boolean;
 };
 
 export type AdminPrivateSettings = {

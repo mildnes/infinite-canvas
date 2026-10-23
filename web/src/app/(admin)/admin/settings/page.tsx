@@ -69,7 +69,7 @@ const modelCapabilityOptions: { label: string; value: ModelCapability }[] = [
     { label: "音频", value: "audio" },
 ];
 const emptyS3StorageProvider: AdminStorageProvider = { id: "", name: "", type: "s3", endpoint: "", region: "auto", bucket: "", accessKeyId: "", secretAccessKey: "", publicBaseUrl: "", pathPrefix: "canvas", username: "", password: "", weight: 1, enabled: true, ownerUserId: "", capacityBytes: 0, capacityCheckedAt: "", capacityExceeded: false };
-const emptyWebDAVStorageProvider: AdminStorageProvider = { ...emptyS3StorageProvider, name: "", type: "webdav", region: "" };
+const emptyWebDAVStorageProvider: AdminStorageProvider = { ...emptyS3StorageProvider, name: "", type: "webdav", region: "", allowPrivateNetwork: false };
 const emptyMCPServer: AdminMCPServer = { id: "", name: "", endpoint: "", apiKey: "", transport: "streamable_http", command: "", args: [], env: {}, workingDirectory: "", description: "", tools: [], enabled: true, allowUsers: true };
 
 type SettingsTabKey = "public" | "private";
@@ -990,6 +990,11 @@ export default function AdminSettingsPage() {
                                                                         <Col xs={24} md={6}>
                                                                             <Form.Item name={[field.name, "password"]} label="密码 / 应用密码">
                                                                                 <Input.Password placeholder="留空沿用已保存密码" />
+                                                                            </Form.Item>
+                                                                        </Col>
+                                                                        <Col xs={24} md={6}>
+                                                                            <Form.Item name={[field.name, "allowPrivateNetwork"]} label="允许访问内网" valuePropName="checked" extra="仅此 WebDAV 配置绕过内网地址拦截；默认关闭。">
+                                                                                <Switch />
                                                                             </Form.Item>
                                                                         </Col>
                                                                         <Col xs={0} md={6} />

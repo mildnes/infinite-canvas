@@ -305,24 +305,25 @@ type PrivateStorageSetting struct {
 }
 
 type StorageProvider struct {
-	ID                string `json:"id"`
-	Name              string `json:"name"`
-	Type              string `json:"type"`
-	Endpoint          string `json:"endpoint"`
-	Region            string `json:"region"`
-	Bucket            string `json:"bucket"`
-	AccessKeyID       string `json:"accessKeyId"`
-	SecretAccessKey   string `json:"secretAccessKey"`
-	PublicBaseURL     string `json:"publicBaseUrl"`
-	PathPrefix        string `json:"pathPrefix"`
-	Username          string `json:"username"`
-	Password          string `json:"password"`
-	Weight            int    `json:"weight"`
-	Enabled           bool   `json:"enabled"`
-	OwnerUserID       string `json:"ownerUserId"`
-	CapacityBytes     int64  `json:"capacityBytes"`
-	CapacityCheckedAt string `json:"capacityCheckedAt"`
-	CapacityExceeded  bool   `json:"capacityExceeded"`
+	ID                  string `json:"id"`
+	Name                string `json:"name"`
+	Type                string `json:"type"`
+	Endpoint            string `json:"endpoint"`
+	Region              string `json:"region"`
+	Bucket              string `json:"bucket"`
+	AccessKeyID         string `json:"accessKeyId"`
+	SecretAccessKey     string `json:"secretAccessKey"`
+	PublicBaseURL       string `json:"publicBaseUrl"`
+	PathPrefix          string `json:"pathPrefix"`
+	Username            string `json:"username"`
+	Password            string `json:"password"`
+	Weight              int    `json:"weight"`
+	Enabled             bool   `json:"enabled"`
+	OwnerUserID         string `json:"ownerUserId"`
+	CapacityBytes       int64  `json:"capacityBytes"`
+	CapacityCheckedAt   string `json:"capacityCheckedAt"`
+	CapacityExceeded    bool   `json:"capacityExceeded"`
+	AllowPrivateNetwork bool   `json:"allowPrivateNetwork,omitempty"`
 }
 
 type StorageCapacityCheckSetting struct {

@@ -173,7 +173,7 @@ func mediaWebDAVClient(ctx context.Context, provider model.StorageProvider, stat
 	if err != nil {
 		return nil, mediaIssue("blocked", "WebDAV 配置无效")
 	}
-	client.SetTransport(mediaContextTransport{ctx, SafeProxyHTTPClient().Transport, status})
+	client.SetTransport(mediaContextTransport{ctx, webDAVStorageTransport(provider), status})
 	return client, nil
 }
 
