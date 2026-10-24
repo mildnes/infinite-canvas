@@ -159,6 +159,7 @@ export const CanvasNode = React.memo(function CanvasNode({
     const imageBorderColor = isActive ? selectionBlue : isRelated && !isBatchChild ? theme.node.muted : "transparent";
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const titleInputRef = useRef<HTMLInputElement>(null);
+    const attachedResizeRef = useRef<{ move: (event: MouseEvent) => void; up: () => void } | null>(null);
     const resizeRef = useRef({
         isResizing: false,
         corner: "bottom-right" as ResizeCorner,
@@ -293,6 +294,7 @@ export const CanvasNode = React.memo(function CanvasNode({
         onResize(data.id, currentWidth, currentHeight, { x: currentLeft, y: currentTop }, { ...data, metadata: { ...data.metadata, freeResize: true } });
         window.removeEventListener("mousemove", handleResizeMove);
         window.removeEventListener("mouseup", handleResizeUp);
+        attachedResizeRef.current = null;
     }, [data, handleResizeMove, onResize]);
 
     const handleResizeMouseDown = (event: React.MouseEvent, corner: ResizeCorner) => {
@@ -317,14 +319,18 @@ export const CanvasNode = React.memo(function CanvasNode({
         };
         window.addEventListener("mousemove", handleResizeMove);
         window.addEventListener("mouseup", handleResizeUp);
+          attachedResizeRef.current = { move: handleResizeMove, up: handleResizeUp };
     };
 
     useEffect(() => {
-        return () => {
-            window.removeEventListener("mousemove", handleResizeMove);
-            window.removeEventListener("mouseup", handleResizeUp);
-        };
-    }, [handleResizeMove, handleResizeUp]);
+          return () => {
+              const attached = attachedResizeRef.current;
+              if (!attached) return;
+              window.removeEventListener("mousemove", attached.move);
+              window.removeEventListener("mouseup", attached.up);
+              attachedResizeRef.current = null;
+          };
+      }, []);
 
     return (
         <div
