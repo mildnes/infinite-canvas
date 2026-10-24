@@ -121,3 +121,29 @@ test("changed references or changed updatedAt are both persisted, once per flush
     assert.equal(f.writes.length, 1);
     assert.equal(JSON.parse(f.writes[0].value).title, "same timestamp, new ref");
 });
+
+test("queued writes to the same board remain serial and retain the latest edit", async () => {
+    const f = canvasFixture({ projects: [project("a")] });
+    await tick(); f.clearOperations();
+    let release;
+    f.setWriteGate(() => new Promise(resolve => { release = resolve; }));
+    f.useCanvasStore.getState().updateProject("a", { viewport: { x: 1, y: 0, k: 1 } });
+    const first = f.flushCanvasSaves(); await tick();
+    f.useCanvasStore.getState().updateProject("a", { viewport: { x: 2, y: 0, k: 1 } });
+    const second = f.flushCanvasSaves(); await tick();
+    assert.equal(f.writes.length, 1, "a queued flush cannot write the same key concurrently");
+    f.setWriteGate(undefined); release();
+    await Promise.all([first, second]);
+    assert.equal(JSON.parse(f.disk.get(projectKey("anon", "a"))).viewport.x, 2);
+    assert.equal(f.writes.length, 2);
+});
+
+test("a board ID is written at most once per flush", async () => {
+    const f = canvasFixture({ projects: [project("a")] });
+    await tick(); f.clearOperations();
+    const p = f.useCanvasStore.getState().projects[0];
+    f.useCanvasStore.setState({ projects: [{ ...p, title: "first" }, { ...p, title: "latest" }] });
+    await f.flushCanvasSaves();
+    assert.equal(f.writes.filter(w => w.key === projectKey("anon", "a")).length, 1);
+    assert.equal(JSON.parse(f.disk.get(projectKey("anon", "a"))).title, "latest");
+});

@@ -1,9 +1,16 @@
 import type { CanvasProject } from "@/app/(user)/canvas/stores/use-canvas-store";
+import { canvasProjectRequestData, isCanvasProjectHydrated, type CanvasProjectSummary } from "@/app/(user)/canvas/utils/canvas-project-hydration";
 import { apiGet, apiPost } from "@/services/api/request";
 import { useUserStore } from "@/stores/use-user-store";
 
-export async function listCanvasProjects(token: string) {
-    return apiGet<CanvasProject[]>("/api/v1/canvas/projects", undefined, token);
+export function listCanvasProjects(token: string): Promise<CanvasProject[]>;
+export function listCanvasProjects(token: string, summary: true): Promise<CanvasProjectSummary[]>;
+export function listCanvasProjects(token: string, summary?: true) {
+    return apiGet<CanvasProject[] | CanvasProjectSummary[]>(summary ? "/api/v1/canvas/projects?summary=1" : "/api/v1/canvas/projects", undefined, token);
+}
+
+export function getCanvasProject(token: string, id: string) {
+    return apiGet<CanvasProject>("/api/v1/canvas/projects/" + encodeURIComponent(id), undefined, token);
 }
 
 export async function saveCanvasProject(
@@ -11,7 +18,8 @@ export async function saveCanvasProject(
     project: CanvasProject,
     baseUpdatedAt = project.serverUpdatedAt ?? "",
 ) {
-    const { serverUpdatedAt: _serverUpdatedAt, pendingSave: _pendingSave, ...data } = project;
+    if (!isCanvasProjectHydrated(project)) throw new Error("画布尚未完整加载，不能保存");
+    const data = canvasProjectRequestData(project);
     return apiPost<CanvasProject>(
         "/api/v1/canvas/projects",
         { data, baseUpdatedAt },
@@ -24,9 +32,11 @@ export async function syncCanvasProjects(
     projects: CanvasProject[],
     baseUpdatedAts = Object.fromEntries(projects.map((project) => [project.id, project.serverUpdatedAt ?? ""])),
 ) {
+    const complete = projects.filter(isCanvasProjectHydrated);
+    if (!complete.length) return [];
     return apiPost<CanvasProject[]>(
         "/api/v1/canvas/projects/sync",
-        { projects: projects.map(({ serverUpdatedAt: _serverUpdatedAt, pendingSave: _pendingSave, ...data }) => data), baseUpdatedAts },
+        { projects: complete.map(canvasProjectRequestData), baseUpdatedAts: Object.fromEntries(complete.map(project => [project.id, baseUpdatedAts[project.id]])) },
         token,
     );
 }

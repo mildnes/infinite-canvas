@@ -19,7 +19,7 @@ export function canvasFixture({ owner = "anon", projects = [], drafts = [], disk
     const user = require("zustand").create(() => ({ token: owner === "anon" ? "" : `${owner}-token`, user: owner === "anon" ? null : { id: owner }, isReady: true }));
     user.persist = { hasHydrated: () => true };
     const writes = [], removes = [], reads = [], requests = [], errors = [], timers = new Map(), modules = {};
-    let failure, time = 0, sequence = 0, detailGate;
+    let failure, time = 0, sequence = 0, detailGate, writeGate;
     if (projects.length || drafts.length) disk.set(`${legacyKey}:${owner}`, JSON.stringify({ state: { ownerUserId: owner, projects, conflictDrafts: drafts }, version: 0 }));
     const forage = {
         config() {},
@@ -27,6 +27,7 @@ export function canvasFixture({ owner = "anon", projects = [], drafts = [], disk
         async setItem(key, value) {
             writes.push({ key, value, chars: typeof value === "string" ? value.length : JSON.stringify(value).length });
             if (failure?.(key, value)) throw new Error("injected disk failure");
+            if (writeGate) await writeGate(key, value);
             disk.set(key, value);
             return value;
         },
@@ -74,12 +75,15 @@ export function canvasFixture({ owner = "anon", projects = [], drafts = [], disk
         return exports;
     }
     modules["@/lib/localforage-storage"] = load("../localforage-storage.ts");
+    const hydration = "../../app/(user)/canvas/utils/canvas-project-hydration.ts";
+    if (existsSync(new URL(hydration, import.meta.url))) modules["../utils/canvas-project-hydration"] = load(hydration);
     const helper = "../../app/(user)/canvas/stores/canvas-project-storage.ts";
     if (existsSync(new URL(helper, import.meta.url))) modules["./canvas-project-storage"] = load(helper);
     const exported = load("../../app/(user)/canvas/stores/use-canvas-store.ts");
     return {
         ...exported, user, disk, writes, removes, reads, requests, errors, storage: modules["@/lib/localforage-storage"],
         setFailure: fn => { failure = fn; },
+        setWriteGate: fn => { writeGate = fn; },
         detailGate: promise => { detailGate = promise; },
         switchOwner: id => user.setState({ token: id === "anon" ? "" : `${id}-token`, user: id === "anon" ? null : { id }, isReady: true }),
         clearOperations() { writes.length = removes.length = reads.length = requests.length = 0; },

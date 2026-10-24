@@ -1,6 +1,7 @@
 import localforage from "localforage";
 import { accountStorageKey, currentStorageOwnerId, localForageStorage } from "@/lib/localforage-storage";
 import type { CanvasProject } from "./use-canvas-store";
+import { isCanvasProjectHydrated } from "../utils/canvas-project-hydration";
 
 type CanvasState = { ownerUserId: string | null; projects: CanvasProject[]; conflictDrafts?: CanvasProject[] };
 type CanvasValue = { state: CanvasState; version?: number };
@@ -19,6 +20,7 @@ export function createCanvasProjectStorage() {
     let metadata: string | null = null;
     let legacyPending = false;
     const current = (owner: string) => owner === currentStorageOwnerId();
+    const unique = (items: CanvasProject[]) => Array.from(new Map(items.map(project => [project.id, project])).values());
     const remember = (items: CanvasProject[]) => new Map(items.map(project => [project.id, { project, updatedAt: project.updatedAt }]));
     const reset = (owner: string) => {
         lastOwner = owner; projects = new Map(); drafts = new Map(); metadata = null; legacyPending = false;
@@ -33,9 +35,16 @@ export function createCanvasProjectStorage() {
     };
 
     const write = async (value: CanvasValue, prepare: (project: CanvasProject) => CanvasProject) => {
-        const { ownerUserId: owner, projects: nextProjects, conflictDrafts = [] } = value.state;
+        const { ownerUserId: owner } = value.state;
         if (!owner || !current(owner)) return;
         if (lastOwner !== owner) reset(owner);
+        // A remote summary must neither overwrite nor delete a complete local copy.
+        const nextProjects = unique(value.state.projects.flatMap(project => {
+            if (isCanvasProjectHydrated(project)) return [project];
+            const previous = projects.get(project.id)?.project;
+            return previous && isCanvasProjectHydrated(previous) ? [previous] : [];
+        }));
+        const conflictDrafts = unique((value.state.conflictDrafts || []).filter(isCanvasProjectHydrated));
         const writeItems = async (items: CanvasProject[], previous: Map<string, Snapshot>, key: typeof projectKey) => {
             for (const project of items) {
                 if (!current(owner)) return;
@@ -88,7 +97,7 @@ export function createCanvasProjectStorage() {
                             const raw = await localforage.getItem<string>(key(owner, id));
                             if (!raw) throw new Error("画布本地数据不完整，请重试");
                             const project = JSON.parse(raw) as CanvasProject;
-                            if (project.id !== id || !Array.isArray(project.nodes)) throw new Error("画布本地数据无效");
+                            if (project.id !== id || !isCanvasProjectHydrated(project)) throw new Error("画布本地数据无效");
                             items.push(project);
                         }
                         return items;

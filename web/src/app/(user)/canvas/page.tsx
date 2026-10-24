@@ -23,6 +23,7 @@ export default function CanvasPage() {
     const projects = useCanvasStore((state) => state.projects);
     const createProject = useCanvasStore((state) => state.createProject);
     const importProject = useCanvasStore((state) => state.importProject);
+    const loadProject = useCanvasStore((state) => state.loadProject);
     const syncError = useCanvasStore((state) => state.syncError);
     const retrySaves = useCanvasStore((state) => state.retrySaves);
     const selectedIds = useCanvasUiStore((state) => state.selectedProjectIds);
@@ -32,6 +33,15 @@ export default function CanvasPage() {
         router.push(`/canvas/${id}`);
     };
     const createAndEnter = () => enterProject(createProject(`无限画布 ${projects.length + 1}`));
+    const exportSelected = async () => {
+        try {
+            const owner = useCanvasStore.getState().ownerUserId;
+            const complete = await Promise.all(selectedIds.map(id => loadProject(id)));
+            if (owner !== useCanvasStore.getState().ownerUserId) return;
+            if (complete.some(project => !project)) throw new Error("部分画布无法加载，请重试");
+            await exportCanvasProjects(complete.filter((project): project is NonNullable<typeof project> => Boolean(project)), `无限画布-${selectedIds.length}个项目`);
+        } catch (error) { message.error(error instanceof Error ? error.message : "画布导出失败，请重试"); }
+    };
     const importCanvas = async (file?: File) => {
         if (!file) return;
         try {
@@ -69,7 +79,7 @@ export default function CanvasPage() {
                     <div className="flex items-center gap-2">
                         {selectedIds.length ? (
                             <>
-                                <Button disabled={!hydrated} icon={<Download className="size-4" />} onClick={() => void exportCanvasProjects(projects.filter((project) => selectedIds.includes(project.id)), `无限画布-${selectedIds.length}个项目`)}>
+                                <Button disabled={!hydrated} icon={<Download className="size-4" />} onClick={() => void exportSelected()}>
                                     导出选中
                                 </Button>
                                 <Button disabled={!hydrated} onClick={() => setDeleteIds(selectedIds)}>

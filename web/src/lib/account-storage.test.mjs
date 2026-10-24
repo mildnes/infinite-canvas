@@ -35,6 +35,7 @@ function fixture() {
     const load = path => { const exports = {}; const source = process.env.STORAGE_OWNER_BASELINE && path === "./localforage-storage.ts" ? execFileSync("git", ["show", process.env.STORAGE_OWNER_BASELINE + ":web/src/lib/localforage-storage.ts"], { encoding: "utf8" }) : readFileSync(new URL(path, import.meta.url), "utf8"); vm.runInNewContext(ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2016, module: ts.ModuleKind.CommonJS } }).outputText, { ...context, exports }); return exports; };
     const storage = load("./localforage-storage.ts");
     modules["@/lib/localforage-storage"] = storage;
+    modules["../utils/canvas-project-hydration"] = load("../app/(user)/canvas/utils/canvas-project-hydration.ts");
     modules["./canvas-project-storage"] = load("../app/(user)/canvas/stores/canvas-project-storage.ts");
     return { user, disk, operations, posts, saves, timers, remote, storage, load, delayedRead: promise => { nextRead = promise; }, delayedList: promise => { listGate = promise; listOwner = user.getState().user?.id; }, switchOwner: id => user.setState({ token: id === "anon" ? "" : id + "-token", user: id === "anon" ? null : { id }, isReady: true }), seed: (key, id, records) => disk.set(key + ":" + id, JSON.stringify({ state: { ownerUserId: id, ...(key === canvasKey ? { projects: records } : { assets: records, tombstones: [] }) }, version: 0 })) };
 }

@@ -101,6 +101,12 @@ function fixture() {
     const source = process.env.CANVAS_STORE_BASELINE
         ? execFileSync("git", ["show", `${process.env.CANVAS_STORE_BASELINE}:web/src/app/(user)/canvas/stores/use-canvas-store.ts`], { cwd: new URL("../../../../..", import.meta.url), encoding: "utf8" })
         : readFileSync(new URL(storePath, import.meta.url), "utf8");
+    const hydrationExports = {};
+    vm.runInNewContext(
+        ts.transpileModule(readFileSync(new URL("./canvas-project-hydration.ts", import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2016, module: ts.ModuleKind.CommonJS } }).outputText,
+        { exports: hydrationExports, require: name => modules[name] || {}, Promise, console },
+    );
+    modules["../utils/canvas-project-hydration"] = hydrationExports;
     const storageExports = {};
     vm.runInNewContext(
         ts.transpileModule(readFileSync(new URL("../stores/canvas-project-storage.ts", import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2016, module: ts.ModuleKind.CommonJS } }).outputText,

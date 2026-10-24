@@ -377,7 +377,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const userReady = useUserStore((state) => state.isReady);
     const hydrated = useCanvasStore((state) => state.hydrated);
     const createProject = useCanvasStore((state) => state.createProject);
-    const openProject = useCanvasStore((state) => state.openProject);
+    const loadProject = useCanvasStore((state) => state.loadProject);
     const updateProject = useCanvasStore((state) => state.updateProject);
     const renameProject = useCanvasStore((state) => state.renameProject);
     const deleteProjects = useCanvasStore((state) => state.deleteProjects);
@@ -420,6 +420,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const [assetPickerTab, setAssetPickerTab] = useState<AssetPickerTab>("my-assets");
     const [pendingPanoramaImport, setPendingPanoramaImport] = useState<PendingPanoramaImport | null>(null);
     const [projectLoaded, setProjectLoaded] = useState(false);
+    const [projectLoadError, setProjectLoadError] = useState<string | null>(null);
+    const [projectLoadAttempt, setProjectLoadAttempt] = useState(0);
     const [toolbarNodeId, setToolbarNodeId] = useState<string | null>(null);
     const [nodeImageSettingsOpen, setNodeImageSettingsOpen] = useState(false);
     const [dialogNodeId, setDialogNodeId] = useState<string | null>(null);
@@ -651,19 +653,17 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         if (!hydrated) return;
         restoringProjectRef.current = true;
         setProjectLoaded(false);
+        setProjectLoadError(null);
         setInitialAgentRequest(null);
         setReferencePickerNodeId(null);
         consumedAgentRequestProjectRef.current = null;
-        const project = openProject(projectId);
-        if (!project) {
-            router.replace("/canvas");
-            return;
-        }
-
         let disposed = false;
         const ownerToken = currentUserToken;
         const isCurrentRestore = () => !disposed && activeProjectIdRef.current === projectId && useUserStore.getState().token === ownerToken;
         const restore = async () => {
+            const project = await loadProject(projectId);
+            if (!isCurrentRestore()) return;
+            if (!project) { router.replace("/canvas"); return; }
             let restoredNodes = resetInterruptedGeneration(project.nodes);
             let restoredSessions = project.chatSessions || [];
             try {
@@ -713,11 +713,13 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             restoringProjectRef.current = false;
             setProjectLoaded(true);
         };
-        void restore();
+        void restore().catch((error) => {
+            if (isCurrentRestore()) setProjectLoadError(error instanceof Error ? error.message : "画布加载失败，请重试");
+        });
         return () => {
             disposed = true;
         };
-    }, [currentUserToken, hydrated, message, openProject, projectId, restoreVersion, router]);
+    }, [currentUserToken, hydrated, loadProject, message, projectId, projectLoadAttempt, restoreVersion, router]);
 
     useEffect(() => {
         if (!projectLoaded || !userReady || !currentAccountId || currentAccountId === "anonymous") return;
@@ -4630,7 +4632,7 @@ const generateAngleNode = useCallback(
         if (focusAnimationRef.current) cancelAnimationFrame(focusAnimationRef.current);
     }, []);
 
-    if (!projectLoaded) return syncError ? <div className="flex h-full flex-col items-center justify-center gap-3"><p role="alert">{syncError}</p><Button onClick={() => void retrySaves()}>重新加载画布</Button></div> : <CanvasRefreshShell />;
+    if (!projectLoaded) return projectLoadError || syncError ? <div className="flex h-full flex-col items-center justify-center gap-3"><p role="alert">{projectLoadError || syncError}</p><Button onClick={() => { setProjectLoadAttempt(attempt => attempt + 1); if (syncError) void retrySaves(); }}>重新加载画布</Button></div> : <CanvasRefreshShell />;
     return (
         <main
             className="flex h-full min-h-0 overflow-hidden"

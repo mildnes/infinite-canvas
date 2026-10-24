@@ -3,13 +3,14 @@ import { persist, type PersistStorage, type StorageValue } from "zustand/middlew
 
 import { nanoid } from "nanoid";
 import { currentStorageOwnerId, waitForStorageOwner } from "@/lib/localforage-storage";
-import { deleteCanvasProjects, listCanvasProjects, saveCanvasProject, syncCanvasProjects } from "@/services/api/canvas-tasks";
+import { deleteCanvasProjects, getCanvasProject, listCanvasProjects, saveCanvasProject, syncCanvasProjects } from "@/services/api/canvas-tasks";
 import { fetchUserConfig } from "@/services/api/user-config";
 import { useUserStore } from "@/stores/use-user-store";
 import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
 import type { CanvasAgentConfig, CanvasAssistantSession, CanvasConnection, CanvasNodeData, CanvasPendingAgentRequest, ViewportTransform } from "../types";
 import { sanitizeCanvasNodesForPersistence, sanitizeCanvasSessionsForPersistence } from "../utils/canvas-media-persistence";
 import { createCanvasProjectStorage } from "./canvas-project-storage";
+import { isCanvasProjectHydrated, type CanvasProjectSummary } from "../utils/canvas-project-hydration";
 
 export type CanvasSidePanelState = {
     open: boolean;
@@ -26,6 +27,11 @@ export type CanvasProject = {
     updatedAt: string;
     serverUpdatedAt?: string;
     pendingSave?: boolean;
+    hydrated?: boolean;
+    nodeCount?: number;
+    connectionCount?: number;
+    sessionCount?: number;
+    remoteUpdatedAt?: string;
     nodes: CanvasNodeData[];
     connections: CanvasConnection[];
     chatSessions: CanvasAssistantSession[];
@@ -52,6 +58,7 @@ type CanvasStore = {
     createProject: (title?: string, options?: { agentConfig?: CanvasAgentConfig; pendingAgentRequest?: CanvasPendingAgentRequest }) => string;
     importProject: (project: Partial<CanvasProject>) => string;
     openProject: (id: string) => CanvasProject | null;
+    loadProject: (id: string) => Promise<CanvasProject | null>;
     renameProject: (id: string, title: string) => void;
     deleteProjects: (ids: string[]) => Promise<void>;
     updateProject: (id: string, patch: Partial<Pick<CanvasProject, "nodes" | "connections" | "chatSessions" | "activeChatId" | "agentConfig" | "autoTitlePending" | "backgroundMode" | "showImageInfo" | "showConnections" | "snapToGrid" | "viewport" | "sidePanel" | "agentPanel" | "pendingAgentRequest">>) => void;
@@ -80,6 +87,7 @@ const projectSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const projectMaxTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pendingProjectSaves = new Map<string, CanvasProject>();
 const projectSavesInFlight = new Map<string, Promise<void>>();
+const projectLoadsInFlight = new Map<string, Promise<CanvasProject | null>>();
 const failedProjectSaves = new Set<string>();
 const remoteDeletedProjectIds = new Set<string>();
 const deletingProjectIds = new Set<string>();
@@ -123,6 +131,16 @@ function canonicalProject(project: CanvasProject): CanvasProject {
     return { ...project, serverUpdatedAt: project.updatedAt, pendingSave: false };
 }
 
+function listedProject(project: CanvasProjectSummary | CanvasProject): CanvasProject {
+    if (isCanvasProjectHydrated(project)) return project as CanvasProject;
+    return {
+        ...project, hydrated: false, nodes: [], connections: [], chatSessions: [],
+        activeChatId: null, agentConfig: null, autoTitlePending: false,
+        backgroundMode: "lines", showImageInfo: false, showConnections: true, snapToGrid: false,
+        viewport: initialViewport, sidePanel: DEFAULT_CANVAS_SIDE_PANEL, agentPanel: DEFAULT_CANVAS_AGENT_PANEL,
+    };
+}
+
 function recordSaveError(error: unknown, draft?: CanvasProject) {
     const conflict = error as { status?: number; data?: { currentProject?: CanvasProject } };
     const hasCanonicalProject = conflict.status === 409 && conflict.data && Object.prototype.hasOwnProperty.call(conflict.data, "currentProject");
@@ -154,6 +172,7 @@ async function flushProjectSave(id: string): Promise<void> {
     if (!queued) return;
     cancelProjectSaves([id]);
     const project = useCanvasStore.getState().projects.find((item) => item.id === id) || queued;
+    if (!isCanvasProjectHydrated(project)) return;
     const retryDraft = retryDrafts.get(project);
     if (useCanvasStore.getState().conflictDrafts.some((draft) => draft.id === id && draft !== retryDraft)) return;
     const owner = currentStorageOwnerId();
@@ -211,10 +230,12 @@ function resetCanvasOwner(owner: string | null) {
     remoteDeletedProjectIds.clear();
     deletingProjectIds.clear();
     projectSavesInFlight.clear();
+    projectLoadsInFlight.clear();
     useCanvasStore.setState({ projects: [], conflictDrafts: [], syncError: null, ownerUserId: owner, hydrated: false });
 }
 
 function queueProjectSave(project: CanvasProject) {
+    if (!isCanvasProjectHydrated(project)) return;
     if (deletingProjectIds.has(project.id)) return;
     const owner = currentStorageOwnerId();
     if (!owner || useCanvasStore.getState().ownerUserId !== owner) return;
@@ -248,7 +269,7 @@ async function reconcileCanvasProjects(
     remoteProjects = remoteProjects.map(canonicalProject);
     const remoteById = new Map(remoteProjects.map((project) => [project.id, project]));
     const missingProjects = localProjects.filter(
-        (project) => !remoteById.has(project.id),
+        (project) => isCanvasProjectHydrated(project) && !remoteById.has(project.id),
     );
     const existingLocalProjects = localProjects.filter((project) => remoteById.has(project.id));
     const projects = missingProjects.length
@@ -261,16 +282,32 @@ async function reconcileCanvasProjects(
         : remoteProjects;
 
     if (epoch !== ownerEpoch || owner !== currentStorageOwnerId() || token !== useUserStore.getState().token) return [];
-    existingLocalProjects.forEach((project) => {
+    for (const project of existingLocalProjects) {
+        if (!isCanvasProjectHydrated(project)) continue;
         const remote = remoteById.get(project.id);
         if (remote && project.pendingSave && project.serverUpdatedAt === remote.updatedAt) {
             const index = projects.findIndex((item) => item.id === project.id);
             if (index >= 0) projects[index] = project;
             queueProjectSave(project);
         } else if (remote && project.pendingSave) {
-            recordSaveError(Object.assign(new Error("画布已在其他设备更新，已载入最新版本；本机修改可重试保存"), { status: 409, data: { currentProject: remote } }), project);
+            const fullRemote = isCanvasProjectHydrated(remote) ? remote : canonicalProject({ ...await getCanvasProject(token, project.id), hydrated: true });
+            if (epoch !== ownerEpoch || owner !== currentStorageOwnerId() || token !== useUserStore.getState().token) return [];
+            if (!isCanvasProjectHydrated(fullRemote)) throw new Error("画布数据不完整，请重试");
+            const index = projects.findIndex(item => item.id === project.id);
+            if (index >= 0) projects[index] = fullRemote;
+            recordSaveError(Object.assign(new Error("画布已在其他设备更新，已载入最新版本；本机修改可重试保存"), { status: 409, data: { currentProject: fullRemote } }), project);
+        } else if (remote && !isCanvasProjectHydrated(remote)) {
+            const index = projects.findIndex(item => item.id === project.id);
+            if (index >= 0) projects[index] = project.remoteUpdatedAt === remote.updatedAt
+                && project.title === remote.title && project.nodeCount === remote.nodeCount
+                && project.connectionCount === remote.connectionCount && project.sessionCount === remote.sessionCount
+                ? project : {
+                    ...project, title: remote.title, remoteUpdatedAt: remote.updatedAt,
+                    serverUpdatedAt: project.serverUpdatedAt ?? project.updatedAt,
+                    nodeCount: remote.nodeCount, connectionCount: remote.connectionCount, sessionCount: remote.sessionCount,
+                };
         }
-    });
+    }
 
     return projects;
 }
@@ -301,10 +338,10 @@ const canvasStorage: PersistStorage<CanvasStore> = {
             try {
                 const [userConfig, fetchedRemoteProjects] = await Promise.all([
                     fetchUserConfig(token),
-                    listCanvasProjects(token),
+                    listCanvasProjects(token, true),
                 ]);
                 if (!isCurrent()) return null;
-                const remoteProjects = fetchedRemoteProjects.map(canonicalProject);
+                const remoteProjects = fetchedRemoteProjects.map(project => canonicalProject(listedProject(project)));
                 accountCanvasSyncEnabled =
                     userConfig.syncCapabilities?.userData === true;
 
@@ -469,17 +506,45 @@ export const useCanvasStore = create<CanvasStore>()(
                 return project.id;
             },
             openProject: (id) =>
-                get().projects.find((item) => item.id === id) || null,
+                get().projects.find((item) => item.id === id && isCanvasProjectHydrated(item)) || null,
+            loadProject: async (id) => {
+                const project = get().projects.find(item => item.id === id);
+                if (project && isCanvasProjectHydrated(project)
+                    && (!project.remoteUpdatedAt || project.remoteUpdatedAt === (project.serverUpdatedAt ?? project.updatedAt) || project.pendingSave)) return project;
+                const owner = currentStorageOwnerId();
+                const token = useUserStore.getState().token;
+                const epoch = ownerEpoch;
+                if (!owner || !token || get().ownerUserId !== owner) return null;
+                const pending = projectLoadsInFlight.get(id);
+                if (pending) return pending;
+                const current = () => owner === currentStorageOwnerId() && token === useUserStore.getState().token && epoch === ownerEpoch;
+                const request = (async () => {
+                    const fetched = await getCanvasProject(token, id);
+                    if (!current() || deletingProjectIds.has(id)) return null;
+                    if (!fetched || fetched.id !== id || !isCanvasProjectHydrated(fetched)) throw new Error("画布数据不完整，请重试");
+                    const latest = get().projects.find(item => item.id === id);
+                    if (latest !== project && latest?.pendingSave && isCanvasProjectHydrated(latest)) return latest;
+                    const complete = canonicalProject({ ...fetched, hydrated: true });
+                    set((state) => ({ projects: state.projects.some(item => item.id === id)
+                        ? state.projects.map(item => item.id === id ? complete : item)
+                        : [complete, ...state.projects] }));
+                    return complete;
+                })();
+                projectLoadsInFlight.set(id, request);
+                try { return await request; }
+                finally { if (projectLoadsInFlight.get(id) === request) projectLoadsInFlight.delete(id); }
+            },
             renameProject: (id, title) => {
                 const project = get().projects.find(
                     (item) => item.id === id,
                 );
-                if (!project) return;
+                if (!project || !isCanvasProjectHydrated(project)) return;
                 const nextProject = {
                     ...project,
                     title: title.trim() || project.title,
                     autoTitlePending: false,
                     updatedAt: new Date().toISOString(),
+                    remoteUpdatedAt: undefined,
                     pendingSave: true,
                 };
                 set((state) => ({
@@ -526,12 +591,16 @@ export const useCanvasStore = create<CanvasStore>()(
                 const project = get().projects.find(
                     (item) => item.id === id,
                 );
-                if (!project) return;
+                if (!project || !isCanvasProjectHydrated(project)) return;
                 if (Object.entries(patch).every(([key, value]) => Object.is(project[key as keyof CanvasProject], value))) return;
                 const nextProject = {
                     ...project,
                     ...patch,
                     updatedAt: new Date().toISOString(),
+                    remoteUpdatedAt: undefined,
+                    nodeCount: undefined,
+                    connectionCount: undefined,
+                    sessionCount: undefined,
                     pendingSave: true,
                 };
                 set((state) => ({
@@ -555,11 +624,11 @@ export const useCanvasStore = create<CanvasStore>()(
                 accountCanvasSyncEnabled = syncEnabled;
                 if (!syncEnabled) return;
                 const localProjects = get().projects;
-                const remoteProjects = await listCanvasProjects(token).catch((error) => { if (owner === currentStorageOwnerId() && token === useUserStore.getState().token) { hydrationFailed = true; recordSaveError(error); } return null; });
+                const remoteProjects = await listCanvasProjects(token, true).catch((error) => { if (owner === currentStorageOwnerId() && token === useUserStore.getState().token) { hydrationFailed = true; recordSaveError(error); } return null; });
                 if (!remoteProjects || epoch !== ownerEpoch || owner !== currentStorageOwnerId() || token !== useUserStore.getState().token) return;
                 const projects = await reconcileCanvasProjects(
                     token,
-                    remoteProjects,
+                    remoteProjects.map(listedProject),
                     localProjects,
                 );
                 if (epoch !== ownerEpoch || owner !== currentStorageOwnerId() || token !== useUserStore.getState().token) return;

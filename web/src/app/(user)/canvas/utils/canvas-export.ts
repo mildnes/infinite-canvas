@@ -5,8 +5,10 @@ import { getMediaBlob } from "@/services/file-storage";
 import { getImageBlob } from "@/services/image-storage";
 import type { CanvasExportAsset, CanvasExportFile } from "../export-types";
 import type { CanvasProject } from "../stores/use-canvas-store";
+import { isCanvasProjectHydrated } from "./canvas-project-hydration";
 
 export async function exportCanvasProjects(projects: CanvasProject[], fileName = "无限画布") {
+    if (projects.some(project => !isCanvasProjectHydrated(project))) throw new Error("画布尚未完整加载，不能导出");
     const zipFiles: { name: string; data: BlobPart }[] = [];
     const exportedProjects = await Promise.all(
         projects.map(async (project) => {

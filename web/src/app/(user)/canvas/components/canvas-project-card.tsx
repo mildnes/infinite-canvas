@@ -2,15 +2,17 @@
 
 import { Check, Download, Pencil, Trash2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { Button, Input } from "antd";
+import { App, Button, Input } from "antd";
 
 import { useCanvasStore, type CanvasProject } from "../stores/use-canvas-store";
 import { useCanvasUiStore } from "../stores/use-canvas-ui-store";
 import { exportCanvasProjects } from "../utils/canvas-export";
 
 export function CanvasProjectCard({ project }: { project: CanvasProject }) {
+    const { message } = App.useApp();
     const router = useRouter();
     const renameProject = useCanvasStore((state) => state.renameProject);
+    const loadProject = useCanvasStore((state) => state.loadProject);
     const selectedIds = useCanvasUiStore((state) => state.selectedProjectIds);
     const editingId = useCanvasUiStore((state) => state.editingProjectId);
     const editingTitle = useCanvasUiStore((state) => state.editingProjectTitle);
@@ -22,9 +24,19 @@ export function CanvasProjectCard({ project }: { project: CanvasProject }) {
     const editing = editingId === project.id;
     const selected = selectedIds.includes(project.id);
     const open = () => router.push(`/canvas/${project.id}`);
-    const saveTitle = () => {
-        renameProject(project.id, editingTitle);
-        stopEditing();
+    const saveTitle = async () => {
+        try {
+            const complete = await loadProject(project.id);
+            if (!complete || useCanvasStore.getState().projects.find(item => item.id === project.id) !== complete) return;
+            renameProject(project.id, editingTitle);
+            stopEditing();
+        } catch (error) { message.error(error instanceof Error ? error.message : "画布加载失败，请重试"); }
+    };
+    const exportProject = async () => {
+        try {
+            const complete = await loadProject(project.id);
+            if (complete) await exportCanvasProjects([complete], complete.title || "无限画布");
+        } catch (error) { message.error(error instanceof Error ? error.message : "画布导出失败，请重试"); }
     };
 
     return (
@@ -51,13 +63,13 @@ export function CanvasProjectCard({ project }: { project: CanvasProject }) {
                     >
                         <h2 className="truncate text-xl font-semibold">{project.title}</h2>
                         <p className="mt-3 text-sm leading-6 text-stone-600 dark:text-stone-400">
-                            {project.nodes.length} 个节点 · {project.connections.length} 条连线
+                            {project.nodeCount ?? project.nodes.length} 个节点 · {project.connectionCount ?? project.connections.length} 条连线
                         </p>
                     </button>
                 )}
             </div>
             <div className="mt-8 flex items-end justify-between gap-3">
-                <p className="text-xs text-stone-500">更新于 {new Date(project.updatedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</p>
+                <p className="text-xs text-stone-500">更新于 {new Date(project.remoteUpdatedAt || project.updatedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</p>
                 <div className="flex items-center gap-1" onClick={(event) => event.stopPropagation()}>
                     {editing ? (
                         <>
@@ -66,7 +78,7 @@ export function CanvasProjectCard({ project }: { project: CanvasProject }) {
                         </>
                     ) : (
                         <>
-                            <Button type="text" size="small" shape="circle" icon={<Download className="size-4" />} onClick={() => void exportCanvasProjects([project], project.title || "无限画布")} aria-label="导出" />
+                            <Button type="text" size="small" shape="circle" icon={<Download className="size-4" />} onClick={() => void exportProject()} aria-label="导出" />
                             <Button type="text" size="small" shape="circle" icon={<Pencil className="size-4" />} onClick={() => startEditing(project.id, project.title)} aria-label="重命名" />
                             <Button type="text" size="small" shape="circle" icon={<Trash2 className="size-4" />} onClick={() => setDeleteIds([project.id])} aria-label="删除" />
                         </>
