@@ -2,13 +2,14 @@ import { create } from "zustand";
 import { persist, type PersistStorage, type StorageValue } from "zustand/middleware";
 
 import { nanoid } from "nanoid";
-import { localForageStorage, currentStorageOwnerId, waitForStorageOwner } from "@/lib/localforage-storage";
+import { currentStorageOwnerId, waitForStorageOwner } from "@/lib/localforage-storage";
 import { deleteCanvasProjects, listCanvasProjects, saveCanvasProject, syncCanvasProjects } from "@/services/api/canvas-tasks";
 import { fetchUserConfig } from "@/services/api/user-config";
 import { useUserStore } from "@/stores/use-user-store";
 import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
 import type { CanvasAgentConfig, CanvasAssistantSession, CanvasConnection, CanvasNodeData, CanvasPendingAgentRequest, ViewportTransform } from "../types";
 import { sanitizeCanvasNodesForPersistence, sanitizeCanvasSessionsForPersistence } from "../utils/canvas-media-persistence";
+import { createCanvasProjectStorage } from "./canvas-project-storage";
 
 export type CanvasSidePanelState = {
     open: boolean;
@@ -87,6 +88,7 @@ const sanitizedNodes = new WeakMap<CanvasNodeData[], CanvasNodeData[]>();
 const sanitizedSessions = new WeakMap<CanvasAssistantSession[], CanvasAssistantSession[]>();
 // Only an explicit retry may resolve the exact draft it restored.
 const retryDrafts = new WeakMap<CanvasProject, CanvasProject>();
+const projectStorage = createCanvasProjectStorage();
 
 function persistentProject(project: CanvasProject): CanvasProject {
     let nodes = sanitizedNodes.get(project.nodes);
@@ -104,8 +106,16 @@ function flushLocalCanvasSave() {
     const pending = queuedPersistValue;
     queuedPersistValue = null;
     if (pending) {
-        localSaveInFlight = localSaveInFlight.catch(() => undefined).then(() => localForageStorage.setItem(pending.name, JSON.stringify(pending.value))).then(() => undefined);
+        localSaveInFlight = persistLocalCanvasValue(pending.value).catch((error) => {
+            if (!queuedPersistValue && pending.value.state.ownerUserId === currentStorageOwnerId()) queuedPersistValue = pending;
+            throw error;
+        });
     }
+    return localSaveInFlight;
+}
+
+function persistLocalCanvasValue(value: StorageValue<CanvasStore>) {
+    localSaveInFlight = localSaveInFlight.catch(() => undefined).then(() => projectStorage.write(value, persistentProject));
     return localSaveInFlight;
 }
 
@@ -277,12 +287,10 @@ const canvasStorage: PersistStorage<CanvasStore> = {
         resetCanvasOwner(owner);
         const epoch = ownerEpoch;
         const token = useUserStore.getState().token;
-        const localValue = await localForageStorage.getItem(name);
+        await localSaveInFlight.catch(() => undefined);
+        const localParsed = await projectStorage.read(owner, persistentProject) as StorageValue<CanvasStore> | null;
         const isCurrent = () => !expired && attempt === hydrationAttempt && epoch === ownerEpoch && owner === currentStorageOwnerId() && token === useUserStore.getState().token;
         if (!isCurrent()) return null;
-        const localParsed = localValue
-            ? (JSON.parse(localValue) as StorageValue<CanvasStore>)
-            : null;
         const localProjects = localParsed?.state.ownerUserId === owner ? localParsed.state.projects || [] : [];
         if (localParsed?.state.ownerUserId === owner && localParsed.state.conflictDrafts) useCanvasStore.setState({ conflictDrafts: localParsed.state.conflictDrafts });
         fallback = localParsed?.state.ownerUserId === owner ? localParsed : null;
@@ -314,10 +322,7 @@ const canvasStorage: PersistStorage<CanvasStore> = {
                         version: 0,
                     } as StorageValue<CanvasStore>;
                     queuedPersistState = nextState;
-                    await localForageStorage.setItem(
-                        name,
-                        JSON.stringify(parsed),
-                    );
+                    await persistLocalCanvasValue(parsed);
                     if (!isCurrent()) return null;
                     ownerLoading = false;
                     hydrationFailed = false;
@@ -334,10 +339,7 @@ const canvasStorage: PersistStorage<CanvasStore> = {
                         version: 0,
                     } as StorageValue<CanvasStore>;
                     queuedPersistState = nextState;
-                    await localForageStorage.setItem(
-                        name,
-                        JSON.stringify(parsed),
-                    );
+                    await persistLocalCanvasValue(parsed);
                     if (!isCurrent()) return null;
                     ownerLoading = false;
                     hydrationFailed = false;
@@ -393,7 +395,10 @@ const canvasStorage: PersistStorage<CanvasStore> = {
         saveTimer = setTimeout(flush, 400);
         if (!saveMaxTimer) saveMaxTimer = setTimeout(flush, MAX_SAVE_WAIT_MS);
     },
-    removeItem: (name) => localForageStorage.removeItem(name),
+    removeItem: async () => {
+        const owner = currentStorageOwnerId();
+        if (owner) await projectStorage.remove(owner);
+    },
 };
 
 export const useCanvasStore = create<CanvasStore>()(
@@ -565,10 +570,7 @@ export const useCanvasStore = create<CanvasStore>()(
                 const nextState = { projects, ownerUserId: owner, conflictDrafts: get().conflictDrafts };
                 queuedPersistState = nextState;
                 set(nextState);
-                await localForageStorage.setItem(
-                    CANVAS_STORE_KEY,
-                    JSON.stringify({ state: nextState, version: 0 }),
-                );
+                await persistLocalCanvasValue({ state: nextState, version: 0 } as StorageValue<CanvasStore>);
             },
             setSyncEnabled: (enabled) => {
                 accountCanvasSyncEnabled = enabled;
@@ -611,17 +613,7 @@ export const useCanvasStore = create<CanvasStore>()(
         {
             name: CANVAS_STORE_KEY,
             storage: canvasStorage,
-            partialize: (() => {
-                let source: CanvasProject[] | null = null;
-                let projects: CanvasProject[] = [];
-                let draftSource: CanvasProject[] | null = null;
-                let conflictDrafts: CanvasProject[] = [];
-                return (state: CanvasStore) => {
-                    if (source !== state.projects) { source = state.projects; projects = state.projects.map(persistentProject); }
-                    if (draftSource !== state.conflictDrafts) { draftSource = state.conflictDrafts; conflictDrafts = state.conflictDrafts.map(persistentProject); }
-                    return { ownerUserId: state.ownerUserId, projects, conflictDrafts } as StorageValue<CanvasStore>["state"];
-                };
-            })(),
+            partialize: (state) => ({ ownerUserId: state.ownerUserId, projects: state.projects, conflictDrafts: state.conflictDrafts }) as StorageValue<CanvasStore>["state"],
             onRehydrateStorage: () => () => {
                 if (!ownerLoading) useCanvasStore.setState({ hydrated: true, ...(!hydrationFailed && !failedProjectSaves.size && !useCanvasStore.getState().conflictDrafts.length ? { syncError: null } : {}) });
             },

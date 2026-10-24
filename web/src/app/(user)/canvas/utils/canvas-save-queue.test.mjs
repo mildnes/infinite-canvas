@@ -43,6 +43,7 @@ function fixture() {
     let maxInFlight = 0;
     let failure;
     const initial = project();
+    const disk = new Map();
     const storage = {
         localForageStorage: {
             getItem: async () => JSON.stringify({ state: { ownerUserId: "A", projects: [initial] }, version: 0 }),
@@ -51,6 +52,7 @@ function fixture() {
         },
         currentStorageOwnerId: () => user.getState().token ? user.getState().user?.id : "anon",
         waitForStorageOwner: async () => user.getState().user?.id || "anon",
+        accountStorageKey: name => name,
     };
     const api = {
         listCanvasProjects: async () => [initial],
@@ -70,6 +72,7 @@ function fixture() {
         deleteCanvasProjects: async () => {},
     };
     const modules = {
+        localforage: { default: { getItem: async key => disk.get(key), setItem: async (key, value) => disk.set(key, value), removeItem: async key => disk.delete(key) } },
         zustand: require("zustand"),
         "zustand/middleware": require("zustand/middleware"),
         nanoid: { nanoid: () => "new-project" },
@@ -84,6 +87,7 @@ function fixture() {
     };
     const exports = {};
     const window = {
+        localStorage: { removeItem: () => {} },
         addEventListener: () => {},
         document: { visibilityState: "visible", addEventListener: () => {} },
     };
@@ -97,6 +101,12 @@ function fixture() {
     const source = process.env.CANVAS_STORE_BASELINE
         ? execFileSync("git", ["show", `${process.env.CANVAS_STORE_BASELINE}:web/src/app/(user)/canvas/stores/use-canvas-store.ts`], { cwd: new URL("../../../../..", import.meta.url), encoding: "utf8" })
         : readFileSync(new URL(storePath, import.meta.url), "utf8");
+    const storageExports = {};
+    vm.runInNewContext(
+        ts.transpileModule(readFileSync(new URL("../stores/canvas-project-storage.ts", import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2016, module: ts.ModuleKind.CommonJS } }).outputText,
+        { exports: storageExports, require: name => modules[name] || {}, Promise, console, window },
+    );
+    modules["./canvas-project-storage"] = storageExports;
     vm.runInNewContext(
         ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2016, module: ts.ModuleKind.CommonJS } }).outputText,
         { exports, require: name => modules[name] || {}, Promise, console, setTimeout, clearTimeout, window, document: window.document },
