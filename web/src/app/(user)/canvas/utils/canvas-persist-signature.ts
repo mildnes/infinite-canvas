@@ -20,11 +20,26 @@ type CanvasPersistState = {
     viewport?: { x: number; y: number; k: number };
 };
 
+// Two independent 32-bit hashes over the whole string: truncating head/tail let two payloads with
+// identical length and edges collide, which silently skipped a real save.
+function hashContent(value: string): string {
+    let fnv = 0x811c9dc5;
+    let djb = 5381;
+    for (let index = 0; index < value.length; index += 1) {
+        const code = value.charCodeAt(index);
+        fnv ^= code;
+        fnv = Math.imul(fnv, 0x01000193) >>> 0;
+        djb = (Math.imul(djb, 33) + code) >>> 0;
+    }
+    return `${value.length}:${fnv.toString(36)}:${djb.toString(36)}`;
+}
+
 function contentFingerprint(content: unknown): string {
     if (typeof content !== "string" || !content) return "";
-    // Inline data URLs can be megabytes; length plus both ends is enough to detect a new payload.
+    // Inline data URLs can be megabytes, so hash them instead of embedding the payload
+    // (hashing is O(n) once, while a save costs a full upload).
     if (content.length <= 512) return content;
-    return `${content.length}:${content.slice(0, 96)}:${content.slice(-96)}`;
+    return hashContent(content);
 }
 
 function metadataFingerprint(metadata: Record<string, unknown> | undefined): string {

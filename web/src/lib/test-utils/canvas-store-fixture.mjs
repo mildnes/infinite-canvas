@@ -19,7 +19,7 @@ export function canvasFixture({ owner = "anon", projects = [], drafts = [], disk
     const user = require("zustand").create(() => ({ token: owner === "anon" ? "" : `${owner}-token`, user: owner === "anon" ? null : { id: owner }, isReady: true }));
     user.persist = { hasHydrated: () => true };
     const writes = [], removes = [], reads = [], requests = [], errors = [], timers = new Map(), modules = {};
-    let failure, time = 0, sequence = 0, detailGate, writeGate;
+    let failure, time = 0, sequence = 0, detailGate, writeGate, localFailure;
     if (projects.length || drafts.length) disk.set(`${legacyKey}:${owner}`, JSON.stringify({ state: { ownerUserId: owner, projects, conflictDrafts: drafts }, version: 0 }));
     const forage = {
         config() {},
@@ -37,7 +37,11 @@ export function canvasFixture({ owner = "anon", projects = [], drafts = [], disk
     const clearTimeout = id => timers.delete(id);
     const context = {
         Promise, console: { ...console, error() {}, warn() {} }, setTimeout, clearTimeout,
-        window: { addEventListener() {}, localStorage: { getItem: key => disk.get(key), setItem: (key, value) => disk.set(key, value), removeItem: key => disk.delete(key) } },
+        window: { addEventListener() {}, localStorage: {
+            getItem: key => disk.get(key) ?? null,
+            setItem: (key, value) => { if (localFailure?.(key)) throw new Error("injected disk failure"); disk.set(key, value); },
+            removeItem: key => { if (localFailure?.(key)) throw new Error("injected disk failure"); disk.delete(key); },
+        } },
     };
     const api = {
         async listCanvasProjects(token, summary) { requests.push(["list", token, summary]); return remote; },
@@ -83,6 +87,7 @@ export function canvasFixture({ owner = "anon", projects = [], drafts = [], disk
     return {
         ...exported, user, disk, writes, removes, reads, requests, errors, storage: modules["@/lib/localforage-storage"],
         setFailure: fn => { failure = fn; },
+        setLocalStorageFailure: fn => { localFailure = fn; },
         setWriteGate: fn => { writeGate = fn; },
         detailGate: promise => { detailGate = promise; },
         switchOwner: id => user.setState({ token: id === "anon" ? "" : `${id}-token`, user: id === "anon" ? null : { id }, isReady: true }),

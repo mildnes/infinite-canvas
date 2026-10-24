@@ -46,12 +46,13 @@ test("failed partial migration retains readable legacy data and succeeds on retr
     const f = canvasFixture({ projects: ["a", "b", "c"].map(id => project(id)) });
     let failures = 0;
     f.setFailure(key => key === projectKey("anon", "b") && ++failures > 0);
+    f.setLocalStorageFailure(key => key === projectKey("anon", "b") && true);
     await tick();
     assert.equal(f.useCanvasStore.getState().projects.length, 3);
     assert.ok(f.disk.has(`${legacyKey}:anon`));
     assert.ok(failures > 0, "migration must attempt the split write and exercise the injected failure");
     assert.equal(f.disk.has(metaKey("anon")), false, "partial migration must not publish its completion marker");
-    f.setFailure(undefined);
+    f.setFailure(undefined); f.setLocalStorageFailure(undefined);
     await f.useCanvasStore.persist.rehydrate(); await tick();
     assert.equal(f.disk.has(`${legacyKey}:anon`), false);
     assert.equal(f.useCanvasStore.getState().projects.length, 3);
@@ -98,10 +99,11 @@ test("a failed board save is retried without losing the last edit", async () => 
     const f = canvasFixture({ projects: [project("a"), project("b")] });
     await tick(); f.clearOperations();
     f.setFailure(key => key === projectKey("anon", "a"));
+    f.setLocalStorageFailure(key => key === projectKey("anon", "a"));
     f.useCanvasStore.getState().updateProject("a", { viewport: { x: 42, y: 0, k: 1 } });
     await assert.rejects(f.flushCanvasSaves(), /disk failure/);
     assert.equal(JSON.parse(f.disk.get(projectKey("anon", "a"))).viewport, undefined);
-    f.setFailure(undefined); await f.flushCanvasSaves();
+    f.setFailure(undefined); f.setLocalStorageFailure(undefined); await f.flushCanvasSaves();
     assert.equal(JSON.parse(f.disk.get(projectKey("anon", "a"))).viewport.x, 42);
     assert.ok(f.writes.every(w => w.key === projectKey("anon", "a")));
 });
@@ -183,10 +185,11 @@ test("a failed merge retains the legacy package and succeeds on retry", async ()
     disk.set(`${legacyKey}:anon`, JSON.stringify({ state: { ownerUserId: "anon", projects: [project("a"), project("b")], conflictDrafts: [] }, version: 0 }));
     const second = canvasFixture({ disk });
     second.setFailure(key => key === projectKey("anon", "b"));
+    second.setLocalStorageFailure(key => key === projectKey("anon", "b"));
     await tick();
     assert.equal(disk.has(`${legacyKey}:anon`), true, "a failed merge must keep the legacy package");
     assert.ok(disk.has(projectKey("anon", "a")), "already indexed boards stay readable");
-    second.setFailure(undefined);
+    second.setFailure(undefined); second.setLocalStorageFailure(undefined);
     const third = canvasFixture({ disk });
     await tick();
     assert.ok(third.disk.has(projectKey("anon", "b")), "the retry must complete the merge");
@@ -238,4 +241,32 @@ test("a summary-only board is still not editable", async () => {
     f.useCanvasStore.getState().updateProject("a", { viewport: { x: 9, y: 9, k: 1 } });
     await tick(); await f.flushCanvasSaves();
     assert.equal(f.requests.length, 0, "a summary must never be edited or saved");
+});
+
+test("renaming a complete board clears stale summary counters so the save is not dropped", async () => {
+    const f = canvasFixture({ projects: [project("a")], syncEnabled: true });
+    await tick(); f.clearOperations();
+    const loaded = f.useCanvasStore.getState().projects[0];
+    // syncWithRemote stamps summary counters onto the already-complete local board.
+    f.useCanvasStore.setState({ projects: [{ ...loaded, nodeCount: 99, connectionCount: 42, sessionCount: 7 }] });
+    f.useCanvasStore.getState().renameProject("a", "renamed");
+    await tick(); await f.flushCanvasSaves();
+    const renamed = f.useCanvasStore.getState().projects.find(item => item.id === "a");
+    assert.equal(renamed.title, "renamed");
+    assert.equal(renamed.nodeCount, undefined, "the stale summary counter must be dropped by the rename");
+    assert.equal(JSON.parse(f.disk.get(projectKey("anon", "a"))).title, "renamed", "the rename must reach local storage");
+});
+
+test("per-board keys fall back to window.localStorage when IndexedDB fails", async () => {
+    const f = canvasFixture({ projects: [project("a")] });
+    await tick(); f.flushCanvasSaves?.();
+    f.clearOperations();
+    // Simulate IndexedDB being unavailable (private mode / quota) for every per-board write.
+    f.setFailure(key => String(key).startsWith("canvas_project:"));
+    f.useCanvasStore.getState().updateProject("a", { viewport: { x: 7, y: 8, k: 1 } });
+    await tick(); await f.flushCanvasSaves();
+    f.setFailure(undefined); f.setLocalStorageFailure(undefined);
+    const stored = f.disk.get(projectKey("anon", "a"));
+    assert.ok(stored, "the newest edit must still be persisted through the fallback");
+    assert.equal(JSON.parse(stored).viewport.x, 7);
 });

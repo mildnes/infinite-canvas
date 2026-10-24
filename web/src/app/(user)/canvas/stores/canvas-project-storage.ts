@@ -12,6 +12,36 @@ const metaKey = (owner: string) => `canvas_meta:${owner}`;
 const projectKey = (owner: string, id: string) => `canvas_project:${owner}:${id}`;
 const draftKey = (owner: string, id: string) => `canvas_conflict:${owner}:${id}`;
 
+
+// localforage-storage.ts falls back to window.localStorage when IndexedDB is unavailable.
+// The per-board keys must keep that guarantee, otherwise a quota/private-mode failure would
+// leave the newest edits only in memory until the tab is closed.
+const readKey = async (key: string): Promise<string | null> => {
+    try {
+        return (await localforage.getItem<string>(key)) ?? null;
+    } catch {
+        if (typeof window === "undefined") return null;
+        return window.localStorage.getItem(key);
+    }
+};
+const writeKey = async (key: string, value: string): Promise<void> => {
+    try {
+        await localforage.setItem(key, value);
+        return;
+    } catch (error) {
+        if (typeof window === "undefined") throw error;
+        window.localStorage.setItem(key, value);
+    }
+};
+const removeKey = async (key: string): Promise<void> => {
+    try {
+        await localforage.removeItem(key);
+    } catch (error) {
+        if (typeof window === "undefined") throw error;
+    }
+    if (typeof window !== "undefined") window.localStorage.removeItem(key);
+};
+
 // All calls are serialized by the canvas store's localSaveInFlight queue.
 export function createCanvasProjectStorage() {
     let lastOwner: string | null = null;
@@ -28,7 +58,7 @@ export function createCanvasProjectStorage() {
     const removeLegacy = async (owner: string) => {
         if (!legacyPending || !current(owner)) return;
         const key = accountStorageKey(LEGACY_KEY, owner)!;
-        await localforage.removeItem(key);
+        await removeKey(key);
         if (!current(owner)) return;
         if (typeof window !== "undefined") window.localStorage.removeItem(key);
         legacyPending = false;
@@ -101,7 +131,7 @@ export function createCanvasProjectStorage() {
                 if (!current(owner)) return;
                 const saved = previous.get(project.id);
                 if (saved?.project === project && saved.updatedAt === project.updatedAt) continue;
-                await localforage.setItem(key(owner, project.id), JSON.stringify(prepare(project)));
+                await writeKey(key(owner, project.id), JSON.stringify(prepare(project)));
             }
         };
         await writeItems(nextProjects, projects, projectKey);
@@ -112,17 +142,17 @@ export function createCanvasProjectStorage() {
             conflictDraftIds: conflictDrafts.map(project => project.id), version: value.version ?? 0,
         } satisfies CanvasMeta);
         // Commit the index last: an interrupted migration must still read its complete legacy value.
-        if (metadata !== nextMeta) await localforage.setItem(metaKey(owner), nextMeta);
+        if (metadata !== nextMeta) await writeKey(metaKey(owner), nextMeta);
         if (!current(owner)) return;
         const nextIds = new Set(nextProjects.map(project => project.id));
         const nextDraftIds = new Set(conflictDrafts.map(project => project.id));
         for (const id of projects.keys()) {
             if (!current(owner)) return;
-            if (!nextIds.has(id)) await localforage.removeItem(projectKey(owner, id));
+            if (!nextIds.has(id)) await removeKey(projectKey(owner, id));
         }
         for (const id of drafts.keys()) {
             if (!current(owner)) return;
-            if (!nextDraftIds.has(id)) await localforage.removeItem(draftKey(owner, id));
+            if (!nextDraftIds.has(id)) await removeKey(draftKey(owner, id));
         }
         if (!current(owner)) return;
         projects = remember(nextProjects); drafts = remember(conflictDrafts); metadata = nextMeta;
@@ -136,7 +166,7 @@ export function createCanvasProjectStorage() {
             reset(owner);
             let readError: unknown;
             try {
-                const rawMeta = await localforage.getItem<string>(metaKey(owner));
+                const rawMeta = await readKey(metaKey(owner));
                 if (!current(owner)) return null;
                 if (rawMeta) {
                     const meta = JSON.parse(rawMeta) as CanvasMeta;
@@ -145,7 +175,7 @@ export function createCanvasProjectStorage() {
                         const items: CanvasProject[] = [];
                         for (const id of ids) {
                             if (!current(owner)) return [];
-                            const raw = await localforage.getItem<string>(key(owner, id));
+                            const raw = await readKey(key(owner, id));
                             if (!raw) throw new Error("画布本地数据不完整，请重试");
                             const project = JSON.parse(raw) as CanvasProject;
                             if (project.id !== id || !isCanvasProjectHydrated(project)) throw new Error("画布本地数据无效");
@@ -176,15 +206,15 @@ export function createCanvasProjectStorage() {
         },
         async remove(owner: string) {
             if (!current(owner)) return;
-            const rawMeta = await localforage.getItem<string>(metaKey(owner));
+            const rawMeta = await readKey(metaKey(owner));
             if (!current(owner)) return;
             if (rawMeta) {
                 const meta = JSON.parse(rawMeta) as CanvasMeta;
                 if (meta.ownerUserId !== owner) return;
-                for (const id of meta.projectIds) { if (!current(owner)) return; await localforage.removeItem(projectKey(owner, id)); }
-                for (const id of meta.conflictDraftIds) { if (!current(owner)) return; await localforage.removeItem(draftKey(owner, id)); }
+                for (const id of meta.projectIds) { if (!current(owner)) return; await removeKey(projectKey(owner, id)); }
+                for (const id of meta.conflictDraftIds) { if (!current(owner)) return; await removeKey(draftKey(owner, id)); }
                 if (!current(owner)) return;
-                await localforage.removeItem(metaKey(owner));
+                await removeKey(metaKey(owner));
             }
             if (!current(owner)) return;
             await localForageStorage.removeItem(LEGACY_KEY);

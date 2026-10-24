@@ -62,3 +62,14 @@ test("the canvas page no longer subscribes to the whole project object", () => {
     assert.ok(!/state\.projects\.find\(\(project\) => project\.id === projectId\)\)/.test(page), "subscribing to the project object re-renders the page on every save response");
     assert.ok(/state\.projects\.find\(\(project\) => project\.id === projectId\)\?\.title/.test(page), "only the title is consumed, so only the title should be subscribed");
 });
+
+test("payloads that differ only in the middle are not treated as identical", () => {
+    const head = "data:image/png;base64," + "A".repeat(512);
+    const tail = "Z".repeat(512);
+    const first = head + "MIDDLE-ONE" + tail;
+    const second = head + "MIDDLE-TWO" + tail;
+    assert.equal(first.length, second.length, "the fixture must keep the lengths identical");
+    const a = canvasPersistSignature({ nodes: [node({ metadata: { ...node().metadata, content: first } })] });
+    const b = canvasPersistSignature({ nodes: [node({ metadata: { ...node().metadata, content: second } })] });
+    assert.notEqual(a, b, "a middle-only change must still change the signature");
+});

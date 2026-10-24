@@ -545,6 +545,11 @@ export const useCanvasStore = create<CanvasStore>()(
                     autoTitlePending: false,
                     updatedAt: new Date().toISOString(),
                     remoteUpdatedAt: undefined,
+                    // Stale summary counters must not survive an edit, otherwise queueProjectSave
+                    // rejects the rename as "not hydrated" and the new title is silently dropped.
+                    nodeCount: undefined,
+                    connectionCount: undefined,
+                    sessionCount: undefined,
                     pendingSave: true,
                 };
                 set((state) => ({
