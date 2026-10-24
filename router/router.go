@@ -120,6 +120,9 @@ func New() *gin.Engine {
 	v1.DELETE("/comfy-bridges/:id", func(c *gin.Context) { handler.UserDeleteComfyBridge(c.Writer, c.Request, c.Param("id")) })
 	v1.POST("/user-config/storage", gin.WrapF(handler.SaveUserStorageProvider))
 	v1.GET("/canvas/projects", gin.WrapF(handler.UserCanvasProjects))
+	v1.GET("/canvas/projects/:id", func(c *gin.Context) {
+		handler.UserCanvasProject(c.Writer, c.Request, c.Param("id"))
+	})
 	v1.POST("/canvas/projects", gin.WrapF(handler.SaveUserCanvasProject))
 	v1.POST("/canvas/projects/sync", gin.WrapF(handler.SyncUserCanvasProjects))
 	v1.POST("/canvas/projects/delete", gin.WrapF(handler.DeleteUserCanvasProjects))

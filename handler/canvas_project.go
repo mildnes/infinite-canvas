@@ -6,15 +6,38 @@ import (
 	"net/http"
 
 	"github.com/tigerowo/infinite-canvas/service"
+	"gorm.io/gorm"
 )
 
 func UserCanvasProjects(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("summary") == "1" {
+		projects, err := service.CurrentUserCanvasProjectSummaries(r.Context())
+		if err != nil {
+			FailError(w, err)
+			return
+		}
+		OK(w, projects)
+		return
+	}
 	projects, err := service.CurrentUserCanvasProjects(r.Context())
 	if err != nil {
 		FailError(w, err)
 		return
 	}
 	OK(w, projects)
+}
+
+func UserCanvasProject(w http.ResponseWriter, r *http.Request, id string) {
+	project, err := service.CurrentUserCanvasProject(r.Context(), id)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		FailWithStatus(w, http.StatusNotFound, "画布不存在")
+		return
+	}
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, project)
 }
 
 func SaveUserCanvasProject(w http.ResponseWriter, r *http.Request) {

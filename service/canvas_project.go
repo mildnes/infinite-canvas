@@ -146,6 +146,66 @@ func CurrentUserCanvasProjects(
 	return data, nil
 }
 
+type CanvasProjectSummary struct {
+	ID              string `json:"id"`
+	Title           string `json:"title"`
+	CreatedAt       string `json:"createdAt"`
+	UpdatedAt       string `json:"updatedAt"`
+	NodeCount       int    `json:"nodeCount"`
+	ConnectionCount int    `json:"connectionCount"`
+	SessionCount    int    `json:"sessionCount"`
+}
+
+func CurrentUserCanvasProjectSummaries(ctx context.Context) ([]CanvasProjectSummary, error) {
+	user, ok := UserFromContext(ctx)
+	if !ok || user.ID == "" {
+		return nil, errors.New("请先登录")
+	}
+	projects, err := repository.ListUserCanvasProjects(user.ID)
+	if err != nil {
+		return nil, err
+	}
+	summaries := make([]CanvasProjectSummary, 0, len(projects))
+	for _, raw := range canvasProjectData(projects) {
+		var data struct {
+			CanvasProjectSummary
+			Nodes        []json.RawMessage `json:"nodes"`
+			Connections  []json.RawMessage `json:"connections"`
+			ChatSessions []json.RawMessage `json:"chatSessions"`
+		}
+		if err := json.Unmarshal(raw, &data); err != nil {
+			return nil, err
+		}
+		if data.Title == "" {
+			data.Title = "未命名画布"
+		}
+		data.NodeCount = len(data.Nodes)
+		data.ConnectionCount = len(data.Connections)
+		data.SessionCount = len(data.ChatSessions)
+		summaries = append(summaries, data.CanvasProjectSummary)
+	}
+	return summaries, nil
+}
+
+func CurrentUserCanvasProject(ctx context.Context, id string) (json.RawMessage, error) {
+	user, ok := UserFromContext(ctx)
+	if !ok || user.ID == "" {
+		return nil, errors.New("请先登录")
+	}
+	project, err := repository.GetUserCanvasProject(user.ID, id)
+	if err != nil {
+		return nil, err
+	}
+	if project.DeletedAt != "" || strings.TrimSpace(project.ProjectData) == "" {
+		return nil, gorm.ErrRecordNotFound
+	}
+	raw, err := canvasProjectWithTimestamps(project)
+	if err != nil {
+		return nil, err
+	}
+	return RewriteStorageObjectAliases(raw)
+}
+
 func SaveCurrentUserCanvasProject(
 	ctx context.Context,
 	raw json.RawMessage,
