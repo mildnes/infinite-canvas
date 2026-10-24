@@ -73,6 +73,7 @@ import { CanvasToolbar } from "../components/canvas-toolbar";
 import { AssetPickerModal, type AssetPickerTab } from "../components/asset-picker-modal";
 import { CanvasZoomControls } from "../components/canvas-zoom-controls";
 import { CANVAS_ASSET_DRAG_TYPE, CanvasSidePanel } from "../components/canvas-side-panel";
+import { canvasPersistSignature } from "../utils/canvas-persist-signature";
 import { DEFAULT_CANVAS_AGENT_PANEL, DEFAULT_CANVAS_SIDE_PANEL, flushCanvasSaves, useCanvasStore } from "../stores/use-canvas-store";
 import { assistantReferenceContentFromNode, buildNodeMentionReferences, isCanvasReferenceNode } from "../utils/canvas-resource-references";
 import { buildCanvasAgentContext } from "../agent/canvas-agent-context";
@@ -384,7 +385,10 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const syncError = useCanvasStore((state) => state.syncError);
     const retrySaves = useCanvasStore((state) => state.retrySaves);
     const restoreVersion = useCanvasStore((state) => state.restoreVersion);
-    const currentProject = useCanvasStore((state) => state.projects.find((project) => project.id === projectId));
+    // Narrow subscription: a save response replaces the project object, which used to re-render
+    // this whole page (121 nodes) after every save. Only the title is actually consumed here.
+    const currentProjectTitle = useCanvasStore((state) => state.projects.find((project) => project.id === projectId)?.title);
+    const currentProject = useMemo(() => ({ title: currentProjectTitle }), [currentProjectTitle]);
     const colorTheme = useThemeStore((state) => state.theme);
     const theme = canvasThemes[colorTheme];
     const [nodes, setNodes] = useState<CanvasNodeData[]>([]);
@@ -555,6 +559,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const restoringProjectRef = useRef(false);
     const latestCanvasStateRef = useRef({ connections, chatSessions, activeChatId, agentConfig, backgroundMode, showImageInfo, showConnections, snapToGrid, sidePanel, agentPanel });
     const persistCurrentCanvasRef = useRef<(latestNodes?: CanvasNodeData[]) => void>(() => {});
+    const signatureProjectRef = useRef<string | null>(null);
+    const lastPersistSignatureRef = useRef<string | null>(null);
     const commitViewport = useCallback((next: ViewportTransform) => {
         setViewport(next);
         setContextMenu(null);
@@ -563,6 +569,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         latestCanvasStateRef.current = { connections, chatSessions, activeChatId, agentConfig, backgroundMode, showImageInfo, showConnections, snapToGrid, sidePanel, agentPanel };
         persistCurrentCanvasRef.current = (latestNodes = nodesRef.current) => {
             if (!projectLoaded || restoringProjectRef.current || loadedProjectRef.current?.id !== projectId || loadedProjectRef.current.token !== useUserStore.getState().token) return;
+            lastPersistSignatureRef.current = canvasPersistSignature({ ...latestCanvasStateRef.current, nodes: latestNodes });
+            signatureProjectRef.current = projectId;
             updateProject(projectId, { ...latestCanvasStateRef.current, nodes: latestNodes, viewport: viewportRef.current });
             void flushCanvasSaves().catch((error) => message.error(error instanceof Error ? error.message : "画布保存失败，请重试"));
         };
@@ -802,6 +810,16 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
     useEffect(() => {
         if (!projectLoaded || historyPausedRef.current || restoringProjectRef.current || loadedProjectRef.current?.id !== projectId || loadedProjectRef.current.token !== useUserStore.getState().token) return;
+        const signature = canvasPersistSignature({ nodes, connections, chatSessions, activeChatId, agentConfig, backgroundMode, showImageInfo, showConnections, snapToGrid });
+        // Generation polls touch node metadata every few seconds. Only persist when something that
+        // survives a reload actually changed, otherwise every poll uploads the whole board.
+        if (signatureProjectRef.current !== projectId) {
+            signatureProjectRef.current = projectId;
+            lastPersistSignatureRef.current = signature;
+            return;
+        }
+        if (signature === lastPersistSignatureRef.current) return;
+        lastPersistSignatureRef.current = signature;
         updateProject(projectId, { nodes, connections, chatSessions, activeChatId, agentConfig, backgroundMode, showImageInfo, showConnections, snapToGrid });
     }, [activeChatId, agentConfig, backgroundMode, chatSessions, connections, nodes, projectId, projectLoaded, showConnections, showImageInfo, snapToGrid, updateProject]);
 
