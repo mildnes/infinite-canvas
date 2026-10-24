@@ -12,6 +12,12 @@ export function isCanvasProjectHydrated(project: Partial<CanvasProject>): boolea
         && (project.nodeCount === undefined || project.nodeCount === project.nodes.length);
 }
 
+export function isCanvasProjectEditable(project: Partial<CanvasProject>): boolean {
+    // Summary counters are bookkeeping only: a board whose nodes are already loaded must stay
+    // editable even after syncWithRemote stamps a newer nodeCount onto it.
+    return project.hydrated !== false && Array.isArray(project.nodes);
+}
+
 export function canvasProjectRequestData(project: CanvasProject) {
     const {
         serverUpdatedAt: _serverUpdatedAt, pendingSave: _pendingSave,

@@ -217,3 +217,25 @@ test("incomplete legacy entries are not promoted but complete ones are merged", 
     assert.ok(disk.has(projectKey("anon", "v")), "a complete legacy board must be merged");
     assert.equal(disk.has(projectKey("anon", "s")), false, "an incomplete legacy entry must never be written");
 });
+
+test("a stale summary nodeCount must not block edits to a complete board", async () => {
+    const f = canvasFixture({ projects: [project("a")], syncEnabled: true });
+    await tick(); f.clearOperations();
+    const loaded = f.useCanvasStore.getState().projects[0];
+    // What syncWithRemote does: the summary counters land on an already-complete local board.
+    f.useCanvasStore.setState({ projects: [{ ...loaded, nodeCount: 99, connectionCount: 42, sessionCount: 7 }] });
+    f.useCanvasStore.getState().updateProject("a", { viewport: { x: 5, y: 6, k: 1 } });
+    await tick(); await f.flushCanvasSaves();
+    const edited = f.useCanvasStore.getState().projects.find(item => item.id === "a");
+    assert.equal(edited.viewport.x, 5, "a complete board must stay editable even when the summary counter is stale");
+    assert.equal(JSON.parse(f.disk.get(projectKey("anon", "a"))).viewport.x, 5, "the edit must be persisted locally");
+});
+
+test("a summary-only board is still not editable", async () => {
+    const f = canvasFixture({ projects: [project("a")] });
+    await tick(); f.clearOperations();
+    f.useCanvasStore.setState({ projects: [{ id: "a", title: "a", createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z", hydrated: false, nodes: [], connections: [], chatSessions: [], nodeCount: 3, connectionCount: 0, sessionCount: 0 }] });
+    f.useCanvasStore.getState().updateProject("a", { viewport: { x: 9, y: 9, k: 1 } });
+    await tick(); await f.flushCanvasSaves();
+    assert.equal(f.requests.length, 0, "a summary must never be edited or saved");
+});

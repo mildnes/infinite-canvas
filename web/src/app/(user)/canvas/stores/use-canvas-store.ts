@@ -10,7 +10,7 @@ import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
 import type { CanvasAgentConfig, CanvasAssistantSession, CanvasConnection, CanvasNodeData, CanvasPendingAgentRequest, ViewportTransform } from "../types";
 import { sanitizeCanvasNodesForPersistence, sanitizeCanvasSessionsForPersistence } from "../utils/canvas-media-persistence";
 import { createCanvasProjectStorage } from "./canvas-project-storage";
-import { isCanvasProjectHydrated, type CanvasProjectSummary } from "../utils/canvas-project-hydration";
+import { isCanvasProjectEditable, isCanvasProjectHydrated, type CanvasProjectSummary } from "../utils/canvas-project-hydration";
 
 export type CanvasSidePanelState = {
     open: boolean;
@@ -538,7 +538,7 @@ export const useCanvasStore = create<CanvasStore>()(
                 const project = get().projects.find(
                     (item) => item.id === id,
                 );
-                if (!project || !isCanvasProjectHydrated(project)) return;
+                if (!project || !isCanvasProjectEditable(project)) return;
                 const nextProject = {
                     ...project,
                     title: title.trim() || project.title,
@@ -591,7 +591,7 @@ export const useCanvasStore = create<CanvasStore>()(
                 const project = get().projects.find(
                     (item) => item.id === id,
                 );
-                if (!project || !isCanvasProjectHydrated(project)) return;
+                if (!project || !isCanvasProjectEditable(project)) return;
                 if (Object.entries(patch).every(([key, value]) => Object.is(project[key as keyof CanvasProject], value))) return;
                 const nextProject = {
                     ...project,
