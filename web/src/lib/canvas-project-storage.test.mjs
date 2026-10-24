@@ -147,3 +147,73 @@ test("a board ID is written at most once per flush", async () => {
     assert.equal(f.writes.filter(w => w.key === projectKey("anon", "a")).length, 1);
     assert.equal(JSON.parse(f.disk.get(projectKey("anon", "a"))).title, "latest");
 });
+
+test("a legacy package is merged into the existing split index instead of being dropped", async () => {
+    const disk = new Map();
+    const first = canvasFixture({ projects: [project("a")], disk });
+    await tick(); await first.flushCanvasSaves();
+    assert.ok(disk.has(metaKey("anon")), "first load must have written the split index");
+    // A rollback to a pre-split build rewrites the whole package, adding a board the index never saw.
+    disk.set(`${legacyKey}:anon`, JSON.stringify({ state: { ownerUserId: "anon", projects: [project("a"), project("b")], conflictDrafts: [] }, version: 0 }));
+    const second = canvasFixture({ disk });
+    await tick();
+    const ids = Array.from(second.useCanvasStore.getState().projects, item => item.id).sort();
+    assert.deepEqual(ids, ["a", "b"], "both the indexed and the legacy board must survive");
+    assert.ok(disk.has(projectKey("anon", "b")), "the legacy-only board must be written to its own key");
+    assert.equal(disk.has(`${legacyKey}:anon`), false, "the legacy package is removed only after the merge is persisted");
+});
+
+test("a newer legacy copy wins over the stale split copy", async () => {
+    const disk = new Map();
+    const first = canvasFixture({ projects: [project("a")], disk });
+    await tick(); await first.flushCanvasSaves();
+    const newer = { ...project("a"), title: "rollback-edit", updatedAt: "2026-06-01T00:00:00Z" };
+    disk.set(`${legacyKey}:anon`, JSON.stringify({ state: { ownerUserId: "anon", projects: [newer], conflictDrafts: [] }, version: 0 }));
+    const second = canvasFixture({ disk });
+    await tick();
+    const loaded = second.useCanvasStore.getState().projects.find(item => item.id === "a");
+    assert.equal(loaded.title, "rollback-edit", "edits made during rollback must not be reverted");
+    assert.equal(JSON.parse(disk.get(projectKey("anon", "a"))).title, "rollback-edit");
+});
+
+test("a failed merge retains the legacy package and succeeds on retry", async () => {
+    const disk = new Map();
+    const first = canvasFixture({ projects: [project("a")], disk });
+    await tick(); await first.flushCanvasSaves();
+    disk.set(`${legacyKey}:anon`, JSON.stringify({ state: { ownerUserId: "anon", projects: [project("a"), project("b")], conflictDrafts: [] }, version: 0 }));
+    const second = canvasFixture({ disk });
+    second.setFailure(key => key === projectKey("anon", "b"));
+    await tick();
+    assert.equal(disk.has(`${legacyKey}:anon`), true, "a failed merge must keep the legacy package");
+    assert.ok(disk.has(projectKey("anon", "a")), "already indexed boards stay readable");
+    second.setFailure(undefined);
+    const third = canvasFixture({ disk });
+    await tick();
+    assert.ok(third.disk.has(projectKey("anon", "b")), "the retry must complete the merge");
+    assert.equal(third.disk.has(`${legacyKey}:anon`), false);
+});
+
+test("another account's legacy package is neither merged nor deleted", async () => {
+    const disk = new Map();
+    const first = canvasFixture({ projects: [project("a")], disk });
+    await tick(); await first.flushCanvasSaves();
+    disk.set(`${legacyKey}:anon`, JSON.stringify({ state: { ownerUserId: "someone-else", projects: [project("z")], conflictDrafts: [] }, version: 0 }));
+    const second = canvasFixture({ disk });
+    await tick();
+    const ids = Array.from(second.useCanvasStore.getState().projects, item => item.id);
+    assert.deepEqual(ids, ["a"], "a foreign package must never be read into this account");
+    assert.equal(disk.has(projectKey("anon", "z")), false);
+    assert.equal(disk.has(`${legacyKey}:anon`), true, "a foreign package must be left untouched");
+});
+
+test("incomplete legacy entries are not promoted but complete ones are merged", async () => {
+    const disk = new Map();
+    const first = canvasFixture({ projects: [project("a")], disk });
+    await tick(); await first.flushCanvasSaves();
+    const summaryLike = { ...project("s"), hydrated: false, nodes: [], nodeCount: 3 };
+    disk.set(`${legacyKey}:anon`, JSON.stringify({ state: { ownerUserId: "anon", projects: [project("v"), summaryLike], conflictDrafts: [] }, version: 0 }));
+    const second = canvasFixture({ disk });
+    await tick();
+    assert.ok(disk.has(projectKey("anon", "v")), "a complete legacy board must be merged");
+    assert.equal(disk.has(projectKey("anon", "s")), false, "an incomplete legacy entry must never be written");
+});

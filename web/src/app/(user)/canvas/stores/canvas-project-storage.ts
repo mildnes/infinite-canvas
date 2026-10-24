@@ -34,6 +34,57 @@ export function createCanvasProjectStorage() {
         legacyPending = false;
     };
 
+    // Keeps every complete board; on an id clash the newer `updatedAt` wins.
+    const mergeNewer = (existing: CanvasProject[], incoming: CanvasProject[]): CanvasProject[] => {
+        const byId = new Map(existing.map(item => [item.id, item]));
+        for (const item of incoming) {
+            if (!item || typeof item.id !== "string" || !item.id) continue;
+            if (!isCanvasProjectHydrated(item)) continue;
+            const previous = byId.get(item.id);
+            if (!previous) { byId.set(item.id, item); continue; }
+            if (String(item.updatedAt || "") > String(previous.updatedAt || "")) byId.set(item.id, item);
+        }
+        return Array.from(byId.values());
+    };
+    const sameItems = (left: CanvasProject[], right: CanvasProject[]) =>
+        left.length === right.length && left.every((item, index) => item === right[index]);
+
+    // A rollback to a pre-split build writes the whole package again; merge it instead of dropping it.
+    const mergeLegacy = async (
+        owner: string,
+        loadedProjects: CanvasProject[],
+        loadedDrafts: CanvasProject[],
+        meta: CanvasMeta,
+        prepare: (project: CanvasProject) => CanvasProject,
+    ): Promise<CanvasValue | null> => {
+        const legacy = await localForageStorage.getItem(LEGACY_KEY);
+        if (!current(owner)) return null;
+        const fallback: CanvasValue = { state: { ownerUserId: owner, projects: loadedProjects, conflictDrafts: loadedDrafts }, version: meta.version };
+        let value: CanvasValue | null = null;
+        try { value = legacy ? (JSON.parse(legacy) as CanvasValue) : null; } catch { value = null; }
+        const state = value?.state;
+        if (!state || state.ownerUserId !== owner) {
+            // Never read or delete another account's package, and leave unreadable data on disk.
+            legacyPending = false;
+            return fallback;
+        }
+        const mergedProjects = mergeNewer(loadedProjects, state.projects || []);
+        const mergedDrafts = mergeNewer(loadedDrafts, state.conflictDrafts || []);
+        if (sameItems(mergedProjects, loadedProjects) && sameItems(mergedDrafts, loadedDrafts)) {
+            // Nothing new: the package is a stale duplicate of what the index already holds.
+            try { await removeLegacy(owner); }
+            catch (error) { console.warn("Canvas legacy cleanup deferred", error); }
+            return fallback;
+        }
+        const merged: CanvasValue = { state: { ownerUserId: owner, projects: mergedProjects, conflictDrafts: mergedDrafts }, version: value?.version ?? meta.version };
+        try { await write(merged, prepare); }
+        catch (error) {
+            console.warn("Canvas legacy merge deferred; retained legacy data", error);
+            return fallback;
+        }
+        return current(owner) ? merged : null;
+    };
+
     const write = async (value: CanvasValue, prepare: (project: CanvasProject) => CanvasProject) => {
         const { ownerUserId: owner } = value.state;
         if (!owner || !current(owner)) return;
@@ -108,8 +159,7 @@ export function createCanvasProjectStorage() {
                     projects = remember(loadedProjects); drafts = remember(conflictDrafts); metadata = rawMeta;
                     legacyPending = Boolean(await localForageStorage.getItem(LEGACY_KEY));
                     if (!current(owner)) return null;
-                    try { await removeLegacy(owner); }
-                    catch (error) { console.warn("Canvas legacy cleanup deferred", error); }
+                    if (legacyPending) return mergeLegacy(owner, loadedProjects, conflictDrafts, meta, prepare);
                     return { state: { ownerUserId: owner, projects: loadedProjects, conflictDrafts }, version: meta.version };
                 }
             } catch (error) { readError = error; }
