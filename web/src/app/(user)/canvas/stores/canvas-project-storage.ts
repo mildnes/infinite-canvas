@@ -12,27 +12,43 @@ type CanvasMeta = {
     conflictDraftIds: string[];
     version: number;
     writtenAt?: string;
-    legacyDeletedProjectIds?: string[];
-    legacyDeletedDraftIds?: string[];
+    legacyImportedFingerprint?: string;
 };
 type Snapshot = { project: CanvasProject; updatedAt: string };
 const LEGACY_KEY = "infinite-canvas:canvas_store";
 const metaKey = (owner: string) => `canvas_meta:${owner}`;
 const projectKey = (owner: string, id: string) => `canvas_project:${owner}:${id}`;
 const draftKey = (owner: string, id: string) => `canvas_conflict:${owner}:${id}`;
+const hashText = (text: string): string => {
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < text.length; index += 1) {
+        hash ^= text.charCodeAt(index);
+        hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return `${text.length}:${hash.toString(36)}`;
+};
 
 
 // localforage-storage.ts falls back to window.localStorage when IndexedDB is unavailable.
 // The per-board keys must keep that guarantee, otherwise a quota/private-mode failure would
 // leave the newest edits only in memory until the tab is closed.
-// Read both backends. A successful IndexedDB read is not proof that it is the newest copy:
-// a previous write may have fallen back to localStorage while IndexedDB still contained old data.
 const storedTimestamp = (raw: string | null): string => {
     if (!raw) return "";
     try {
-        const value = JSON.parse(raw) as { updatedAt?: unknown; writtenAt?: unknown };
-        if (typeof value.updatedAt === "string") return value.updatedAt;
-        if (typeof value.writtenAt === "string") return value.writtenAt;
+        const value = JSON.parse(raw) as {
+            updatedAt?: unknown;
+            writtenAt?: unknown;
+            deletedAt?: unknown;
+            state?: { projects?: Array<{ updatedAt?: unknown }>; conflictDrafts?: Array<{ updatedAt?: unknown }> };
+        };
+        const timestamps: string[] = [];
+        for (const candidate of [value.updatedAt, value.writtenAt, value.deletedAt]) {
+            if (typeof candidate === "string") timestamps.push(candidate);
+        }
+        for (const item of [...(value.state?.projects || []), ...(value.state?.conflictDrafts || [])]) {
+            if (typeof item.updatedAt === "string") timestamps.push(item.updatedAt);
+        }
+        return timestamps.sort().pop() || "";
     } catch { /* keep the primary value when neither side is parseable */ }
     return "";
 };
@@ -56,12 +72,11 @@ const readKey = async (key: string): Promise<string | null> => {
 const writeKey = async (key: string, value: string): Promise<void> => {
     try {
         await localforage.setItem(key, value);
-        return;
     } catch (error) {
         if (typeof window === "undefined") throw error;
         window.localStorage.setItem(key, value);
     }
-};
+    };
 const removeKey = async (key: string): Promise<void> => {
     let failure: unknown;
     try {
@@ -70,11 +85,10 @@ const removeKey = async (key: string): Promise<void> => {
         failure = error;
     }
     if (typeof window !== "undefined") {
-        try { window.localStorage.removeItem(key); }
-        catch (error) { failure ||= error; }
+        try { window.localStorage.removeItem(key); } catch (error) { failure ||= error; }
     }
     // If IndexedDB removal failed, do not report success just because the fallback copy was removed.
-    // The caller must retain its pending-cleanup state and retry later.
+    // The caller must retain its retry/error path.
     if (failure) throw failure;
 };
 
@@ -85,11 +99,12 @@ export function createCanvasProjectStorage() {
     let drafts = new Map<string, Snapshot>();
     let metadata: string | null = null;
     let legacyPending = false;
+    let pendingLegacyFingerprint: string | undefined;
     const current = (owner: string) => owner === currentStorageOwnerId();
     const unique = (items: CanvasProject[]) => Array.from(new Map(items.map(project => [project.id, project])).values());
     const remember = (items: CanvasProject[]) => new Map(items.map(project => [project.id, { project, updatedAt: project.updatedAt }]));
     const reset = (owner: string) => {
-        lastOwner = owner; projects = new Map(); drafts = new Map(); metadata = null; legacyPending = false;
+        lastOwner = owner; projects = new Map(); drafts = new Map(); metadata = null; legacyPending = false; pendingLegacyFingerprint = undefined;
     };
     const removeLegacy = async (owner: string) => {
         if (!legacyPending || !current(owner)) return;
@@ -125,6 +140,7 @@ export function createCanvasProjectStorage() {
         const legacy = await readKey(accountStorageKey(LEGACY_KEY, owner)!);
         if (!current(owner)) return null;
         const fallback: CanvasValue = { state: { ownerUserId: owner, projects: loadedProjects, conflictDrafts: loadedDrafts }, version: meta.version };
+        if (!legacy) return fallback;
         let value: CanvasValue | null = null;
         try { value = legacy ? (JSON.parse(legacy) as CanvasValue) : null; } catch { value = null; }
         const state = value?.state;
@@ -133,12 +149,16 @@ export function createCanvasProjectStorage() {
             legacyPending = false;
             return fallback;
         }
-        const deletedProjectIds = new Set(meta.legacyDeletedProjectIds || []);
-        const deletedDraftIds = new Set(meta.legacyDeletedDraftIds || []);
-        const legacyProjects = (state.projects || []).filter(project => !deletedProjectIds.has(project.id));
-        const legacyDrafts = (state.conflictDrafts || []).filter(project => !deletedDraftIds.has(project.id));
-        const mergedProjects = mergeNewer(loadedProjects, legacyProjects);
-        const mergedDrafts = mergeNewer(loadedDrafts, legacyDrafts);
+        const fingerprint = hashText(legacy);
+        let currentMeta: CanvasMeta | null = null;
+        try { currentMeta = metadata ? JSON.parse(metadata) as CanvasMeta : null; } catch { currentMeta = null; }
+        if (currentMeta?.legacyImportedFingerprint === fingerprint) {
+            try { await removeLegacy(owner); }
+            catch (error) { console.warn("Canvas legacy cleanup deferred", error); }
+            return fallback;
+        }
+        const mergedProjects = mergeNewer(loadedProjects, state.projects || []);
+        const mergedDrafts = mergeNewer(loadedDrafts, state.conflictDrafts || []);
         if (sameItems(mergedProjects, loadedProjects) && sameItems(mergedDrafts, loadedDrafts)) {
             // Nothing new: the package is a stale duplicate of what the index already holds.
             try { await removeLegacy(owner); }
@@ -146,6 +166,7 @@ export function createCanvasProjectStorage() {
             return fallback;
         }
         const merged: CanvasValue = { state: { ownerUserId: owner, projects: mergedProjects, conflictDrafts: mergedDrafts }, version: value?.version ?? meta.version };
+        pendingLegacyFingerprint = fingerprint;
         try { await write(merged, prepare); }
         catch (error) {
             console.warn("Canvas legacy merge deferred; retained legacy data", error);
@@ -180,21 +201,9 @@ export function createCanvasProjectStorage() {
         const nextDraftIds = new Set(conflictDrafts.map(project => project.id));
         let previousMeta: CanvasMeta | null = null;
         try { previousMeta = metadata ? JSON.parse(metadata) as CanvasMeta : null; } catch { previousMeta = null; }
-        const legacyDeletedProjectIds = new Set(legacyPending ? previousMeta?.legacyDeletedProjectIds || [] : []);
-        const legacyDeletedDraftIds = new Set(legacyPending ? previousMeta?.legacyDeletedDraftIds || [] : []);
-        if (legacyPending) {
-            for (const id of projects.keys()) if (!nextIds.has(id)) legacyDeletedProjectIds.add(id);
-            for (const id of drafts.keys()) if (!nextDraftIds.has(id)) legacyDeletedDraftIds.add(id);
-        }
-        const previousProjectIds = previousMeta?.projectIds || [];
-        const previousDraftIds = previousMeta?.conflictDraftIds || [];
-        const previousDeletedProjectIds = previousMeta?.legacyDeletedProjectIds || [];
-        const previousDeletedDraftIds = previousMeta?.legacyDeletedDraftIds || [];
         const sameIds = (left: string[], right: string[]) => left.length === right.length && left.every((id, index) => id === right[index]);
-        const structureChanged = !sameIds(previousProjectIds, nextProjects.map(project => project.id))
-            || !sameIds(previousDraftIds, conflictDrafts.map(project => project.id))
-            || !sameIds(previousDeletedProjectIds, Array.from(legacyDeletedProjectIds))
-            || !sameIds(previousDeletedDraftIds, Array.from(legacyDeletedDraftIds));
+        const structureChanged = !sameIds(previousMeta?.projectIds || [], nextProjects.map(project => project.id))
+            || !sameIds(previousMeta?.conflictDraftIds || [], conflictDrafts.map(project => project.id));
         const writtenAt = structureChanged || !previousMeta?.writtenAt ? new Date().toISOString() : previousMeta.writtenAt;
         const nextMeta = JSON.stringify({
             format: 1,
@@ -203,8 +212,7 @@ export function createCanvasProjectStorage() {
             conflictDraftIds: conflictDrafts.map(project => project.id),
             version: value.version ?? 0,
             writtenAt,
-            legacyDeletedProjectIds: Array.from(legacyDeletedProjectIds),
-            legacyDeletedDraftIds: Array.from(legacyDeletedDraftIds),
+            legacyImportedFingerprint: pendingLegacyFingerprint || previousMeta?.legacyImportedFingerprint,
         } satisfies CanvasMeta);
         // Commit the index last: an interrupted migration must still read its complete legacy value.
         if (metadata !== nextMeta) await writeKey(metaKey(owner), nextMeta);
@@ -262,6 +270,7 @@ export function createCanvasProjectStorage() {
             const value = JSON.parse(legacy) as CanvasValue;
             if (value.state.ownerUserId !== owner) return null;
             legacyPending = true;
+            pendingLegacyFingerprint = hashText(legacy);
             try { await write(value, prepare); }
             catch (error) { console.warn("Canvas split migration deferred; retained legacy data", error); }
             return current(owner) ? value : null;
