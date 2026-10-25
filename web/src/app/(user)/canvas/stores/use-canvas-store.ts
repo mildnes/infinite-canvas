@@ -179,7 +179,7 @@ async function flushProjectSave(id: string): Promise<void> {
     const epoch = ownerEpoch;
     const token = useUserStore.getState().token;
     if (!owner || !token || !accountCanvasSyncEnabled || useCanvasStore.getState().ownerUserId !== owner) return;
-    const current = () => epoch === ownerEpoch && currentStorageOwnerId() === owner && useUserStore.getState().token === token;
+    const current = () => epoch === ownerEpoch && currentStorageOwnerId() === owner;
     const request = (async () => {
         try {
             const saved = await saveCanvasProject(token, persistentProject(project), project.serverUpdatedAt ?? "");
@@ -265,7 +265,7 @@ async function reconcileCanvasProjects(
 ) {
     const owner = currentStorageOwnerId();
     const epoch = ownerEpoch;
-    if (!owner || token !== useUserStore.getState().token || useCanvasStore.getState().ownerUserId !== owner) return [];
+    if (!owner || useCanvasStore.getState().ownerUserId !== owner) return [];
     remoteProjects = remoteProjects.map(canonicalProject);
     const remoteById = new Map(remoteProjects.map((project) => [project.id, project]));
     const missingProjects = localProjects.filter(
@@ -281,7 +281,7 @@ async function reconcileCanvasProjects(
             })
         : remoteProjects;
 
-    if (epoch !== ownerEpoch || owner !== currentStorageOwnerId() || token !== useUserStore.getState().token) return [];
+    if (epoch !== ownerEpoch || owner !== currentStorageOwnerId()) return [];
     for (const project of existingLocalProjects) {
         if (!isCanvasProjectHydrated(project)) continue;
         const remote = remoteById.get(project.id);
@@ -291,7 +291,7 @@ async function reconcileCanvasProjects(
             queueProjectSave(project);
         } else if (remote && project.pendingSave) {
             const fullRemote = isCanvasProjectHydrated(remote) ? remote : canonicalProject({ ...await getCanvasProject(token, project.id), hydrated: true });
-            if (epoch !== ownerEpoch || owner !== currentStorageOwnerId() || token !== useUserStore.getState().token) return [];
+            if (epoch !== ownerEpoch || owner !== currentStorageOwnerId()) return [];
             if (!isCanvasProjectHydrated(fullRemote)) throw new Error("画布数据不完整，请重试");
             const index = projects.findIndex(item => item.id === project.id);
             if (index >= 0) projects[index] = fullRemote;
@@ -326,7 +326,7 @@ const canvasStorage: PersistStorage<CanvasStore> = {
         const token = useUserStore.getState().token;
         await localSaveInFlight.catch(() => undefined);
         const localParsed = await projectStorage.read(owner, persistentProject) as StorageValue<CanvasStore> | null;
-        const isCurrent = () => !expired && attempt === hydrationAttempt && epoch === ownerEpoch && owner === currentStorageOwnerId() && token === useUserStore.getState().token;
+        const isCurrent = () => !expired && attempt === hydrationAttempt && epoch === ownerEpoch && owner === currentStorageOwnerId();
         if (!isCurrent()) return null;
         const localProjects = localParsed?.state.ownerUserId === owner ? localParsed.state.projects || [] : [];
         if (localParsed?.state.ownerUserId === owner && localParsed.state.conflictDrafts) useCanvasStore.setState({ conflictDrafts: localParsed.state.conflictDrafts });
@@ -336,9 +336,10 @@ const canvasStorage: PersistStorage<CanvasStore> = {
 
         if (token) {
             try {
+                const requestToken = useUserStore.getState().token || token;
                 const [userConfig, fetchedRemoteProjects] = await Promise.all([
-                    fetchUserConfig(token),
-                    listCanvasProjects(token, true),
+                    fetchUserConfig(requestToken),
+                    listCanvasProjects(requestToken, true),
                 ]);
                 if (!isCurrent()) return null;
                 const remoteProjects = fetchedRemoteProjects.map(project => canonicalProject(listedProject(project)));
@@ -347,7 +348,7 @@ const canvasStorage: PersistStorage<CanvasStore> = {
 
                 if (accountCanvasSyncEnabled && localHasData) {
                     const projects = await reconcileCanvasProjects(
-                        token,
+                        requestToken,
                         remoteProjects,
                         localProjects,
                     );
@@ -517,7 +518,7 @@ export const useCanvasStore = create<CanvasStore>()(
                 if (!owner || !token || get().ownerUserId !== owner) return null;
                 const pending = projectLoadsInFlight.get(id);
                 if (pending) return pending;
-                const current = () => owner === currentStorageOwnerId() && token === useUserStore.getState().token && epoch === ownerEpoch;
+                const current = () => owner === currentStorageOwnerId() && epoch === ownerEpoch;
                 const request = (async () => {
                     const fetched = await getCanvasProject(token, id);
                     if (!current() || deletingProjectIds.has(id)) return null;
@@ -572,14 +573,14 @@ export const useCanvasStore = create<CanvasStore>()(
                         await deleteCanvasProjects(projectIds);
                     } catch (error) {
                         projectIds.forEach((id) => deletingProjectIds.delete(id));
-                        if (owner === currentStorageOwnerId() && token === useUserStore.getState().token) {
+                        if (owner === currentStorageOwnerId()) {
                             recordSaveError(error);
                             get().projects.filter((project) => projectIds.includes(project.id) && project.pendingSave).forEach(queueProjectSave);
                         }
                         throw error;
                     }
                 }
-                if (owner !== currentStorageOwnerId() || token !== useUserStore.getState().token) throw new Error("账号已切换，请重试");
+                if (owner !== currentStorageOwnerId()) throw new Error("账号已切换，请重试");
                 cancelProjectSaves(ids);
                 set((state) => ({
                     projects: state.projects.filter(
@@ -618,25 +619,26 @@ export const useCanvasStore = create<CanvasStore>()(
             syncWithRemote: async (token, syncEnabled) => {
                 let owner: string | null;
                 try { owner = await waitForStorageOwner(); } catch (error) { ownerLoading = false; set({ hydrated: true }); recordSaveError(error); return; }
-                if (!owner || token !== useUserStore.getState().token) return;
+                if (!owner) return;
                 if (owner !== lastOwnerId || get().ownerUserId !== owner) {
                     resetCanvasOwner(owner);
                     ownerHydration = useCanvasStore.persist.rehydrate() as Promise<void>;
                 }
                 if (ownerLoading) await (ownerHydration || useCanvasStore.persist.rehydrate());
-                if (owner !== currentStorageOwnerId() || token !== useUserStore.getState().token) return;
+                if (owner !== currentStorageOwnerId()) return;
                 const epoch = ownerEpoch;
                 accountCanvasSyncEnabled = syncEnabled;
                 if (!syncEnabled) return;
                 const localProjects = get().projects;
-                const remoteProjects = await listCanvasProjects(token, true).catch((error) => { if (owner === currentStorageOwnerId() && token === useUserStore.getState().token) { hydrationFailed = true; recordSaveError(error); } return null; });
-                if (!remoteProjects || epoch !== ownerEpoch || owner !== currentStorageOwnerId() || token !== useUserStore.getState().token) return;
+                const requestToken = useUserStore.getState().token || token;
+                const remoteProjects = await listCanvasProjects(requestToken, true).catch((error) => { if (owner === currentStorageOwnerId()) { hydrationFailed = true; recordSaveError(error); } return null; });
+                if (!remoteProjects || epoch !== ownerEpoch || owner !== currentStorageOwnerId()) return;
                 const projects = await reconcileCanvasProjects(
-                    token,
+                    requestToken,
                     remoteProjects.map(listedProject),
                     localProjects,
                 );
-                if (epoch !== ownerEpoch || owner !== currentStorageOwnerId() || token !== useUserStore.getState().token) return;
+                if (epoch !== ownerEpoch || owner !== currentStorageOwnerId()) return;
                 if (saveTimer) {
                     clearTimeout(saveTimer);
                     saveTimer = null;
@@ -672,7 +674,8 @@ export const useCanvasStore = create<CanvasStore>()(
                 await flushCanvasSaves();
             },
             importAccountProjects: async (projects, expectedOwner, expectedToken) => {
-                const current = () => expectedOwner === currentStorageOwnerId() && get().ownerUserId === expectedOwner && useUserStore.getState().token === expectedToken;
+                void expectedToken;
+                const current = () => expectedOwner === currentStorageOwnerId() && get().ownerUserId === expectedOwner;
                 if (!current()) throw new Error("账号已切换，导入已暂停");
                 if (ownerLoading) await (ownerHydration || useCanvasStore.persist.rehydrate());
                 if (!current() || ownerLoading) throw new Error("账号信息尚未就绪，导入可重试");

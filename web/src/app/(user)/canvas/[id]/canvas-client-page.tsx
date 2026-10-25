@@ -151,6 +151,12 @@ const IMAGE_PROMPT_REVERSE_PRESET = `请根据参考图片反推一段适合用�
 1. 只输出提示词正文，不要解释。
 2. 覆盖主体、构图、风格、光线、色彩、材质、镜头和氛围。
 3. 尽量写成可直接用于生图模型的完整提示词。`;
+const CANVAS_SAVE_STALL_MS = 10_000;
+const CANVAS_SAVE_STALL_COOLDOWN_MS = 30_000;
+
+function currentCanvasOwnerId() {
+    return useUserStore.getState().user?.id || "anonymous";
+}
 
 function formatPreviewTime(value: number) {
     if (!Number.isFinite(value)) return "0:00";
@@ -535,7 +541,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         nodeTaskRunsRef.current.forEach((run) => run.controller.abort());
         nodeTaskRunsRef.current.clear();
         taskPollingStateRef.current.clear();
-    }, [currentUserToken, projectId]);
+    }, [currentAccountId, projectId]);
     const reportNodeTaskPollError = useCallback((node: CanvasNodeData, run: TaskRun, error: unknown) => {
         if (!nodeRunActive(node.id, run) || run.stopping) return;
         const outcome = recordCanvasTaskPollError(run.taskId || canvasRecoverableTaskId(node), error, taskPollingStateRef.current.get(node.id));
@@ -555,8 +561,14 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const selectedNodeIdsRef = useRef(selectedNodeIds);
     const viewportRef = useRef(viewport);
     const scaleRef = useRef(viewport.k);
-    const loadedProjectRef = useRef<{ id: string; token: string } | null>(null);
+    const loadedProjectRef = useRef<{ id: string; ownerId: string } | null>(null);
     const restoringProjectRef = useRef(false);
+    const restoreGenerationRef = useRef(0);
+    const previousTokenRef = useRef(currentUserToken);
+    const lastObservedCanvasSignatureRef = useRef<string | null>(null);
+    const lastCanvasChangeAtRef = useRef(Date.now());
+    const lastSaveAttemptAtRef = useRef(Date.now());
+    const lastSaveRecoveryAtRef = useRef(0);
     const latestCanvasStateRef = useRef({ connections, chatSessions, activeChatId, agentConfig, backgroundMode, showImageInfo, showConnections, snapToGrid, sidePanel, agentPanel });
     const persistCurrentCanvasRef = useRef<(latestNodes?: CanvasNodeData[]) => void>(() => {});
     const signatureProjectRef = useRef<string | null>(null);
@@ -568,9 +580,14 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     useLayoutEffect(() => {
         latestCanvasStateRef.current = { connections, chatSessions, activeChatId, agentConfig, backgroundMode, showImageInfo, showConnections, snapToGrid, sidePanel, agentPanel };
         persistCurrentCanvasRef.current = (latestNodes = nodesRef.current) => {
-            if (!projectLoaded || restoringProjectRef.current || loadedProjectRef.current?.id !== projectId || loadedProjectRef.current.token !== useUserStore.getState().token) return;
+            if (!projectLoaded || restoringProjectRef.current || loadedProjectRef.current?.id !== projectId) return;
+            if (loadedProjectRef.current.ownerId !== currentCanvasOwnerId()) {
+                console.warn("[canvas-save-skipped]", { reason: "account-changed", projectId });
+                return;
+            }
             lastPersistSignatureRef.current = canvasPersistSignature({ ...latestCanvasStateRef.current, nodes: latestNodes });
             signatureProjectRef.current = projectId;
+            lastSaveAttemptAtRef.current = Date.now();
             updateProject(projectId, { ...latestCanvasStateRef.current, nodes: latestNodes, viewport: viewportRef.current });
             void flushCanvasSaves().catch((error) => message.error(error instanceof Error ? error.message : "画布保存失败，请重试"));
         };
@@ -659,6 +676,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
     useEffect(() => {
         if (!hydrated) return;
+        const restoreGeneration = ++restoreGenerationRef.current;
         restoringProjectRef.current = true;
         setProjectLoaded(false);
         setProjectLoadError(null);
@@ -666,84 +684,106 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         setReferencePickerNodeId(null);
         consumedAgentRequestProjectRef.current = null;
         let disposed = false;
-        const ownerToken = currentUserToken;
-        const isCurrentRestore = () => !disposed && activeProjectIdRef.current === projectId && useUserStore.getState().token === ownerToken;
+        const ownerId = currentAccountId;
+        const isCurrentRestore = () =>
+            !disposed
+            && restoreGenerationRef.current === restoreGeneration
+            && activeProjectIdRef.current === projectId
+            && currentCanvasOwnerId() === ownerId;
         const restore = async () => {
-            const project = await loadProject(projectId);
-            if (!isCurrentRestore()) return;
-            if (!project) { router.replace("/canvas"); return; }
-            // Compare repaired/restored state against the actual saved project, not against
-            // the repaired snapshot itself, so a recovered result is saved immediately.
-            signatureProjectRef.current = projectId;
-            lastPersistSignatureRef.current = canvasPersistSignature(project);
-            let restoredNodes = resetInterruptedGeneration(project.nodes);
-            let restoredSessions = project.chatSessions || [];
             try {
-                const recovered = await recoverPersistedCanvasImageTasks(restoredNodes);
+                const project = await loadProject(projectId);
                 if (!isCurrentRestore()) return;
-                restoredNodes = recovered.nodes;
-                const repaired = await repairCanvasProjectMedia(restoredNodes, restoredSessions, { allowUpload: true });
+                if (!project) { router.replace("/canvas"); return; }
+                // Compare repaired/restored state against the actual saved project, not against
+                // the repaired snapshot itself, so a recovered result is saved immediately.
+                signatureProjectRef.current = projectId;
+                lastPersistSignatureRef.current = canvasPersistSignature(project);
+                lastObservedCanvasSignatureRef.current = lastPersistSignatureRef.current;
+                let restoredNodes = resetInterruptedGeneration(project.nodes);
+                let restoredSessions = project.chatSessions || [];
+                try {
+                    const recovered = await recoverPersistedCanvasImageTasks(restoredNodes);
+                    if (!isCurrentRestore()) return;
+                    restoredNodes = recovered.nodes;
+                    const repaired = await repairCanvasProjectMedia(restoredNodes, restoredSessions, { allowUpload: true });
+                    if (!isCurrentRestore()) return;
+                    restoredNodes = repaired.nodes;
+                    restoredSessions = repaired.sessions;
+                    reportCanvasLocalOnlyMedia(restoredNodes, ownerId);
+                    if (recovered.count > 0) message.success(`已从云端任务记录恢复 ${recovered.count} 张图片`);
+                    if (repaired.uploaded > 0) message.success(`已自动上传 ${repaired.uploaded} 个本地媒体到云存储`);
+                } catch {
+                    restoredNodes = await hydrateCanvasImages(restoredNodes);
+                }
                 if (!isCurrentRestore()) return;
-                restoredNodes = repaired.nodes;
-                restoredSessions = repaired.sessions;
-                reportCanvasLocalOnlyMedia(restoredNodes, useUserStore.getState().user?.id || "anonymous");
-                if (recovered.count > 0) message.success(`已从云端任务记录恢复 ${recovered.count} 张图片`);
-                if (repaired.uploaded > 0) message.success(`已自动上传 ${repaired.uploaded} 个本地媒体到云存储`);
-            } catch {
-                restoredNodes = await hydrateCanvasImages(restoredNodes);
+                restoredSessions = syncAssistantReferences(restoredSessions, restoredNodes, true);
+                setNodes(restoredNodes);
+                setConnections(project.connections);
+                setChatSessions(restoredSessions);
+                setActiveChatId(project.activeChatId || null);
+                setAgentConfig(project.agentConfig || null);
+                setBackgroundMode(project.backgroundMode);
+                setShowImageInfo(project.showImageInfo || false);
+                setShowConnections(project.showConnections ?? true);
+                setSnapToGrid(project.snapToGrid ?? false);
+                setViewport(project.viewport);
+                setSidePanel(project.sidePanel || DEFAULT_CANVAS_SIDE_PANEL);
+                const restoredAgentPanel = project.agentPanel || DEFAULT_CANVAS_AGENT_PANEL;
+                setAgentPanel(restoredAgentPanel);
+                setAssistantMounted(restoredAgentPanel.open);
+                historyRef.current = { past: [], future: [] };
+                if (historyCommitTimerRef.current) {
+                    clearTimeout(historyCommitTimerRef.current);
+                    historyCommitTimerRef.current = null;
+                }
+                lastHistoryRef.current = {
+                    nodes: restoredNodes,
+                    connections: project.connections,
+                    backgroundMode: project.backgroundMode,
+                    showImageInfo: project.showImageInfo || false,
+                    showConnections: project.showConnections ?? true,
+                };
+                setHistoryState({ canUndo: false, canRedo: false });
+                loadedProjectRef.current = { id: projectId, ownerId };
+                setProjectLoaded(true);
+            } catch (error) {
+                if (isCurrentRestore()) setProjectLoadError(error instanceof Error ? error.message : "画布加载失败，请重试");
+            } finally {
+                if (restoreGenerationRef.current === restoreGeneration) restoringProjectRef.current = false;
             }
-            if (!isCurrentRestore()) return;
-            restoredSessions = syncAssistantReferences(restoredSessions, restoredNodes, true);
-            setNodes(restoredNodes);
-            setConnections(project.connections);
-            setChatSessions(restoredSessions);
-            setActiveChatId(project.activeChatId || null);
-            setAgentConfig(project.agentConfig || null);
-            setBackgroundMode(project.backgroundMode);
-            setShowImageInfo(project.showImageInfo || false);
-            setShowConnections(project.showConnections ?? true);
-            setSnapToGrid(project.snapToGrid ?? false);
-            setViewport(project.viewport);
-            setSidePanel(project.sidePanel || DEFAULT_CANVAS_SIDE_PANEL);
-            const restoredAgentPanel = project.agentPanel || DEFAULT_CANVAS_AGENT_PANEL;
-            setAgentPanel(restoredAgentPanel);
-            setAssistantMounted(restoredAgentPanel.open);
-            historyRef.current = { past: [], future: [] };
-            if (historyCommitTimerRef.current) {
-                clearTimeout(historyCommitTimerRef.current);
-                historyCommitTimerRef.current = null;
-            }
-            lastHistoryRef.current = {
-                nodes: restoredNodes,
-                connections: project.connections,
-                backgroundMode: project.backgroundMode,
-                showImageInfo: project.showImageInfo || false,
-                showConnections: project.showConnections ?? true,
-            };
-            setHistoryState({ canUndo: false, canRedo: false });
-            loadedProjectRef.current = { id: projectId, token: ownerToken };
-            restoringProjectRef.current = false;
-            setProjectLoaded(true);
         };
-        void restore().catch((error) => {
-            if (isCurrentRestore()) setProjectLoadError(error instanceof Error ? error.message : "画布加载失败，请重试");
-        });
+        void restore();
         return () => {
             disposed = true;
         };
-    }, [currentUserToken, hydrated, loadProject, message, projectId, projectLoadAttempt, restoreVersion, router]);
+    }, [currentAccountId, hydrated, loadProject, message, projectId, projectLoadAttempt, restoreVersion, router]);
+
+    useEffect(() => {
+        const previousToken = previousTokenRef.current;
+        if (previousToken === currentUserToken) return;
+        previousTokenRef.current = currentUserToken;
+        if (!projectLoaded || restoringProjectRef.current || !currentUserToken) return;
+        if (loadedProjectRef.current?.id !== projectId || loadedProjectRef.current.ownerId !== currentCanvasOwnerId()) return;
+        // JWT 轮换不重新加载画板；先把当前内存快照落到本地，再用新 token 重试待保存项目。
+        persistCurrentCanvasRef.current();
+        void retrySaves().catch((error) => {
+            console.warn("[canvas-save-retry]", error);
+            message.warning("登录状态已刷新，画布正在稍后重试保存");
+        });
+    }, [currentAccountId, currentUserToken, message, projectId, projectLoaded, retrySaves]);
 
     useEffect(() => {
         if (!projectLoaded || !userReady || !currentAccountId || currentAccountId === "anonymous") return;
-        if (loadedProjectRef.current?.id !== projectId || loadedProjectRef.current.token !== currentUserToken) return;
+        if (loadedProjectRef.current?.id !== projectId || loadedProjectRef.current.ownerId !== currentCanvasOwnerId()) return;
         const targets = nodesRef.current.filter((node) => node.metadata?.mediaStatus === "local-only");
         if (!targets.length) return;
         const ownerToken = currentUserToken;
         const ownerUserId = currentAccountId;
         const isCurrentUserRepair = () => activeProjectIdRef.current === projectId
             && loadedProjectRef.current?.id === projectId
-            && loadedProjectRef.current.token === ownerToken
-            && useUserStore.getState().token === ownerToken
+            && loadedProjectRef.current.ownerId === ownerUserId
+            && currentCanvasOwnerId() === ownerUserId
             && useUserStore.getState().user?.id === ownerUserId;
         const originalNodes = nodesRef.current;
         const sessions = latestCanvasStateRef.current.chatSessions;
@@ -813,8 +853,16 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     }, [backgroundMode, cleanupCanvasFiles, connections, createHistoryEntry, nodes, projectLoaded, showConnections, showImageInfo]);
 
     useEffect(() => {
-        if (!projectLoaded || historyPausedRef.current || restoringProjectRef.current || loadedProjectRef.current?.id !== projectId || loadedProjectRef.current.token !== useUserStore.getState().token) return;
+        if (!projectLoaded || historyPausedRef.current || restoringProjectRef.current || loadedProjectRef.current?.id !== projectId) return;
+        if (loadedProjectRef.current.ownerId !== currentCanvasOwnerId()) {
+            console.warn("[canvas-save-skipped]", { reason: "account-changed", projectId });
+            return;
+        }
         const signature = canvasPersistSignature({ nodes, connections, chatSessions, activeChatId, agentConfig, backgroundMode, showImageInfo, showConnections, snapToGrid });
+        if (lastObservedCanvasSignatureRef.current !== signature) {
+            lastObservedCanvasSignatureRef.current = signature;
+            lastCanvasChangeAtRef.current = Date.now();
+        }
         // Generation polls touch node metadata every few seconds. Only persist when something that
         // survives a reload actually changed, otherwise every poll uploads the whole board.
         if (signatureProjectRef.current !== projectId) {
@@ -824,8 +872,37 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         }
         if (signature === lastPersistSignatureRef.current) return;
         lastPersistSignatureRef.current = signature;
+        lastSaveAttemptAtRef.current = Date.now();
         updateProject(projectId, { nodes, connections, chatSessions, activeChatId, agentConfig, backgroundMode, showImageInfo, showConnections, snapToGrid });
     }, [activeChatId, agentConfig, backgroundMode, chatSessions, connections, nodes, projectId, projectLoaded, showConnections, showImageInfo, snapToGrid, updateProject]);
+
+    useEffect(() => {
+        if (!projectLoaded) return;
+        const timer = window.setInterval(() => {
+            if (restoringProjectRef.current || loadedProjectRef.current?.id !== projectId) return;
+            if (loadedProjectRef.current.ownerId !== currentCanvasOwnerId()) return;
+            const signature = canvasPersistSignature({
+                ...latestCanvasStateRef.current,
+                nodes: nodesRef.current,
+            });
+            const now = Date.now();
+            if (lastObservedCanvasSignatureRef.current !== signature) {
+                lastObservedCanvasSignatureRef.current = signature;
+                lastCanvasChangeAtRef.current = now;
+            }
+            const project = useCanvasStore.getState().projects.find((item) => item.id === projectId);
+            const hasUnsavedChanges = signature !== lastPersistSignatureRef.current || project?.pendingSave === true;
+            if (!hasUnsavedChanges) return;
+            const stalledSince = Math.min(lastCanvasChangeAtRef.current, lastSaveAttemptAtRef.current);
+            if (now - stalledSince < CANVAS_SAVE_STALL_MS || now - lastSaveRecoveryAtRef.current < CANVAS_SAVE_STALL_COOLDOWN_MS) return;
+            lastSaveRecoveryAtRef.current = now;
+            console.warn("[canvas-save-stall]", { projectId, ownerId: currentCanvasOwnerId() });
+            message.warning("检测到画布保存停滞，正在重新尝试保存");
+            persistCurrentCanvasRef.current();
+            void retrySaves().catch((error) => console.warn("[canvas-save-retry]", error));
+        }, 2_000);
+        return () => window.clearInterval(timer);
+    }, [message, projectId, projectLoaded, retrySaves]);
 
     useEffect(() => {
         if (!projectLoaded) return;
