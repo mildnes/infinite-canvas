@@ -257,16 +257,43 @@ test("renaming a complete board clears stale summary counters so the save is not
     assert.equal(JSON.parse(f.disk.get(projectKey("anon", "a"))).title, "renamed", "the rename must reach local storage");
 });
 
-test("per-board keys fall back to window.localStorage when IndexedDB fails", async () => {
-    const f = canvasFixture({ projects: [project("a")] });
-    await tick(); f.flushCanvasSaves?.();
-    f.clearOperations();
-    // Simulate IndexedDB being unavailable (private mode / quota) for every per-board write.
-    f.setFailure(key => String(key).startsWith("canvas_project:"));
-    f.useCanvasStore.getState().updateProject("a", { viewport: { x: 7, y: 8, k: 1 } });
-    await tick(); await f.flushCanvasSaves();
-    f.setFailure(undefined); f.setLocalStorageFailure(undefined);
-    const stored = f.disk.get(projectKey("anon", "a"));
-    assert.ok(stored, "the newest edit must still be persisted through the fallback");
-    assert.equal(JSON.parse(stored).viewport.x, 7);
+test("a newer localStorage payload wins when IndexedDB still has the old project", async () => {
+    const idbDisk = new Map();
+    const localDisk = new Map();
+    const oldProject = { ...project("a"), title: "old", updatedAt: "2026-01-01T00:00:00Z" };
+    const latestProject = { ...project("a"), title: "latest", updatedAt: "2027-01-01T00:00:00Z" };
+    idbDisk.set(metaKey("anon"), JSON.stringify({ format: 1, ownerUserId: "anon", projectIds: ["a"], conflictDraftIds: [], version: 0, writtenAt: "2026-01-01T00:00:00Z" }));
+    idbDisk.set(projectKey("anon", "a"), JSON.stringify(oldProject));
+    localDisk.set(projectKey("anon", "a"), JSON.stringify(latestProject));
+    const f = canvasFixture({ idbDisk, localDisk });
+    await tick();
+    assert.equal(f.useCanvasStore.getState().projects[0].title, "latest");
+});
+
+test("a migration remains readable when project data falls back to localStorage", async () => {
+    const idbDisk = new Map();
+    const localDisk = new Map();
+    idbDisk.set(`${legacyKey}:anon`, JSON.stringify({ state: { ownerUserId: "anon", projects: [project("a")], conflictDrafts: [] }, version: 0 }));
+    const f = canvasFixture({ idbDisk, localDisk });
+    f.setFailure(key => key === projectKey("anon", "a"));
+    await tick();
+    assert.equal(idbDisk.has(`${legacyKey}:anon`), false, "the legacy package may be removed after the split is indexed");
+    assert.ok(localDisk.has(projectKey("anon", "a")), "the project must be in the fallback store");
+    const refreshed = canvasFixture({ idbDisk, localDisk });
+    await tick();
+    assert.equal(Array.from(refreshed.useCanvasStore.getState().projects, item => item.id).join(), "a");
+});
+
+test("a failed legacy deletion does not resurrect a deleted board on refresh", async () => {
+    const idbDisk = new Map();
+    const localDisk = new Map();
+    idbDisk.set(`${legacyKey}:anon`, JSON.stringify({ state: { ownerUserId: "anon", projects: [project("a")], conflictDrafts: [] }, version: 0 }));
+    const f = canvasFixture({ idbDisk, localDisk });
+    f.setRemoveFailure(key => key === `${legacyKey}:anon`);
+    await tick();
+    await assert.rejects(f.useCanvasStore.getState().deleteProjects(["a"]), /injected disk failure/);
+    assert.equal(idbDisk.has(`${legacyKey}:anon`), true, "the failed legacy delete must remain observable");
+    const refreshed = canvasFixture({ idbDisk, localDisk });
+    await tick();
+    assert.equal(refreshed.useCanvasStore.getState().projects.length, 0, "a failed cleanup must not resurrect the deleted board");
 });

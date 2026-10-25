@@ -15,32 +15,36 @@ export const project = (id, size = 0) => ({
     chatSessions: [{ id: `${id}-chat`, messages: [] }], activeChatId: `${id}-chat`,
 });
 
-export function canvasFixture({ owner = "anon", projects = [], drafts = [], disk = new Map(), remote = [], syncEnabled = false, baseline = process.env.CANVAS_STORE_BASELINE } = {}) {
+export function canvasFixture({ owner = "anon", projects = [], drafts = [], disk = new Map(), idbDisk = disk, localDisk = disk, remote = [], syncEnabled = false, baseline = process.env.CANVAS_STORE_BASELINE } = {}) {
     const user = require("zustand").create(() => ({ token: owner === "anon" ? "" : `${owner}-token`, user: owner === "anon" ? null : { id: owner }, isReady: true }));
     user.persist = { hasHydrated: () => true };
     const writes = [], removes = [], reads = [], requests = [], errors = [], timers = new Map(), modules = {};
-    let failure, time = 0, sequence = 0, detailGate, writeGate, localFailure;
-    if (projects.length || drafts.length) disk.set(`${legacyKey}:${owner}`, JSON.stringify({ state: { ownerUserId: owner, projects, conflictDrafts: drafts }, version: 0 }));
+    let failure, removeFailure, time = 0, sequence = 0, detailGate, writeGate, localFailure, localRemoveFailure;
+    if (projects.length || drafts.length) idbDisk.set(`${legacyKey}:${owner}`, JSON.stringify({ state: { ownerUserId: owner, projects, conflictDrafts: drafts }, version: 0 }));
     const forage = {
         config() {},
-        async getItem(key) { reads.push(key); return disk.get(key) ?? null; },
+        async getItem(key) { reads.push(key); return idbDisk.get(key) ?? null; },
         async setItem(key, value) {
             writes.push({ key, value, chars: typeof value === "string" ? value.length : JSON.stringify(value).length });
             if (failure?.(key, value)) throw new Error("injected disk failure");
             if (writeGate) await writeGate(key, value);
-            disk.set(key, value);
+            idbDisk.set(key, value);
             return value;
         },
-        async removeItem(key) { removes.push(key); disk.delete(key); },
+        async removeItem(key) {
+            removes.push(key);
+            if (removeFailure?.(key)) throw new Error("injected disk failure");
+            idbDisk.delete(key);
+        },
     };
     const setTimeout = (fn, delay = 0) => { timers.set(++sequence, { at: time + delay, fn }); return sequence; };
     const clearTimeout = id => timers.delete(id);
     const context = {
         Promise, console: { ...console, error() {}, warn() {} }, setTimeout, clearTimeout,
         window: { addEventListener() {}, localStorage: {
-            getItem: key => disk.get(key) ?? null,
-            setItem: (key, value) => { if (localFailure?.(key)) throw new Error("injected disk failure"); disk.set(key, value); },
-            removeItem: key => { if (localFailure?.(key)) throw new Error("injected disk failure"); disk.delete(key); },
+            getItem: key => localDisk.get(key) ?? null,
+            setItem: (key, value) => { if (localFailure?.(key)) throw new Error("injected disk failure"); localDisk.set(key, value); },
+            removeItem: key => { if (localRemoveFailure?.(key)) throw new Error("injected disk failure"); localDisk.delete(key); },
         } },
     };
     const api = {
@@ -85,9 +89,11 @@ export function canvasFixture({ owner = "anon", projects = [], drafts = [], disk
     if (existsSync(new URL(helper, import.meta.url))) modules["./canvas-project-storage"] = load(helper);
     const exported = load("../../app/(user)/canvas/stores/use-canvas-store.ts");
     return {
-        ...exported, user, disk, writes, removes, reads, requests, errors, storage: modules["@/lib/localforage-storage"],
+        ...exported, user, disk, idbDisk, localDisk, writes, removes, reads, requests, errors, storage: modules["@/lib/localforage-storage"],
         setFailure: fn => { failure = fn; },
+        setRemoveFailure: fn => { removeFailure = fn; },
         setLocalStorageFailure: fn => { localFailure = fn; },
+        setLocalStorageRemoveFailure: fn => { localRemoveFailure = fn; },
         setWriteGate: fn => { writeGate = fn; },
         detailGate: promise => { detailGate = promise; },
         switchOwner: id => user.setState({ token: id === "anon" ? "" : `${id}-token`, user: id === "anon" ? null : { id }, isReady: true }),

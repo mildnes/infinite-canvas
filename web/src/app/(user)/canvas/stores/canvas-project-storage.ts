@@ -1,11 +1,20 @@
 import localforage from "localforage";
-import { accountStorageKey, currentStorageOwnerId, localForageStorage } from "@/lib/localforage-storage";
+import { accountStorageKey, currentStorageOwnerId } from "@/lib/localforage-storage";
 import type { CanvasProject } from "./use-canvas-store";
 import { isCanvasProjectHydrated } from "../utils/canvas-project-hydration";
 
 type CanvasState = { ownerUserId: string | null; projects: CanvasProject[]; conflictDrafts?: CanvasProject[] };
 type CanvasValue = { state: CanvasState; version?: number };
-type CanvasMeta = { format: 1; ownerUserId: string; projectIds: string[]; conflictDraftIds: string[]; version: number };
+type CanvasMeta = {
+    format: 1;
+    ownerUserId: string;
+    projectIds: string[];
+    conflictDraftIds: string[];
+    version: number;
+    writtenAt?: string;
+    legacyDeletedProjectIds?: string[];
+    legacyDeletedDraftIds?: string[];
+};
 type Snapshot = { project: CanvasProject; updatedAt: string };
 const LEGACY_KEY = "infinite-canvas:canvas_store";
 const metaKey = (owner: string) => `canvas_meta:${owner}`;
@@ -16,13 +25,33 @@ const draftKey = (owner: string, id: string) => `canvas_conflict:${owner}:${id}`
 // localforage-storage.ts falls back to window.localStorage when IndexedDB is unavailable.
 // The per-board keys must keep that guarantee, otherwise a quota/private-mode failure would
 // leave the newest edits only in memory until the tab is closed.
-const readKey = async (key: string): Promise<string | null> => {
+// Read both backends. A successful IndexedDB read is not proof that it is the newest copy:
+// a previous write may have fallen back to localStorage while IndexedDB still contained old data.
+const storedTimestamp = (raw: string | null): string => {
+    if (!raw) return "";
     try {
-        return (await localforage.getItem<string>(key)) ?? null;
-    } catch {
-        if (typeof window === "undefined") return null;
-        return window.localStorage.getItem(key);
+        const value = JSON.parse(raw) as { updatedAt?: unknown; writtenAt?: unknown };
+        if (typeof value.updatedAt === "string") return value.updatedAt;
+        if (typeof value.writtenAt === "string") return value.writtenAt;
+    } catch { /* keep the primary value when neither side is parseable */ }
+    return "";
+};
+const chooseStoredValue = (indexedDbValue: string | null, localStorageValue: string | null): string | null => {
+    if (!indexedDbValue) return localStorageValue;
+    if (!localStorageValue) return indexedDbValue;
+    const indexedTimestamp = storedTimestamp(indexedDbValue);
+    const localTimestamp = storedTimestamp(localStorageValue);
+    if (localTimestamp && (!indexedTimestamp || localTimestamp > indexedTimestamp)) return localStorageValue;
+    return indexedDbValue;
+};
+const readKey = async (key: string): Promise<string | null> => {
+    let indexedDbValue: string | null = null;
+    let localStorageValue: string | null = null;
+    try { indexedDbValue = (await localforage.getItem<string>(key)) ?? null; } catch { /* fallback below */ }
+    if (typeof window !== "undefined") {
+        try { localStorageValue = window.localStorage.getItem(key); } catch { /* private mode may deny access */ }
     }
+    return chooseStoredValue(indexedDbValue, localStorageValue);
 };
 const writeKey = async (key: string, value: string): Promise<void> => {
     try {
@@ -34,12 +63,19 @@ const writeKey = async (key: string, value: string): Promise<void> => {
     }
 };
 const removeKey = async (key: string): Promise<void> => {
+    let failure: unknown;
     try {
         await localforage.removeItem(key);
     } catch (error) {
-        if (typeof window === "undefined") throw error;
+        failure = error;
     }
-    if (typeof window !== "undefined") window.localStorage.removeItem(key);
+    if (typeof window !== "undefined") {
+        try { window.localStorage.removeItem(key); }
+        catch (error) { failure ||= error; }
+    }
+    // If IndexedDB removal failed, do not report success just because the fallback copy was removed.
+    // The caller must retain its pending-cleanup state and retry later.
+    if (failure) throw failure;
 };
 
 // All calls are serialized by the canvas store's localSaveInFlight queue.
@@ -60,7 +96,6 @@ export function createCanvasProjectStorage() {
         const key = accountStorageKey(LEGACY_KEY, owner)!;
         await removeKey(key);
         if (!current(owner)) return;
-        if (typeof window !== "undefined") window.localStorage.removeItem(key);
         legacyPending = false;
     };
 
@@ -87,7 +122,7 @@ export function createCanvasProjectStorage() {
         meta: CanvasMeta,
         prepare: (project: CanvasProject) => CanvasProject,
     ): Promise<CanvasValue | null> => {
-        const legacy = await localForageStorage.getItem(LEGACY_KEY);
+        const legacy = await readKey(accountStorageKey(LEGACY_KEY, owner)!);
         if (!current(owner)) return null;
         const fallback: CanvasValue = { state: { ownerUserId: owner, projects: loadedProjects, conflictDrafts: loadedDrafts }, version: meta.version };
         let value: CanvasValue | null = null;
@@ -98,8 +133,12 @@ export function createCanvasProjectStorage() {
             legacyPending = false;
             return fallback;
         }
-        const mergedProjects = mergeNewer(loadedProjects, state.projects || []);
-        const mergedDrafts = mergeNewer(loadedDrafts, state.conflictDrafts || []);
+        const deletedProjectIds = new Set(meta.legacyDeletedProjectIds || []);
+        const deletedDraftIds = new Set(meta.legacyDeletedDraftIds || []);
+        const legacyProjects = (state.projects || []).filter(project => !deletedProjectIds.has(project.id));
+        const legacyDrafts = (state.conflictDrafts || []).filter(project => !deletedDraftIds.has(project.id));
+        const mergedProjects = mergeNewer(loadedProjects, legacyProjects);
+        const mergedDrafts = mergeNewer(loadedDrafts, legacyDrafts);
         if (sameItems(mergedProjects, loadedProjects) && sameItems(mergedDrafts, loadedDrafts)) {
             // Nothing new: the package is a stale duplicate of what the index already holds.
             try { await removeLegacy(owner); }
@@ -137,15 +176,38 @@ export function createCanvasProjectStorage() {
         await writeItems(nextProjects, projects, projectKey);
         await writeItems(conflictDrafts, drafts, draftKey);
         if (!current(owner)) return;
+        const nextIds = new Set(nextProjects.map(project => project.id));
+        const nextDraftIds = new Set(conflictDrafts.map(project => project.id));
+        let previousMeta: CanvasMeta | null = null;
+        try { previousMeta = metadata ? JSON.parse(metadata) as CanvasMeta : null; } catch { previousMeta = null; }
+        const legacyDeletedProjectIds = new Set(legacyPending ? previousMeta?.legacyDeletedProjectIds || [] : []);
+        const legacyDeletedDraftIds = new Set(legacyPending ? previousMeta?.legacyDeletedDraftIds || [] : []);
+        if (legacyPending) {
+            for (const id of projects.keys()) if (!nextIds.has(id)) legacyDeletedProjectIds.add(id);
+            for (const id of drafts.keys()) if (!nextDraftIds.has(id)) legacyDeletedDraftIds.add(id);
+        }
+        const previousProjectIds = previousMeta?.projectIds || [];
+        const previousDraftIds = previousMeta?.conflictDraftIds || [];
+        const previousDeletedProjectIds = previousMeta?.legacyDeletedProjectIds || [];
+        const previousDeletedDraftIds = previousMeta?.legacyDeletedDraftIds || [];
+        const sameIds = (left: string[], right: string[]) => left.length === right.length && left.every((id, index) => id === right[index]);
+        const structureChanged = !sameIds(previousProjectIds, nextProjects.map(project => project.id))
+            || !sameIds(previousDraftIds, conflictDrafts.map(project => project.id))
+            || !sameIds(previousDeletedProjectIds, Array.from(legacyDeletedProjectIds))
+            || !sameIds(previousDeletedDraftIds, Array.from(legacyDeletedDraftIds));
+        const writtenAt = structureChanged || !previousMeta?.writtenAt ? new Date().toISOString() : previousMeta.writtenAt;
         const nextMeta = JSON.stringify({
-            format: 1, ownerUserId: owner, projectIds: nextProjects.map(project => project.id),
-            conflictDraftIds: conflictDrafts.map(project => project.id), version: value.version ?? 0,
+            format: 1,
+            ownerUserId: owner,
+            projectIds: nextProjects.map(project => project.id),
+            conflictDraftIds: conflictDrafts.map(project => project.id),
+            version: value.version ?? 0,
+            writtenAt,
+            legacyDeletedProjectIds: Array.from(legacyDeletedProjectIds),
+            legacyDeletedDraftIds: Array.from(legacyDeletedDraftIds),
         } satisfies CanvasMeta);
         // Commit the index last: an interrupted migration must still read its complete legacy value.
         if (metadata !== nextMeta) await writeKey(metaKey(owner), nextMeta);
-        if (!current(owner)) return;
-        const nextIds = new Set(nextProjects.map(project => project.id));
-        const nextDraftIds = new Set(conflictDrafts.map(project => project.id));
         for (const id of projects.keys()) {
             if (!current(owner)) return;
             if (!nextIds.has(id)) await removeKey(projectKey(owner, id));
@@ -187,14 +249,14 @@ export function createCanvasProjectStorage() {
                     const conflictDrafts = await readItems(meta.conflictDraftIds, draftKey);
                     if (!current(owner)) return null;
                     projects = remember(loadedProjects); drafts = remember(conflictDrafts); metadata = rawMeta;
-                    legacyPending = Boolean(await localForageStorage.getItem(LEGACY_KEY));
+                    legacyPending = Boolean(await readKey(accountStorageKey(LEGACY_KEY, owner)!));
                     if (!current(owner)) return null;
                     if (legacyPending) return mergeLegacy(owner, loadedProjects, conflictDrafts, meta, prepare);
                     return { state: { ownerUserId: owner, projects: loadedProjects, conflictDrafts }, version: meta.version };
                 }
             } catch (error) { readError = error; }
             if (!current(owner)) return null;
-            const legacy = await localForageStorage.getItem(LEGACY_KEY);
+            const legacy = await readKey(accountStorageKey(LEGACY_KEY, owner)!);
             if (!current(owner)) return null;
             if (!legacy) { if (readError) throw readError; return null; }
             const value = JSON.parse(legacy) as CanvasValue;
@@ -206,6 +268,10 @@ export function createCanvasProjectStorage() {
         },
         async remove(owner: string) {
             if (!current(owner)) return;
+            // Clear the legacy package first. If this fails, leave the split index/data intact so a
+            // refresh cannot fall back to an old package and resurrect deleted boards.
+            await removeKey(accountStorageKey(LEGACY_KEY, owner)!);
+            if (!current(owner)) return;
             const rawMeta = await readKey(metaKey(owner));
             if (!current(owner)) return;
             if (rawMeta) {
@@ -216,8 +282,6 @@ export function createCanvasProjectStorage() {
                 if (!current(owner)) return;
                 await removeKey(metaKey(owner));
             }
-            if (!current(owner)) return;
-            await localForageStorage.removeItem(LEGACY_KEY);
             reset(owner);
         },
     };
