@@ -48,7 +48,12 @@ func canvasProjectConflict(project model.CanvasProject) error {
 }
 
 func prepareCanvasProjectSave(userID string, raw json.RawMessage, baseUpdatedAt *string) (model.CanvasProject, string, error) {
-	raw, err := RewriteStorageObjectAliases(raw)
+	raw, err := recoverCanvasImageResults(userID, raw)
+	if err != nil {
+		return model.CanvasProject{}, "", err
+	}
+	// Recovery may reintroduce a pre-dedup object id; apply aliases afterwards too.
+	raw, err = RewriteStorageObjectAliases(raw)
 	if err != nil {
 		return model.CanvasProject{}, "", err
 	}

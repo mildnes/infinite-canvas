@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/tigerowo/infinite-canvas/model"
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
@@ -33,12 +34,22 @@ func UpdateCanvasImageTask(task model.CanvasImageTask) (model.CanvasImageTask, e
 		return task, err
 	}
 
-	result := db.Model(&model.CanvasImageTask{}).
-		Where("user_id = ? AND id = ? AND status IN ?", task.UserID, task.ID, activeGenerationTaskStatuses).
-		Select("*").
-		Updates(&task)
-	if result.Error != nil || result.RowsAffected > 0 {
-		return task, result.Error
+	changed := false
+	err = db.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&model.CanvasImageTask{}).
+			Where("user_id = ? AND id = ? AND status IN ?", task.UserID, task.ID, activeGenerationTaskStatuses).
+			Select("*").Updates(&task)
+		if result.Error != nil {
+			return result.Error
+		}
+		changed = result.RowsAffected > 0
+		if changed {
+			return archiveCanvasImageResult(tx, task)
+		}
+		return nil
+	})
+	if err != nil || changed {
+		return task, err
 	}
 	current, found, err := GetUserCanvasImageTask(task.UserID, task.ID)
 	if err != nil || !found {
@@ -54,8 +65,15 @@ func GetUserCanvasImageTask(userID string, id string) (model.CanvasImageTask, bo
 	}
 	var task model.CanvasImageTask
 	err = db.First(&task, "user_id = ? AND id = ?", userID, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		results, readErr := archivedCanvasImageResults(db, userID, []string{id})
+		if readErr != nil || len(results) == 0 {
+			return model.CanvasImageTask{}, false, readErr
+		}
+		return results[0], true, nil
+	}
 	if err != nil {
-		return model.CanvasImageTask{}, false, nil
+		return model.CanvasImageTask{}, false, err
 	}
 	return task, true, nil
 }
@@ -92,7 +110,21 @@ func BatchUserCanvasImageTasks(userID string, ids []string) ([]model.CanvasImage
 	}
 	var tasks []model.CanvasImageTask
 	err = db.Where("user_id = ? AND id IN ?", userID, keys).Find(&tasks).Error
-	return tasks, err
+	if err != nil {
+		return nil, err
+	}
+	found := make(map[string]bool, len(tasks))
+	for _, task := range tasks {
+		found[task.ID] = true
+	}
+	missing := make([]string, 0, len(keys))
+	for _, id := range keys {
+		if !found[id] {
+			missing = append(missing, id)
+		}
+	}
+	archived, err := archivedCanvasImageResults(db, userID, missing)
+	return append(tasks, archived...), err
 }
 
 func DeleteUserCanvasImageTask(userID string, id string) error {
@@ -100,7 +132,13 @@ func DeleteUserCanvasImageTask(userID string, id string) error {
 	if err != nil {
 		return err
 	}
-	return db.Where("user_id = ? AND id = ?", userID, strings.TrimSpace(id)).Delete(&model.CanvasImageTask{}).Error
+	id = strings.TrimSpace(id)
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("user_id = ? AND task_id = ?", userID, id).Delete(&model.CanvasImageTaskResult{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("user_id = ? AND id = ?", userID, id).Delete(&model.CanvasImageTask{}).Error
+	})
 }
 
 func HasActiveCanvasImageTasks() (bool, error) {
@@ -120,10 +158,22 @@ func DeleteFinishedCanvasImageTasksBefore(before string) error {
 	if err != nil {
 		return err
 	}
-	return db.Where("completed_at <> ? AND completed_at < ?", "", before).
-		Where("status IN ?", []string{"completed", "failed", "cancelled"}).
-		Where("source NOT IN ?", []string{"image-workbench", "workflow"}).
-		Delete(&model.CanvasImageTask{}).Error
+	return db.Transaction(func(tx *gorm.DB) error {
+		query := tx.Where("completed_at <> ? AND completed_at < ?", "", before).
+			Where("status IN ?", []string{"completed", "failed", "cancelled"}).
+			Where("source NOT IN ?", []string{"image-workbench", "workflow"})
+		// Upgrade safety: archive already-completed rows before deleting their details.
+		var tasks []model.CanvasImageTask
+		if err := query.Find(&tasks).Error; err != nil {
+			return err
+		}
+		for _, task := range tasks {
+			if err := archiveCanvasImageResult(tx, task); err != nil {
+				return err
+			}
+		}
+		return query.Delete(&model.CanvasImageTask{}).Error
+	})
 }
 
 func DeleteUserCanvasTasks(userID string, sourceID string, nodeIDs []string) error {

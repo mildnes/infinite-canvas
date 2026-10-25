@@ -28,6 +28,7 @@ description: 当前后端主要数据表与字段说明
 - `video_generation_logs`
 - `image_generation_logs`
 - `canvas_image_tasks`
+- `canvas_image_task_results`
 - `canvas_audio_tasks`
 - `canvas_projects`
 - `user_configs`
@@ -40,6 +41,20 @@ description: 当前后端主要数据表与字段说明
 - `comfy_bridge_requests`
 
 后续新增表时再同步补充本文档，未实际使用的规划表不提前写入。
+
+### canvas_image_task_results
+
+画布图片任务的轻量成功结果索引。任务详情仍按原有 10 分钟终态保留期清理，但成功媒体关联不随清理丢失。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `user_id` | string | 所属账号，与 `task_id` 组成联合主键 |
+| `task_id` | string | 原任务 ID |
+| `result_json` | text | 白名单成功快照：画板／节点绑定、模型、稳定原图 URL／storageKey、尺寸／类型／字节数及时间；不保存请求体、响应体、提示词或上游临时／base64 URL |
+
+任务完成 CAS 与索引写入处于同一事务；升级后清理既有完成任务前也先归档，归档失败不删任务。单查／批查仅按当前账号回退读取，不进入活跃任务列表，不维持轮询器常驻。用户显式删除任务时同时删除索引；删除节点不删原图或成功关联。
+
+画板保存只恢复原 task id、source id、node id 完全一致且缺少媒体的可恢复节点；停止／明确失败／已有媒体／新任务／其他账号不改。约束与守卫测试见 [画布图片结果持久化](canvas-image-result-invariants.md)。
 
 ### users
 

@@ -89,6 +89,7 @@ func DB() (*gorm.DB, error) {
 			&model.VideoGenerationLog{},
 			&model.ImageGenerationLog{},
 			&model.CanvasImageTask{},
+			&model.CanvasImageTaskResult{},
 			&model.CanvasAudioTask{},
 			&model.CanvasProject{},
 			&model.ComfyBridge{},

@@ -672,6 +672,10 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             const project = await loadProject(projectId);
             if (!isCurrentRestore()) return;
             if (!project) { router.replace("/canvas"); return; }
+            // Compare repaired/restored state against the actual saved project, not against
+            // the repaired snapshot itself, so a recovered result is saved immediately.
+            signatureProjectRef.current = projectId;
+            lastPersistSignatureRef.current = canvasPersistSignature(project);
             let restoredNodes = resetInterruptedGeneration(project.nodes);
             let restoredSessions = project.chatSessions || [];
             try {
@@ -5968,7 +5972,8 @@ async function recoverPersistedCanvasImageTasks(nodes: CanvasNodeData[]) {
             !node.metadata?.content &&
             !node.metadata?.storageKey &&
             Boolean(node.metadata?.imageTaskId) &&
-            (node.metadata?.status === NODE_STATUS_SUCCESS || node.metadata?.mediaStatus === "broken"),
+            (node.metadata?.status === NODE_STATUS_LOADING || node.metadata?.status === NODE_STATUS_SUCCESS ||
+                (node.metadata?.status === NODE_STATUS_ERROR && node.metadata?.taskPollError)),
     );
     if (!targets.length) return { nodes, count: 0 };
 
@@ -5983,7 +5988,7 @@ async function recoverPersistedCanvasImageTasks(nodes: CanvasNodeData[]) {
     let count = 0;
     for (const node of targets) {
         const task = taskById.get(node.metadata?.imageTaskId || "");
-        if (!task || !canvasImageTaskURLs(task).length) continue;
+        if (!task || !canvasTaskCompleted(task.status) || !canvasImageTaskURLs(task).length) continue;
         next = applyCanvasImageTaskUpdate(next, node.id, task, node.metadata?.startedAt || Date.now(), { width: node.width, height: node.height }, true);
         count += 1;
     }
@@ -6018,14 +6023,17 @@ function applyCanvasImageTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
         const requestedSize = nodeSizeFromRatio(node.metadata?.size || "", fallbackSize.width, fallbackSize.height);
         const naturalWidth = task.width || requestedSize?.width || fallbackSize.width || node.width;
         const naturalHeight = task.height || requestedSize?.height || fallbackSize.height || node.height;
-        const imageSize = isPanorama ? PANORAMA_NODE_SIZE : fitNodeSize(naturalWidth, naturalHeight, NODE_DEFAULT_SIZE[CanvasNodeType.Image].width, NODE_DEFAULT_SIZE[CanvasNodeType.Image].height);
+        const imageSize = restoringPersistedMedia ? { width: node.width, height: node.height } : isPanorama ? PANORAMA_NODE_SIZE : fitNodeSize(naturalWidth, naturalHeight, NODE_DEFAULT_SIZE[CanvasNodeType.Image].width, NODE_DEFAULT_SIZE[CanvasNodeType.Image].height);
         return {
             ...node,
             width: imageSize.width,
             height: imageSize.height,
-            position: { x: node.position.x + node.width / 2 - imageSize.width / 2, y: node.position.y + node.height / 2 - imageSize.height / 2 },
+            position: restoringPersistedMedia ? node.position : { x: node.position.x + node.width / 2 - imageSize.width / 2, y: node.position.y + node.height / 2 - imageSize.height / 2 },
             metadata: {
                 ...metadata,
+                taskPollError: undefined,
+                mediaStatus: "ok" as const,
+                mediaError: undefined,
                 content: url,
                 storageKey: task.storageKey || "",
 				originalUrl: task.originalUrl,
