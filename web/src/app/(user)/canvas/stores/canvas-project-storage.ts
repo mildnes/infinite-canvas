@@ -93,7 +93,7 @@ const removeKey = async (key: string): Promise<void> => {
 };
 
 // All calls are serialized by the canvas store's localSaveInFlight queue.
-export function createCanvasProjectStorage() {
+export function createCanvasProjectStorage(canWriteProject: (owner: string, id: string) => boolean = () => true) {
     let lastOwner: string | null = null;
     let projects = new Map<string, Snapshot>();
     let drafts = new Map<string, Snapshot>();
@@ -191,10 +191,17 @@ export function createCanvasProjectStorage() {
                 if (!current(owner)) return;
                 const saved = previous.get(project.id);
                 if (saved?.project === project && saved.updatedAt === project.updatedAt) continue;
+                if (key === projectKey && !canWriteProject(owner, project.id)) {
+                    // Keep the writer's copy, including saves queued before this tab lost its lease.
+                    // A migration cannot commit its index or remove the legacy package without a copy.
+                    if (!await readKey(key(owner, project.id))) return false;
+                    continue;
+                }
                 await writeKey(key(owner, project.id), JSON.stringify(prepare(project)));
             }
+            return true;
         };
-        await writeItems(nextProjects, projects, projectKey);
+        if (!await writeItems(nextProjects, projects, projectKey)) return;
         await writeItems(conflictDrafts, drafts, draftKey);
         if (!current(owner)) return;
         const nextIds = new Set(nextProjects.map(project => project.id));

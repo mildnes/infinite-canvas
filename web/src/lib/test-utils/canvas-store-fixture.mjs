@@ -40,7 +40,7 @@ export function canvasFixture({ owner = "anon", projects = [], drafts = [], disk
     const setTimeout = (fn, delay = 0) => { timers.set(++sequence, { at: time + delay, fn }); return sequence; };
     const clearTimeout = id => timers.delete(id);
     const context = {
-        Promise, console: { ...console, error() {}, warn() {} }, setTimeout, clearTimeout,
+        Promise, crypto: globalThis.crypto, console: { ...console, error() {}, warn() {} }, setTimeout, clearTimeout,
         window: { addEventListener() {}, localStorage: {
             getItem: key => localDisk.get(key) ?? null,
             setItem: (key, value) => { if (localFailure?.(key)) throw new Error("injected disk failure"); localDisk.set(key, value); },
@@ -85,6 +85,7 @@ export function canvasFixture({ owner = "anon", projects = [], drafts = [], disk
     modules["@/lib/localforage-storage"] = load("../localforage-storage.ts");
     const hydration = "../../app/(user)/canvas/utils/canvas-project-hydration.ts";
     if (existsSync(new URL(hydration, import.meta.url))) modules["../utils/canvas-project-hydration"] = load(hydration);
+    modules["../utils/canvas-writer-lock"] = load("../../app/(user)/canvas/utils/canvas-writer-lock.ts");
     const helper = "../../app/(user)/canvas/stores/canvas-project-storage.ts";
     if (existsSync(new URL(helper, import.meta.url))) modules["./canvas-project-storage"] = load(helper);
     const exported = load("../../app/(user)/canvas/stores/use-canvas-store.ts");

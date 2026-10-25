@@ -201,7 +201,7 @@ test("list counts and detail loading are wired to summaries without altering the
     const page = readFileSync(new URL("../app/(user)/canvas/[id]/canvas-client-page.tsx", import.meta.url), "utf8");
     const card = readFileSync(new URL("../app/(user)/canvas/components/canvas-project-card.tsx", import.meta.url), "utf8");
     const importer = readFileSync(new URL("../services/storage-migration.ts", import.meta.url), "utf8");
-    assert.ok(page.includes("await loadProject(projectId)"), "detail must await full data before media recovery");
+    assert.ok(page.includes("await loadProject(projectId, writerReloadRef.current)"), "detail must await full data before media recovery, forcing a fresh read after writer takeover");
     assert.ok(page.includes("projectLoadError || syncError") && page.includes("<CanvasRefreshShell />"), "detail needs loading and recoverable error states");
     assert.ok(card.includes("project.nodeCount ?? project.nodes.length"), "cards must render summary counts");
     assert.ok(card.includes("await loadProject(project.id)"), "card rename and export must first hydrate");

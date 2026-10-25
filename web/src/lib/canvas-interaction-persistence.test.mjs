@@ -27,6 +27,7 @@ function dragContext(snapToGrid) {
     const writes = [];
     const ref = { current: nodes };
     const context = {
+        canWriteCanvas: () => true,
         rafRef: { current: null },
         dragRef: { current: { isDraggingNode: true, hasMoved: true, startX: 0, startY: 0, initialSelectedNodes: [{ id: "n", x: 10, y: 20 }], clickedGroupId: null } },
         historyPausedRef: { current: true },

@@ -11,6 +11,7 @@ import type { CanvasAgentConfig, CanvasAssistantSession, CanvasConnection, Canva
 import { sanitizeCanvasNodesForPersistence, sanitizeCanvasSessionsForPersistence } from "../utils/canvas-media-persistence";
 import { createCanvasProjectStorage } from "./canvas-project-storage";
 import { isCanvasProjectEditable, isCanvasProjectHydrated, type CanvasProjectSummary } from "../utils/canvas-project-hydration";
+import { hasCanvasWriteAccess } from "../utils/canvas-writer-lock";
 
 export type CanvasSidePanelState = {
     open: boolean;
@@ -58,7 +59,7 @@ type CanvasStore = {
     createProject: (title?: string, options?: { agentConfig?: CanvasAgentConfig; pendingAgentRequest?: CanvasPendingAgentRequest }) => string;
     importProject: (project: Partial<CanvasProject>) => string;
     openProject: (id: string) => CanvasProject | null;
-    loadProject: (id: string) => Promise<CanvasProject | null>;
+    loadProject: (id: string, refresh?: boolean) => Promise<CanvasProject | null>;
     renameProject: (id: string, title: string) => void;
     deleteProjects: (ids: string[]) => Promise<void>;
     updateProject: (id: string, patch: Partial<Pick<CanvasProject, "nodes" | "connections" | "chatSessions" | "activeChatId" | "agentConfig" | "autoTitlePending" | "backgroundMode" | "showImageInfo" | "showConnections" | "snapToGrid" | "viewport" | "sidePanel" | "agentPanel" | "pendingAgentRequest">>) => void;
@@ -96,7 +97,7 @@ const sanitizedNodes = new WeakMap<CanvasNodeData[], CanvasNodeData[]>();
 const sanitizedSessions = new WeakMap<CanvasAssistantSession[], CanvasAssistantSession[]>();
 // Only an explicit retry may resolve the exact draft it restored.
 const retryDrafts = new WeakMap<CanvasProject, CanvasProject>();
-const projectStorage = createCanvasProjectStorage();
+const projectStorage = createCanvasProjectStorage(hasCanvasWriteAccess);
 
 function persistentProject(project: CanvasProject): CanvasProject {
     let nodes = sanitizedNodes.get(project.nodes);
@@ -165,6 +166,7 @@ function recordSaveError(error: unknown, draft?: CanvasProject) {
 }
 
 async function flushProjectSave(id: string): Promise<void> {
+    if (!hasCanvasWriteAccess(currentStorageOwnerId() || "anonymous", id)) { cancelProjectSaves([id]); return; }
     if (deletingProjectIds.has(id)) return;
     const previous = projectSavesInFlight.get(id);
     if (previous) { await previous; if (pendingProjectSaves.has(id)) return flushProjectSave(id); return; }
@@ -235,6 +237,7 @@ function resetCanvasOwner(owner: string | null) {
 }
 
 function queueProjectSave(project: CanvasProject) {
+    if (!hasCanvasWriteAccess(currentStorageOwnerId() || "anonymous", project.id)) return;
     if (!isCanvasProjectHydrated(project)) return;
     if (deletingProjectIds.has(project.id)) return;
     const owner = currentStorageOwnerId();
@@ -268,8 +271,11 @@ async function reconcileCanvasProjects(
     if (!owner || useCanvasStore.getState().ownerUserId !== owner) return [];
     remoteProjects = remoteProjects.map(canonicalProject);
     const remoteById = new Map(remoteProjects.map((project) => [project.id, project]));
+    const deferredProjects = localProjects.filter(
+        (project) => isCanvasProjectHydrated(project) && !remoteById.has(project.id) && !hasCanvasWriteAccess(owner, project.id),
+    );
     const missingProjects = localProjects.filter(
-        (project) => isCanvasProjectHydrated(project) && !remoteById.has(project.id),
+        (project) => isCanvasProjectHydrated(project) && !remoteById.has(project.id) && hasCanvasWriteAccess(owner, project.id),
     );
     const existingLocalProjects = localProjects.filter((project) => remoteById.has(project.id));
     const projects = missingProjects.length
@@ -309,7 +315,7 @@ async function reconcileCanvasProjects(
         }
     }
 
-    return projects;
+    return deferredProjects.length ? mergeCanvasProjects(projects, deferredProjects) : projects;
 }
 
 const canvasStorage: PersistStorage<CanvasStore> = {
@@ -508,17 +514,26 @@ export const useCanvasStore = create<CanvasStore>()(
             },
             openProject: (id) =>
                 get().projects.find((item) => item.id === id && isCanvasProjectHydrated(item)) || null,
-            loadProject: async (id) => {
+            loadProject: async (id, refresh = false) => {
                 const project = get().projects.find(item => item.id === id);
-                if (project && isCanvasProjectHydrated(project)
+                if (!refresh && project && isCanvasProjectHydrated(project)
                     && (!project.remoteUpdatedAt || project.remoteUpdatedAt === (project.serverUpdatedAt ?? project.updatedAt) || project.pendingSave)) return project;
                 const owner = currentStorageOwnerId();
                 const token = useUserStore.getState().token;
                 const epoch = ownerEpoch;
-                if (!owner || !token || get().ownerUserId !== owner) return null;
+                if (!owner || get().ownerUserId !== owner) return null;
+                if (!token) {
+                    if (!refresh) return null;
+                    const stored = await projectStorage.read(owner, persistentProject);
+                    if (owner !== currentStorageOwnerId() || epoch !== ownerEpoch) return null;
+                    const latest = stored?.state.projects.find(item => item.id === id);
+                    if (!latest || !isCanvasProjectHydrated(latest)) return null;
+                    set((state) => ({ projects: state.projects.map(item => item.id === id ? latest : item) }));
+                    return latest;
+                }
                 const pending = projectLoadsInFlight.get(id);
-                if (pending) return pending;
-                const current = () => owner === currentStorageOwnerId() && epoch === ownerEpoch;
+                if (pending && !refresh) return pending;
+                const current = (): boolean => owner === currentStorageOwnerId() && epoch === ownerEpoch && projectLoadsInFlight.get(id) === request;
                 const request = (async () => {
                     const fetched = await getCanvasProject(token, id);
                     if (!current() || deletingProjectIds.has(id)) return null;
@@ -536,6 +551,7 @@ export const useCanvasStore = create<CanvasStore>()(
                 finally { if (projectLoadsInFlight.get(id) === request) projectLoadsInFlight.delete(id); }
             },
             renameProject: (id, title) => {
+                if (!hasCanvasWriteAccess(currentStorageOwnerId() || "anonymous", id)) throw new Error("该画板已在另一个窗口打开，本窗口为只读");
                 const project = get().projects.find(
                     (item) => item.id === id,
                 );
@@ -561,6 +577,7 @@ export const useCanvasStore = create<CanvasStore>()(
                 queueProjectSave(nextProject);
             },
             deleteProjects: async (ids) => {
+                if (ids.some(id => !hasCanvasWriteAccess(currentStorageOwnerId() || "anonymous", id))) throw new Error("该画板已在另一个窗口打开，本窗口为只读");
                 const owner = currentStorageOwnerId();
                 const token = useUserStore.getState().token;
                 const projectIds = Array.from(new Set(ids));
@@ -570,6 +587,7 @@ export const useCanvasStore = create<CanvasStore>()(
                 if (token && accountCanvasSyncEnabled) {
                     try {
                         await Promise.all(projectIds.map((id) => projectSavesInFlight.get(id)));
+                        if (projectIds.some(id => !hasCanvasWriteAccess(owner, id))) throw new Error("该画板已在另一个窗口打开，本窗口为只读");
                         await deleteCanvasProjects(projectIds);
                     } catch (error) {
                         projectIds.forEach((id) => deletingProjectIds.delete(id));
@@ -594,6 +612,7 @@ export const useCanvasStore = create<CanvasStore>()(
                 if (!failedProjectSaves.size && !hydrationFailed) set({ syncError: null });
             },
             updateProject: (id, patch) => {
+                if (!hasCanvasWriteAccess(currentStorageOwnerId() || "anonymous", id)) return;
                 const project = get().projects.find(
                     (item) => item.id === id,
                 );

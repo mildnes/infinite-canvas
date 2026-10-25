@@ -296,6 +296,7 @@ function runBackgroundRepair(f, { nodes, sessions = [], loadedToken = "A-token" 
     const state = { nodes, sessions };
     const context = {
         ...f.api,
+        canWriteCanvas: () => true, readOnly: false,
         useEffect: (effect) => effect(),
         projectLoaded: true, userReady: true, currentAccountId: "A", currentUserToken: "A-token",
         projectId: "board", activeProjectIdRef: { current: "board" },
@@ -542,7 +543,7 @@ test("local-only 汇总包含 ownerId、nodeId、bytes 和 reason", () => {
 test("画布在用户就绪后补跑 repair，并保留账号切换守卫", () => {
     assert.ok(/state\.isReady/.test(pageSource), "画布应等待用户 store 就绪");
     assert.ok(/mediaStatus === "local-only"/.test(pageSource), "画布应只补跑本地媒体");
-    assert.ok(/repairCanvasProjectMedia\([\s\S]*?\{ allowUpload: true \}/.test(pageSource), "用户就绪后应触发自动补传");
+    assert.ok(pageSource.includes("repairCanvasProjectMedia(originalNodes, sessions, { allowUpload: true, ownerToken })"), "用户就绪后应触发绑定当前账号的自动补传");
     assert.ok(/reportCanvasLocalOnlyMedia/.test(pageSource), "repair 后应汇总仍在本地的媒体");
     assert.ok(/ownerToken[\s\S]*?ownerUserId[\s\S]*?isCurrent/.test(pageSource), "旧账号 repair 结果不得回写");
 });

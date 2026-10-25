@@ -115,6 +115,7 @@ function callbackScope(node) {
     const state = { nodes: [node], writes: 0, notices: [], running: [] };
     const scope = {
         ...api, Error, CanvasNodeType, canvasTaskRetryMode, nodesRef: { current: state.nodes }, connectionsRef: { current: [] }, effectiveConfig: config, canvasGenerationDefaults: config,
+        requireCanvasWriter: () => true, hasCanvasWriteAccess: () => true, currentCanvasOwnerId: () => "owner",
         shouldOverwriteCanvasNode,
         startNodeTaskRun: () => ({ controller: new AbortController() }), guardNodeTaskResponse: () => {}, nodeRunActive: () => true,
         useUserStore: { getState: () => ({ token: "test" }) },
@@ -244,6 +245,7 @@ test("停止失败可重试：真实画布回调确认后取消 run，旧回包�
     let calls = 0;
     const scope = {
         CanvasNodeType, NODE_STATUS_LOADING: "loading", isCanvasImageNodeType: () => true, isStoppedTask,
+        requireCanvasWriter: () => true,
         nodeTaskRunsRef: { current: runs }, startNodeTaskRun: () => run,
         useUserStore: { getState: () => ({ token: "test" }) },
         setNodes: (update) => { state.nodes = update(state.nodes); },
@@ -302,6 +304,7 @@ test("批量根节点停止同步取消主图 run，根节点与主图均不能�
     const run = beginTaskRun(runs, "primary", "image", "task", "token");
     const scope = {
         CanvasNodeType, NODE_STATUS_LOADING: "loading", isStoppedTask, isCanvasImageNodeType: () => true,
+        requireCanvasWriter: () => true,
         nodeTaskRunsRef: { current: runs }, startNodeTaskRun: (id, kind, taskId) => beginTaskRun(runs, id, kind, taskId, "token"),
         useUserStore: { getState: () => ({ token: "token" }) },
         setNodes: (update) => { state.nodes = update(state.nodes); },

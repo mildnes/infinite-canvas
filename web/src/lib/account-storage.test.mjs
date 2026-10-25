@@ -33,6 +33,8 @@ function fixture() {
     };
     const context = { Promise, console: { ...console, warn: (...args) => operations.push(["warn", ...args]) }, window: { localStorage: { getItem: key => disk.get(key), setItem: (key, value) => disk.set(key, value), removeItem: key => disk.delete(key) }, setTimeout: fn => { timers.set(++sequence, fn); return sequence; }, clearTimeout: id => timers.delete(id) }, setTimeout: fn => { timers.set(++sequence, fn); return sequence; }, clearTimeout: id => timers.delete(id), require: name => modules[name] || {} };
     const load = path => { const exports = {}; const source = process.env.STORAGE_OWNER_BASELINE && path === "./localforage-storage.ts" ? execFileSync("git", ["show", process.env.STORAGE_OWNER_BASELINE + ":web/src/lib/localforage-storage.ts"], { encoding: "utf8" }) : readFileSync(new URL(path, import.meta.url), "utf8"); vm.runInNewContext(ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2016, module: ts.ModuleKind.CommonJS } }).outputText, { ...context, exports }); return exports; };
+    context.crypto = globalThis.crypto;
+    modules["../utils/canvas-writer-lock"] = load("../app/(user)/canvas/utils/canvas-writer-lock.ts");
     const storage = load("./localforage-storage.ts");
     modules["@/lib/localforage-storage"] = storage;
     modules["../utils/canvas-project-hydration"] = load("../app/(user)/canvas/utils/canvas-project-hydration.ts");

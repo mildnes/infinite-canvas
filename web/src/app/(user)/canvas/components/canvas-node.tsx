@@ -41,6 +41,7 @@ const selectionBlue = "#2f80ff";
 const CanvasPanoramaViewer = dynamic(() => import("./canvas-panorama-viewer"), { ssr: false, loading: () => null });
 
 type CanvasNodeProps = {
+    readOnly?: boolean;
     data: CanvasNodeData;
     scaleRef: React.RefObject<number>;
     isSelected: boolean;
@@ -106,6 +107,7 @@ type NodeContentRendererProps = {
 };
 
 export const CanvasNode = React.memo(function CanvasNode({
+    readOnly = false,
     data,
     scaleRef,
     isSelected,
@@ -223,8 +225,16 @@ export const CanvasNode = React.memo(function CanvasNode({
 
     useEffect(() => {
         if (!editRequestNonce || data.type !== CanvasNodeType.Text) return;
+        if (readOnly) return;
         setIsEditingContent(true);
-    }, [data.type, editRequestNonce]);
+    }, [data.type, editRequestNonce, readOnly]);
+
+    useEffect(() => {
+        if (!readOnly) return;
+        setIsEditingContent(false);
+        setIsEditingTitle(false);
+        resizeRef.current.isResizing = false;
+    }, [readOnly]);
 
     useEffect(() => {
         if (!isEditingContent) return;
@@ -298,6 +308,7 @@ export const CanvasNode = React.memo(function CanvasNode({
     }, [data, handleResizeMove, onResize]);
 
     const handleResizeMouseDown = (event: React.MouseEvent, corner: ResizeCorner) => {
+        if (readOnly) return;
         event.stopPropagation();
         event.preventDefault();
         resizeRef.current = {
@@ -392,6 +403,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                         title="双击修改节点名称"
                         onDoubleClick={(event) => {
                             event.stopPropagation();
+                            if (readOnly) return;
                             setIsEditingTitle(true);
                         }}
                     >
@@ -431,7 +443,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                         onViewImage?.(data);
                         return;
                     }
-                    if (data.type !== CanvasNodeType.Text) return;
+                    if (data.type !== CanvasNodeType.Text || readOnly) return;
                     event.stopPropagation();
                     setIsEditingContent(true);
                 }}
@@ -487,13 +499,13 @@ export const CanvasNode = React.memo(function CanvasNode({
                     </div>
                 ) : null}
 
-                {!referenceSelectionState ? <ResizeHandle corner="top-left" onMouseDown={handleResizeMouseDown} /> : null}
-                {!referenceSelectionState ? <ResizeHandle corner="top-right" onMouseDown={handleResizeMouseDown} /> : null}
-                {!referenceSelectionState ? <ResizeHandle corner="bottom-left" onMouseDown={handleResizeMouseDown} /> : null}
-                {!referenceSelectionState ? <ResizeHandle corner="bottom-right" onMouseDown={handleResizeMouseDown} /> : null}
+                {!referenceSelectionState && !readOnly ? <ResizeHandle corner="top-left" onMouseDown={handleResizeMouseDown} /> : null}
+                {!referenceSelectionState && !readOnly ? <ResizeHandle corner="top-right" onMouseDown={handleResizeMouseDown} /> : null}
+                {!referenceSelectionState && !readOnly ? <ResizeHandle corner="bottom-left" onMouseDown={handleResizeMouseDown} /> : null}
+                {!referenceSelectionState && !readOnly ? <ResizeHandle corner="bottom-right" onMouseDown={handleResizeMouseDown} /> : null}
             </div>
 
-            {!referenceSelectionState && !isGroup ? (
+            {!referenceSelectionState && !readOnly && !isGroup ? (
                 <>
                     <ConnectionHandleDot side="left" visible={hovered || isSelected || isConnecting} onMouseDown={(event) => onConnectStart(event, data.id, "target")} />
                     <ConnectionHandleDot side="right" visible={data.type !== CanvasNodeType.Config && (hovered || isSelected || isConnecting)} onMouseDown={(event) => onConnectStart(event, data.id, "source")} />

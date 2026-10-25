@@ -107,6 +107,12 @@ function fixture() {
         { exports: hydrationExports, require: name => modules[name] || {}, Promise, console },
     );
     modules["../utils/canvas-project-hydration"] = hydrationExports;
+    const lockExports = {};
+    vm.runInNewContext(
+        ts.transpileModule(readFileSync(new URL("./canvas-writer-lock.ts", import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2016, module: ts.ModuleKind.CommonJS } }).outputText,
+        { exports: lockExports, crypto: globalThis.crypto, console, window },
+    );
+    modules["../utils/canvas-writer-lock"] = lockExports;
     const storageExports = {};
     vm.runInNewContext(
         ts.transpileModule(readFileSync(new URL("../stores/canvas-project-storage.ts", import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2016, module: ts.ModuleKind.CommonJS } }).outputText,

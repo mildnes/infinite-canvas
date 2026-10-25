@@ -50,6 +50,8 @@ const ASSISTANT_NODE_STATUS_COLOR: Record<string, string> = {
 };
 
 type CanvasAssistantPanelProps = {
+    readOnly?: boolean;
+    canWrite?: () => boolean;
     nodes: CanvasNodeData[];
     selectedNodeIds: Set<string>;
     referenceNodeClick: { nodeId: string | null; version: number };
@@ -79,6 +81,8 @@ type PendingDeleteConfirmation = {
 };
 
 export function CanvasAssistantPanel({
+    readOnly = false,
+    canWrite,
     nodes,
     selectedNodeIds,
     referenceNodeClick,
@@ -132,6 +136,15 @@ export function CanvasAssistantPanel({
     const resolvedActiveSessionId = activeSessionId && safeSessions.some((session) => session.id === activeSessionId) ? activeSessionId : safeSessions[0]?.id || null;
     const sessionsRef = useRef<CanvasAssistantSession[]>(safeSessions);
     const activeSessionIdRef = useRef<string | null>(resolvedActiveSessionId);
+
+    useEffect(() => {
+        if (!readOnly) return;
+        abortRef.current?.abort();
+        pendingDeleteRef.current?.resolve(false);
+        pendingDeleteRef.current = null;
+        setPendingDelete(null);
+        setIsRunning(false);
+    }, [readOnly]);
 
     useEffect(() => {
         sessionsRef.current = safeSessions;
@@ -246,6 +259,7 @@ export function CanvasAssistantPanel({
     }, [selectedNodeKey]);
 
     const commitSessions = (nextSessions: CanvasAssistantSession[], nextActiveSessionId = activeSessionIdRef.current) => {
+        if (readOnly || canWrite?.() === false) { appMessage.warning("本窗口为只读，请先接管编辑"); return; }
         sessionsRef.current = nextSessions;
         activeSessionIdRef.current = nextActiveSessionId;
         onSessionsChange(nextSessions, nextActiveSessionId);
@@ -316,7 +330,8 @@ export function CanvasAssistantPanel({
     const sendMessage = async (text: string, savedReferences?: CanvasAssistantReference[], savedSkills?: CanvasAgentSkillSelection[]) => {
         const requestToken = authToken;
         const requestUserId = authUserId;
-        const requestIsCurrent = () => useUserStore.getState().token === requestToken && (useUserStore.getState().user?.id || "") === requestUserId;
+        if (readOnly || canWrite?.() === false) { appMessage.warning("本窗口为只读，请先接管编辑"); return; }
+        const requestIsCurrent = () => canWrite?.() !== false && useUserStore.getState().token === requestToken && (useUserStore.getState().user?.id || "") === requestUserId;
         const session = activeSession || createSession();
         if (!activeSession) {
             commitSessions([session], session.id);
@@ -468,11 +483,11 @@ export function CanvasAssistantPanel({
     };
 
     useEffect(() => {
-        if (!initialRequest || consumedInitialRequestRef.current === initialRequest) return;
+        if (readOnly || canWrite?.() === false || !initialRequest || consumedInitialRequestRef.current === initialRequest) return;
         consumedInitialRequestRef.current = initialRequest;
         onInitialRequestConsumed?.();
         void sendMessage(initialRequest.prompt, initialRequest.references, initialRequest.skills);
-    }, [initialRequest, onInitialRequestConsumed]);
+    }, [initialRequest, onInitialRequestConsumed, readOnly]);
 
     const submit = async (nextPrompt = prompt, referenceIds = composerReferenceIds) => {
         const text = nextPrompt.trim();
@@ -621,7 +636,7 @@ export function CanvasAssistantPanel({
                                 </div>
                             </div>
                         ) : null}
-                        <CanvasAssistantComposer
+                        {readOnly ? <p role="status" className="px-4 py-3 text-sm opacity-75">本窗口为只读，可查看对话；接管编辑后可继续使用 Agent。</p> : <CanvasAssistantComposer
                             prompt={prompt}
                             isRunning={isRunning}
                             references={composerReferences}
@@ -656,7 +671,7 @@ export function CanvasAssistantPanel({
                                 if (selectedNodeIds.has(id)) onSelectNodeIds(new Set(Array.from(selectedNodeIds).filter((nodeId) => nodeId !== id)));
                             }}
                             onPasteImage={onPasteImage}
-                        />
+                        />}
                     </>
                 ) : null}
 
