@@ -108,10 +108,11 @@ type GenerationLogConfig = Pick<AiConfig, "channelMode" | "activeChannelId" | "v
 type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
 type WorkbenchLayout = "side" | "bottom";
 type AssetPickerTarget = "general" | "image" | "video" | "audio" | "firstFrame" | "lastFrame" | "element";
-type WorkflowPollContext = { token: string; signal: AbortSignal };
+type WorkflowPollContext = { token: string; ownerId: string; signal: AbortSignal };
 
 const WORKBENCH_LAYOUT_KEY = "infinite-canvas:video-workbench-layout";
 const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" });
+const currentTaskOwnerId = () => useUserStore.getState().user?.id || "anonymous";
 export default function VideoPage() {
     const { message } = App.useApp();
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -236,7 +237,7 @@ export default function VideoPage() {
     useEffect(() => {
         if (!hasPendingTasks) return;
         const controller = new AbortController();
-        const context = { token: token || "", signal: controller.signal };
+        const context = { token: token || "", ownerId: userId || "anonymous", signal: controller.signal };
         const timer = window.setInterval(() => {
             pollPendingLogsOnce(logsRef.current, context);
         }, VIDEO_POLL_INTERVAL_MS);
@@ -712,8 +713,8 @@ export default function VideoPage() {
     };
 
     const runVideoTask = async (pendingLog: GenerationLog, snapshot: { text: string; model: string; config: AiConfig; references: ReferenceImage[]; firstFrame?: ReferenceImage | null; lastFrame?: ReferenceImage | null; videoReferences: ReferenceVideo[]; audioReferences: ReferenceAudio[]; taskCount: number; workflowRef?: WorkflowRef | null }, workflowToken: string, ownerActive: () => boolean) => {
-        const run = beginTaskRun(taskRunsRef.current, pendingLog.id, snapshot.workflowRef ? "workflow" : "video", pendingLog.task?.id || "", workflowToken);
-        const active = () => ownerActive() && currentTaskRun(taskRunsRef.current, pendingLog.id, run, useUserStore.getState().token) && !run.stopping;
+        const run = beginTaskRun(taskRunsRef.current, pendingLog.id, snapshot.workflowRef ? "workflow" : "video", pendingLog.task?.id || "", currentTaskOwnerId());
+        const active = () => ownerActive() && currentTaskRun(taskRunsRef.current, pendingLog.id, run, currentTaskOwnerId()) && !run.stopping;
         try {
             if (snapshot.workflowRef) {
                 if (!workflowToken) throw new Error("工作流生成需要先登录");
@@ -1079,8 +1080,8 @@ export default function VideoPage() {
     };
 
     const pollPendingLogOnce = async (log: GenerationLog, resumeConfig: AiConfig, context: WorkflowPollContext) => {
-        const run = taskRunsRef.current.get(log.id) || beginTaskRun(taskRunsRef.current, log.id, log.providerWorkflowRef ? "workflow" : "video", videoLogTaskId(log), context.token);
-        const active = () => !context.signal.aborted && currentTaskRun(taskRunsRef.current, log.id, run, useUserStore.getState().token);
+        const run = taskRunsRef.current.get(log.id) || beginTaskRun(taskRunsRef.current, log.id, log.providerWorkflowRef ? "workflow" : "video", videoLogTaskId(log), context.ownerId);
+        const active = () => !context.signal.aborted && currentTaskRun(taskRunsRef.current, log.id, run, currentTaskOwnerId());
         if (!active()) return;
         pollingLogIdsRef.current.add(log.id);
         const startedAt = log.createdAt || Date.now();
@@ -1165,10 +1166,11 @@ export default function VideoPage() {
     const stopVideoLog = async (log: GenerationLog) => {
         if (log.status !== "生成中") return;
         const ownerToken = useUserStore.getState().token;
-        const run = taskRunsRef.current.get(log.id) || beginTaskRun(taskRunsRef.current, log.id, log.providerWorkflowRef ? "workflow" : "video", videoLogTaskId(log), ownerToken);
+        const ownerId = currentTaskOwnerId();
+        const run = taskRunsRef.current.get(log.id) || beginTaskRun(taskRunsRef.current, log.id, log.providerWorkflowRef ? "workflow" : "video", videoLogTaskId(log), ownerId);
         if (run.stopping || !run.taskId) return;
         run.stopping = true;
-        const current = () => taskRunsRef.current.get(log.id)?.id === run.id && useUserStore.getState().token === ownerToken;
+        const current = () => taskRunsRef.current.get(log.id)?.id === run.id && currentTaskOwnerId() === ownerId;
         const showStop = (stopState: "stopping" | "failed") => {
             setLogs((value) => current() ? value.map((item) => item.id === log.id && item.status === "生成中" ? { ...item, stopState } : item) : value);
             setResults((value) => current() ? updateResultByLogId(value, log.id, { stopState }) : value);

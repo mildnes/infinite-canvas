@@ -10,15 +10,23 @@ test("stopping disables action, failed stop is retryable and cancelled regenerat
 });
 test("new run aborts old request, fresh id is not reused and late response is rejected", () => {
  const runs = new Map();
- const first = beginTaskRun(runs, "node", "image", "old", "token");
- const second = beginTaskRun(runs, "node", "image", "new", "token");
+ const first = beginTaskRun(runs, "node", "image", "old", "user-1");
+ const second = beginTaskRun(runs, "node", "image", "new", "user-1");
  assert.notEqual(first.id, second.id);
  assert.equal(first.controller.signal.aborted, true);
- assert.equal(currentTaskRun(runs, "node", first, "token"), false);
- assert.equal(currentTaskRun(runs, "node", second, "other-token"), false);
- assert.equal(currentTaskRun(runs, "node", second, "token"), true);
+ assert.equal(currentTaskRun(runs, "node", first, "user-1"), false);
+ assert.equal(currentTaskRun(runs, "node", second, "user-2"), false);
+ assert.equal(currentTaskRun(runs, "node", second, "user-1"), true);
  second.controller.abort();
- assert.equal(currentTaskRun(runs, "node", second, "token"), false);
+ assert.equal(currentTaskRun(runs, "node", second, "user-1"), false);
+});
+test("same account survives JWT rotation because owner id, not token, identifies a run", () => {
+ const runs = new Map();
+ const run = beginTaskRun(runs, "node", "image", "task", "user-1");
+ assert.equal(run.ownerId, "user-1");
+ assert.equal("token" in run, false);
+ assert.equal(currentTaskRun(runs, "node", run, "user-1"), true);
+ assert.equal(currentTaskRun(runs, "node", run, "user-2"), false);
 });
 test("late processing or completed responses cannot revive cancelled, successful or failed node", () => {
  for (const status of ["cancelled", "success", "error"]) {

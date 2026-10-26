@@ -80,6 +80,66 @@ test("owner cancellation aborts an in-flight blackhole task poll immediately", a
     assert.equal(requestSignal.aborted, true);
 });
 
+test("只读窗口仍继续查询已有生成任务并展示结果", async () => {
+    const id = "client_image_task_reader";
+    let nodes = [{
+        id: "node",
+        type: "image",
+        width: 200,
+        height: 200,
+        metadata: { status: "loading", imageTaskId: id },
+    }];
+    const calls = [];
+    const run = { id: "reader-run", taskId: id, controller: new AbortController() };
+    const effect = vm.runInNewContext(effectCode, {
+        ...polling,
+        projectLoaded: true,
+        nodesRef: { get current() { return nodes; } },
+        pollingVideoNodeIdsRef: { current: new Set() },
+        pollingImageNodeIdsRef: { current: new Set() },
+        pollingAudioNodeIdsRef: { current: new Set() },
+        taskPollingStateRef: { current: new Map() },
+        canWriteCanvas: () => false,
+        nodeTaskRunsRef: { current: new Map([["node", run]]) },
+        startNodeTaskRun: () => run,
+        nodeRunActive: () => true,
+        CanvasNodeType: { Video: "video", Audio: "audio" },
+        NODE_STATUS_LOADING: "loading",
+        NODE_STATUS_ERROR: "error",
+        canvasVideoTaskId: () => undefined,
+        canvasVideoTaskFromMetadata: () => ({}),
+        isCanvasImageNodeType: (type) => type === "image",
+        effectiveConfig: {},
+        buildGenerationConfig: () => ({}),
+        isAiConfigReady: () => false,
+        pollCanvasImageTaskStatus: async (taskId) => {
+            calls.push(taskId);
+            return { id: taskId, status: "completed", url: "/api/files/result/content" };
+        },
+        pollCanvasAudioTaskStatus: async () => { throw new Error("not audio"); },
+        pollVideoGenerationTaskStatus: async () => { throw new Error("not video"); },
+        useUserStore: { getState: () => ({ token: "owner-token" }) },
+        getWorkflowTask: async () => { throw new Error("not workflow"); },
+        workflowVideoTask: (task) => task,
+        workflowAudioTask: (task) => task,
+        workflowImageTask: (task) => task,
+        applyCanvasImageTaskUpdate: (prev, nodeId, task) => prev.map((node) => node.id === nodeId
+            ? { ...node, metadata: { ...node.metadata, status: task.status === "completed" ? "success" : task.status }, content: task.url }
+            : node),
+        applyCanvasImageTaskConnections: (connections) => connections,
+        setNodes: (update) => { nodes = update(nodes); },
+        setConnections: () => {},
+        reportNodeTaskPollError: () => { throw new Error("reader poll should not fail"); },
+        window: { setInterval: () => 1, clearInterval: () => {} },
+        VIDEO_POLL_INTERVAL_MS: 5000,
+    });
+    const cleanup = effect();
+    await new Promise((resolve) => setImmediate(resolve));
+    cleanup();
+    assert.deepEqual(calls, [id]);
+    assert.equal(nodes[0].metadata.status, "success");
+});
+
 function queryTask(filename, functionName) {
     const source = readFileSync(new URL(filename, import.meta.url), "utf8");
     const ast = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true);

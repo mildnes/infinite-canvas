@@ -534,9 +534,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const taskPollingStateRef = useRef(new Map<string, CanvasTaskPollState>());
     const startNodeTaskRun = useCallback((nodeId: string, kind: TaskKind, taskId: string) => {
         taskPollingStateRef.current.delete(nodeId);
-        return beginTaskRun(nodeTaskRunsRef.current, nodeId, kind, taskId, useUserStore.getState().token);
+        return beginTaskRun(nodeTaskRunsRef.current, nodeId, kind, taskId, currentCanvasOwnerId());
     }, []);
-    const nodeRunActive = useCallback((nodeId: string, run: TaskRun) => hasCanvasWriteAccess(currentCanvasOwnerId(), activeProjectIdRef.current) && currentTaskRun(nodeTaskRunsRef.current, nodeId, run, useUserStore.getState().token), []);
+    const nodeRunActive = useCallback((nodeId: string, run: TaskRun) => currentTaskRun(nodeTaskRunsRef.current, nodeId, run, currentCanvasOwnerId()), []);
     const guardNodeTaskResponse = useCallback((nodeId: string, run: TaskRun, taskId: string) => {
         if (nodeTaskRunsRef.current.get(nodeId)?.id === run.id) run.taskId = taskId;
         if (!nodeRunActive(nodeId, run) || run.stopping) throw new DOMException("任务已停止或被新任务替代", "AbortError");
@@ -611,9 +611,10 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         setUpscaleNodeId(null);
         setSuperResolveNodeId(null);
         setAssetPickerOpen(false);
-        nodeTaskRunsRef.current.forEach((run) => run.controller.abort());
-        nodeTaskRunsRef.current.clear();
-        taskPollingStateRef.current.clear();
+        // A reader must keep polling tasks that were already submitted. The
+        // writer lock blocks new mutations and persistence, while completed
+        // results remain visible in this tab. Account/project cleanup still
+        // aborts these runs in the effect below.
     }, [readOnly]);
     const commitViewport = useCallback((next: ViewportTransform) => {
         setViewport(next);
@@ -957,7 +958,6 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     useEffect(() => {
         if (!projectLoaded) return;
         const pollCanvasTasks = () => {
-            if (!canWriteCanvas()) return;
             const videoTargets = nodesRef.current.filter((node) => node.type === CanvasNodeType.Video && node.metadata?.status === NODE_STATUS_LOADING && !node.metadata.content && canvasVideoTaskId(node.metadata));
             videoTargets.forEach((node) => {
                 if (pollingVideoNodeIdsRef.current.has(node.id)) return;
@@ -1457,9 +1457,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     );
 
     const deleteNodes = useCallback(
-        async (ids: Set<string>) => {
-            if (!requireCanvasWriter()) return;
-            if (!ids.size) return;
+        async (ids: Set<string>): Promise<{ ok: boolean; deletedNodeIds: string[]; code?: string; message?: string }> => {
+            if (!requireCanvasWriter()) return { ok: false, deletedNodeIds: [], code: "read_only", message: "本窗口为只读，请先接管编辑" };
+            if (!ids.size) return { ok: true, deletedNodeIds: [] };
             const allIds = new Set(ids);
             nodesRef.current.forEach((node) => {
                 if (ids.has(node.id)) node.metadata?.batchChildIds?.forEach((childId) => allIds.add(childId));
@@ -1473,8 +1473,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             try {
                 await deleteCanvasTaskRecords([...allIds]);
             } catch (error) {
-                message.error(error instanceof Error ? error.message : "任务记录删除失败，请检查网络后重试");
-                return;
+                const errorMessage = error instanceof Error ? error.message : "任务记录删除失败，请检查网络后重试";
+                message.error(errorMessage);
+                return { ok: false, deletedNodeIds: [], code: "delete_failed", message: errorMessage };
             }
             const removedNodes = nodesRef.current.filter((node) => allIds.has(node.id));
             const remainingNodes = nodesRef.current.filter((node) => !allIds.has(node.id));
@@ -1536,6 +1537,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             setReferencePickerNodeId((current) => (current && allIds.has(current) ? null : current));
             setContextMenu((current) => (current?.type === "node" && allIds.has(current.nodeId) ? null : current));
             cleanupCanvasFiles({ projectId, nodes: nextNodes, chatSessions });
+            return { ok: true, deletedNodeIds: removedNodes.map((node) => node.id) };
         },
         [chatSessions, cleanupCanvasFiles, deleteCanvasTaskRecords, message, projectId],
     );
@@ -4163,10 +4165,9 @@ const generateAngleNode = useCallback(
                 if (action.name === "delete_node") {
                     const nodeId = stringValue("nodeId");
                     if (!getNode(nodeId)) return missingNodeResult(nodeId);
-                    const beforeNodeIds = nodesRef.current.map((node) => node.id);
-                    deleteNodes(new Set([nodeId]));
-                    const remainingNodeIds = new Set(nodesRef.current.map((node) => node.id));
-                    return { ok: true, deletedNodeIds: beforeNodeIds.filter((id) => !remainingNodeIds.has(id)) };
+                    const result = await deleteNodes(new Set([nodeId]));
+                    if (!result.ok) return { ok: false, code: result.code || "delete_failed", message: result.message || "节点删除失败" };
+                    return { ok: true, deletedNodeIds: result.deletedNodeIds };
                 }
 
                 if (action.name === "create_connection") {
@@ -4668,12 +4669,12 @@ const generateAngleNode = useCallback(
         const run = nodeTaskRunsRef.current.get(runNodeId) || startNodeTaskRun(runNodeId, kind, taskId);
         if (run.stopping) return;
         run.stopping = true;
-        const ownerToken = useUserStore.getState().token;
-        const current = () => nodeTaskRunsRef.current.get(runNodeId)?.id === run.id && useUserStore.getState().token === ownerToken;
+        const ownerId = currentCanvasOwnerId();
+        const current = () => nodeTaskRunsRef.current.get(runNodeId)?.id === run.id && currentCanvasOwnerId() === ownerId;
         const updateStop = (stopState: "stopping" | "failed" | undefined, cancelled = false) => setNodes((prev) => current() ? prev.map((item) => (item.id === node.id || item.id === runNodeId || (item.metadata?.isBatchRoot && item.metadata.primaryImageId === runNodeId)) && item.metadata?.status === NODE_STATUS_LOADING ? { ...item, metadata: { ...item.metadata, stopState, ...(cancelled ? { status: "cancelled" as const, errorDetails: "用户停止", progress: 0, durationMs: Date.now() - (item.metadata.startedAt || Date.now()) } : { errorDetails: stopState === "failed" ? "停止失败，请重试停止" : "停止中" }) } } : item) : prev);
         updateStop("stopping");
         try {
-            const result = !ownerToken || (run.taskId || taskId).startsWith("local_")
+            const result = !useUserStore.getState().token || (run.taskId || taskId).startsWith("local_")
                 ? { status: "cancelled", stopped: true }
                 : await stopCanvasTask(kind, run.taskId || taskId);
             if (!current()) return;

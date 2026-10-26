@@ -52,7 +52,7 @@ test("停止提交期间的终态轮询仍可清理已结算的结果", () => {
         { id: "other", status: "pending" },
     ];
     assert.deepEqual(filter(results, "log"), [{ id: "other", status: "pending" }]);
-    assert.match(poll, /const active = \(\) => !context\.signal\.aborted && currentTaskRun\(taskRunsRef\.current, log\.id, run, useUserStore\.getState\(\)\.token\);/);
+    assert.match(poll, /const active = \(\) => !context\.signal\.aborted && currentTaskRun\(taskRunsRef\.current, log\.id, run, currentTaskOwnerId\(\)\);/);
 });
 
 function findNamedEffect(marker) {

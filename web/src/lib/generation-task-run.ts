@@ -1,16 +1,16 @@
 export type TaskKind = "image" | "audio" | "video" | "workflow";
-export type TaskRun = { id: string; controller: AbortController; taskId?: string; kind: TaskKind; token: string; stopping?: boolean };
+export type TaskRun = { id: string; controller: AbortController; taskId?: string; kind: TaskKind; ownerId: string; stopping?: boolean };
 let runSequence = 0;
 
-export function beginTaskRun(runs: Map<string, TaskRun>, key: string, kind: TaskKind, taskId: string, token: string): TaskRun {
+export function beginTaskRun(runs: Map<string, TaskRun>, key: string, kind: TaskKind, taskId: string, ownerId: string): TaskRun {
     runs.get(key)?.controller.abort();
-    const run = { id: String(++runSequence), controller: new AbortController(), taskId, kind, token };
+    const run = { id: String(++runSequence), controller: new AbortController(), taskId, kind, ownerId };
     runs.set(key, run);
     return run;
 }
 
-export function currentTaskRun(runs: Map<string, TaskRun>, key: string, run: TaskRun, token: string) {
-    return runs.get(key)?.id === run.id && !run.controller.signal.aborted && token === run.token;
+export function currentTaskRun(runs: Map<string, TaskRun>, key: string, run: TaskRun, ownerId: string) {
+    return runs.get(key)?.id === run.id && !run.controller.signal.aborted && ownerId === run.ownerId;
 }
 
 export function isStoppedTask(status?: string) {

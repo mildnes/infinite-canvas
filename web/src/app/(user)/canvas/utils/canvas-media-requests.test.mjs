@@ -246,6 +246,7 @@ test("停止失败可重试：真实画布回调确认后取消 run，旧回包�
     const scope = {
         CanvasNodeType, NODE_STATUS_LOADING: "loading", isCanvasImageNodeType: () => true, isStoppedTask,
         requireCanvasWriter: () => true,
+        currentCanvasOwnerId: () => "test",
         nodeTaskRunsRef: { current: runs }, startNodeTaskRun: () => run,
         useUserStore: { getState: () => ({ token: "test" }) },
         setNodes: (update) => { state.nodes = update(state.nodes); },
@@ -305,6 +306,7 @@ test("批量根节点停止同步取消主图 run，根节点与主图均不能�
     const scope = {
         CanvasNodeType, NODE_STATUS_LOADING: "loading", isStoppedTask, isCanvasImageNodeType: () => true,
         requireCanvasWriter: () => true,
+        currentCanvasOwnerId: () => "token",
         nodeTaskRunsRef: { current: runs }, startNodeTaskRun: (id, kind, taskId) => beginTaskRun(runs, id, kind, taskId, "token"),
         useUserStore: { getState: () => ({ token: "token" }) },
         setNodes: (update) => { state.nodes = update(state.nodes); },

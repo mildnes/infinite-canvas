@@ -17,11 +17,11 @@ test("视频工作台真实停止回调：停止中禁重复、失败重试、�
     const log = { id: "log", status: "生成中", createdAt: Date.now(), task: { id: "task" } };
     const state = { logs: [log], results: [{ id: "log", status: "pending" }] };
     const runs = new Map();
-    const run = beginTaskRun(runs, "log", "video", "task", "token");
+    const run = beginTaskRun(runs, "log", "video", "task", "user-1");
     let calls = 0;
     const scope = {
-        taskRunsRef: { current: runs }, beginTaskRun, isStoppedTask, videoLogTaskId: () => "task",
-        useUserStore: { getState: () => ({ token: "token" }) },
+        taskRunsRef: { current: runs }, beginTaskRun, isStoppedTask, videoLogTaskId: () => "task", currentTaskOwnerId: () => "user-1",
+        useUserStore: { getState: () => ({ token: "token", user: { id: "user-1" } }) },
         setLogs: (update) => { state.logs = update(state.logs); }, setResults: (update) => { state.results = update(state.results); },
         updateResultByLogId: (results, id, update) => results.map((item) => item.id === id ? { ...item, ...update } : item),
         finalizeGenerationLog: async (next, active) => { if (active()) state.logs = [next]; },
@@ -35,7 +35,7 @@ test("视频工作台真实停止回调：停止中禁重复、失败重试、�
     await stop(state.logs[0]);
     assert.equal(state.logs[0].status, "已停止");
     assert.equal(state.results[0].status, "cancelled");
-    assert.equal(currentTaskRun(runs, "log", run, "token"), false);
+    assert.equal(currentTaskRun(runs, "log", run, "user-1"), false);
     assert.equal(calls, 2);
 });
 
