@@ -15,14 +15,15 @@ export const project = (id, size = 0) => ({
     chatSessions: [{ id: `${id}-chat`, messages: [] }], activeChatId: `${id}-chat`,
 });
 
-export function canvasFixture({ owner = "anon", projects = [], drafts = [], disk = new Map(), idbDisk = disk, localDisk = disk, remote = [], syncEnabled = false, baseline = process.env.CANVAS_STORE_BASELINE } = {}) {
+export function canvasFixture({ owner = "anon", projects = [], drafts = [], disk = new Map(), idbDisk = disk, localDisk = disk, remote = [], syncEnabled = false, locks, baseline = process.env.CANVAS_STORE_BASELINE } = {}) {
     const user = require("zustand").create(() => ({ token: owner === "anon" ? "" : `${owner}-token`, user: owner === "anon" ? null : { id: owner }, isReady: true }));
     user.persist = { hasHydrated: () => true };
     const writes = [], removes = [], reads = [], requests = [], errors = [], timers = new Map(), modules = {};
-    let failure, removeFailure, time = 0, sequence = 0, detailGate, writeGate, localFailure, localRemoveFailure;
+    let failure, removeFailure, time = 0, sequence = 0, detailGate, listGate, syncGate, writeGate, localFailure, localRemoveFailure;
     if (projects.length || drafts.length) idbDisk.set(`${legacyKey}:${owner}`, JSON.stringify({ state: { ownerUserId: owner, projects, conflictDrafts: drafts }, version: 0 }));
     const forage = {
         config() {},
+        async keys() { return [...idbDisk.keys()]; },
         async getItem(key) { reads.push(key); return idbDisk.get(key) ?? null; },
         async setItem(key, value) {
             writes.push({ key, value, chars: typeof value === "string" ? value.length : JSON.stringify(value).length });
@@ -40,17 +41,19 @@ export function canvasFixture({ owner = "anon", projects = [], drafts = [], disk
     const setTimeout = (fn, delay = 0) => { timers.set(++sequence, { at: time + delay, fn }); return sequence; };
     const clearTimeout = id => timers.delete(id);
     const context = {
-        Promise, crypto: globalThis.crypto, console: { ...console, error() {}, warn() {} }, setTimeout, clearTimeout,
+        Promise, crypto: globalThis.crypto, navigator: { locks }, console: { ...console, error() {}, warn() {} }, setTimeout, clearTimeout,
         window: { addEventListener() {}, localStorage: {
+            get length() { return localDisk.size; },
+            key: index => [...localDisk.keys()][index] ?? null,
             getItem: key => localDisk.get(key) ?? null,
             setItem: (key, value) => { if (localFailure?.(key)) throw new Error("injected disk failure"); localDisk.set(key, value); },
             removeItem: key => { if (localRemoveFailure?.(key)) throw new Error("injected disk failure"); localDisk.delete(key); },
         } },
     };
     const api = {
-        async listCanvasProjects(token, summary) { requests.push(["list", token, summary]); return remote; },
+        async listCanvasProjects(token, summary) { requests.push(["list", token, summary]); return listGate ? await listGate : remote; },
         async getCanvasProject(token, id) { requests.push(["get", token, id]); return detailGate ? await detailGate : remote.find(p => p.id === id); },
-        async syncCanvasProjects(token, values) { requests.push(["sync", token, values]); return values; },
+        async syncCanvasProjects(token, values) { requests.push(["sync", token, values]); return syncGate ? await syncGate : values; },
         async saveCanvasProject(token, value) { requests.push(["save", token, value]); return value; },
         async deleteCanvasProjects(ids) { requests.push(["delete", ids]); },
     };
@@ -73,8 +76,10 @@ export function canvasFixture({ owner = "anon", projects = [], drafts = [], disk
     function load(relative) {
         const path = new URL(relative, import.meta.url);
         const exports = {};
-        const source = baseline && /use-canvas-store\.ts$/.test(relative)
-            ? execFileSync("git", ["show", `${baseline}:web/src/app/(user)/canvas/stores/use-canvas-store.ts`], { encoding: "utf8" })
+        const sourceRevision = /use-canvas-store\.ts$/.test(relative) ? baseline
+            : /canvas-project-storage\.ts$/.test(relative) ? process.env.CANVAS_STORAGE_BASELINE : null;
+        const source = sourceRevision
+            ? execFileSync("git", ["show", `${sourceRevision}:web/src/app/(user)/canvas/stores/${path.pathname.split("/").pop()}`], { encoding: "utf8" })
             : readFileSync(path, "utf8");
         vm.runInNewContext(ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2016, module: ts.ModuleKind.CommonJS } }).outputText, { ...context, exports, require: name => {
             if (modules[name]) return modules[name];
@@ -91,12 +96,15 @@ export function canvasFixture({ owner = "anon", projects = [], drafts = [], disk
     const exported = load("../../app/(user)/canvas/stores/use-canvas-store.ts");
     return {
         ...exported, user, disk, idbDisk, localDisk, writes, removes, reads, requests, errors, storage: modules["@/lib/localforage-storage"],
+        createProjectStorage: modules["./canvas-project-storage"].createCanvasProjectStorage,
         setFailure: fn => { failure = fn; },
         setRemoveFailure: fn => { removeFailure = fn; },
         setLocalStorageFailure: fn => { localFailure = fn; },
         setLocalStorageRemoveFailure: fn => { localRemoveFailure = fn; },
         setWriteGate: fn => { writeGate = fn; },
         detailGate: promise => { detailGate = promise; },
+        listGate: promise => { listGate = promise; },
+        syncGate: promise => { syncGate = promise; },
         switchOwner: id => user.setState({ token: id === "anon" ? "" : `${id}-token`, user: id === "anon" ? null : { id }, isReady: true }),
         clearOperations() { writes.length = removes.length = reads.length = requests.length = 0; },
         async advance(ms) {

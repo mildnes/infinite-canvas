@@ -265,6 +265,7 @@ async function reconcileCanvasProjects(
     token: string,
     remoteProjects: CanvasProject[],
     localProjects: CanvasProject[],
+    live = false,
 ) {
     const owner = currentStorageOwnerId();
     const epoch = ownerEpoch;
@@ -277,7 +278,6 @@ async function reconcileCanvasProjects(
     const missingProjects = localProjects.filter(
         (project) => isCanvasProjectHydrated(project) && !remoteById.has(project.id) && hasCanvasWriteAccess(owner, project.id),
     );
-    const existingLocalProjects = localProjects.filter((project) => remoteById.has(project.id));
     const projects = missingProjects.length
         ? await syncCanvasProjects(token, missingProjects)
             .then((syncedProjects) => mergeCanvasProjects([...remoteProjects, ...syncedProjects.map(canonicalProject)], []))
@@ -288,9 +288,21 @@ async function reconcileCanvasProjects(
         : remoteProjects;
 
     if (epoch !== ownerEpoch || owner !== currentStorageOwnerId()) return [];
-    for (const project of existingLocalProjects) {
+    const existingLocalProjects = (live ? useCanvasStore.getState().projects : localProjects).filter(project => remoteById.has(project.id));
+    for (let project of existingLocalProjects) {
+        if (live) {
+            const latest = useCanvasStore.getState().projects.find(item => item.id === project.id);
+            if (!latest) continue;
+            project = latest;
+        }
         if (!isCanvasProjectHydrated(project)) continue;
         const remote = remoteById.get(project.id);
+        if (live && remote && project.serverUpdatedAt && project.serverUpdatedAt > remote.updatedAt) {
+            const index = projects.findIndex(item => item.id === project.id);
+            if (index >= 0) projects[index] = project;
+            remoteById.set(project.id, project);
+            continue;
+        }
         if (remote && project.pendingSave && project.serverUpdatedAt === remote.updatedAt) {
             const index = projects.findIndex((item) => item.id === project.id);
             if (index >= 0) projects[index] = project;
@@ -299,9 +311,15 @@ async function reconcileCanvasProjects(
             const fullRemote = isCanvasProjectHydrated(remote) ? remote : canonicalProject({ ...await getCanvasProject(token, project.id), hydrated: true });
             if (epoch !== ownerEpoch || owner !== currentStorageOwnerId()) return [];
             if (!isCanvasProjectHydrated(fullRemote)) throw new Error("画布数据不完整，请重试");
+            if (live) {
+                const latest = useCanvasStore.getState().projects.find(item => item.id === project.id);
+                if (!latest) continue;
+                project = latest;
+            }
             const index = projects.findIndex(item => item.id === project.id);
             if (index >= 0) projects[index] = fullRemote;
-            recordSaveError(Object.assign(new Error("画布已在其他设备更新，已载入最新版本；本机修改可重试保存"), { status: 409, data: { currentProject: fullRemote } }), project);
+            remoteById.set(project.id, fullRemote);
+            if (!live) recordSaveError(Object.assign(new Error("画布已在其他设备更新，已载入最新版本；本机修改可重试保存"), { status: 409, data: { currentProject: fullRemote } }), project);
         } else if (remote && !isCanvasProjectHydrated(remote)) {
             const index = projects.findIndex(item => item.id === project.id);
             if (index >= 0) projects[index] = project.remoteUpdatedAt === remote.updatedAt
@@ -315,7 +333,47 @@ async function reconcileCanvasProjects(
         }
     }
 
-    return deferredProjects.length ? mergeCanvasProjects(projects, deferredProjects) : projects;
+    let result = deferredProjects.length ? mergeCanvasProjects(projects, deferredProjects) : projects;
+    if (live) {
+        // Fetch only conflicting canonical boards. Recheck after each await: another
+        // board may have been edited while its predecessor's detail was in flight.
+        for (;;) {
+            const conflict = useCanvasStore.getState().projects.find(project => {
+                const remote = remoteById.get(project.id);
+                return project.pendingSave && remote && (!project.serverUpdatedAt || project.serverUpdatedAt < remote.updatedAt) && !isCanvasProjectHydrated(remote);
+            });
+            if (!conflict) break;
+            const fetched = await getCanvasProject(token, conflict.id);
+            if (epoch !== ownerEpoch || owner !== currentStorageOwnerId()) return [];
+            if (!isCanvasProjectHydrated(fetched)) throw new Error("画布数据不完整，请重试");
+            remoteById.set(conflict.id, canonicalProject(fetched));
+        }
+        for (const project of useCanvasStore.getState().projects) {
+            const remote = remoteById.get(project.id);
+            if (project.pendingSave && remote && (!project.serverUpdatedAt || project.serverUpdatedAt < remote.updatedAt)) {
+                recordSaveError(Object.assign(new Error("画布已在其他设备更新，已载入最新版本；本机修改可重试保存"),
+                    { status: 409, data: { currentProject: remote } }), project);
+                result = result.map(item => item.id === project.id ? remote : item);
+            }
+        }
+        // Reconcile may await uploads or canonical conflict reads. Never publish its old
+        // snapshot over edits/new boards/deletions that happened during those awaits.
+        const latest = useCanvasStore.getState().projects;
+        const latestById = new Map(latest.map(project => [project.id, project]));
+        const originalIds = new Set(localProjects.map(project => project.id));
+        result = result.filter(project => !originalIds.has(project.id) || latestById.has(project.id));
+        result = result.map(project => {
+            const current = latestById.get(project.id);
+            if (!current || !isCanvasProjectHydrated(current)) return project;
+            if (current.serverUpdatedAt && current.serverUpdatedAt > (project.serverUpdatedAt ?? project.updatedAt)) return current;
+            if (!current.pendingSave) return project;
+            return !remoteById.has(project.id) && !project.pendingSave
+                ? { ...current, serverUpdatedAt: project.serverUpdatedAt } : current;
+        });
+        const resultIds = new Set(result.map(project => project.id));
+        result.push(...latest.filter(project => !resultIds.has(project.id)));
+    }
+    return result;
 }
 
 const canvasStorage: PersistStorage<CanvasStore> = {
@@ -648,14 +706,17 @@ export const useCanvasStore = create<CanvasStore>()(
                 const epoch = ownerEpoch;
                 accountCanvasSyncEnabled = syncEnabled;
                 if (!syncEnabled) return;
-                const localProjects = get().projects;
+                const startingIds = new Set(get().projects.map(project => project.id));
                 const requestToken = useUserStore.getState().token || token;
                 const remoteProjects = await listCanvasProjects(requestToken, true).catch((error) => { if (owner === currentStorageOwnerId()) { hydrationFailed = true; recordSaveError(error); } return null; });
                 if (!remoteProjects || epoch !== ownerEpoch || owner !== currentStorageOwnerId()) return;
+                const currentProjects = get().projects;
+                const currentIds = new Set(currentProjects.map(project => project.id));
                 const projects = await reconcileCanvasProjects(
                     requestToken,
-                    remoteProjects.map(listedProject),
-                    localProjects,
+                    remoteProjects.filter(project => !startingIds.has(project.id) || currentIds.has(project.id)).map(listedProject),
+                    currentProjects,
+                    true,
                 );
                 if (epoch !== ownerEpoch || owner !== currentStorageOwnerId()) return;
                 if (saveTimer) {

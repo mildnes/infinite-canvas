@@ -13,12 +13,15 @@ type CanvasMeta = {
     version: number;
     writtenAt?: string;
     legacyImportedFingerprint?: string;
+    deletedProjectIds?: string[];
+    deletedConflictDraftIds?: string[];
 };
 type Snapshot = { project: CanvasProject; updatedAt: string };
 const LEGACY_KEY = "infinite-canvas:canvas_store";
 const metaKey = (owner: string) => `canvas_meta:${owner}`;
 const projectKey = (owner: string, id: string) => `canvas_project:${owner}:${id}`;
 const draftKey = (owner: string, id: string) => `canvas_conflict:${owner}:${id}`;
+const deletedKey = (owner: string, id: string) => `canvas_deleted:${owner}:${id}`;
 const hashText = (text: string): string => {
     let hash = 0x811c9dc5;
     for (let index = 0; index < text.length; index += 1) {
@@ -91,6 +94,21 @@ const removeKey = async (key: string): Promise<void> => {
     // The caller must retain its retry/error path.
     if (failure) throw failure;
 };
+// The per-board records also recover an orphaned index entry on browsers without
+// Web Locks. Deletion markers are independent records, so a stale meta cannot erase them.
+const ownedDiskIds = async (prefix: string): Promise<string[]> => {
+    const keys = new Set<string>();
+    try { for (const key of await localforage.keys()) keys.add(key); } catch { /* fallback below */ }
+    if (typeof window !== "undefined") {
+        try {
+            for (let index = 0; index < window.localStorage.length; index++) {
+                const key = window.localStorage.key(index);
+                if (key) keys.add(key);
+            }
+        } catch { /* IndexedDB may still be available */ }
+    }
+    return [...keys].filter(key => key.startsWith(prefix)).map(key => key.slice(prefix.length));
+};
 
 // All calls are serialized by the canvas store's localSaveInFlight queue.
 export function createCanvasProjectStorage(canWriteProject: (owner: string, id: string) => boolean = () => true) {
@@ -157,8 +175,8 @@ export function createCanvasProjectStorage(canWriteProject: (owner: string, id: 
             catch (error) { console.warn("Canvas legacy cleanup deferred", error); }
             return fallback;
         }
-        const mergedProjects = mergeNewer(loadedProjects, state.projects || []);
-        const mergedDrafts = mergeNewer(loadedDrafts, state.conflictDrafts || []);
+        const mergedProjects = mergeNewer(loadedProjects, (state.projects || []).filter(project => !meta.deletedProjectIds?.includes(project.id)));
+        const mergedDrafts = mergeNewer(loadedDrafts, (state.conflictDrafts || []).filter(project => !meta.deletedConflictDraftIds?.includes(project.id)));
         if (sameItems(mergedProjects, loadedProjects) && sameItems(mergedDrafts, loadedDrafts)) {
             // Nothing new: the package is a stale duplicate of what the index already holds.
             try { await removeLegacy(owner); }
@@ -175,17 +193,38 @@ export function createCanvasProjectStorage(canWriteProject: (owner: string, id: 
         return current(owner) ? merged : null;
     };
 
-    const write = async (value: CanvasValue, prepare: (project: CanvasProject) => CanvasProject) => {
+    const writeUnlocked = async (value: CanvasValue, prepare: (project: CanvasProject) => CanvasProject) => {
         const { ownerUserId: owner } = value.state;
         if (!owner || !current(owner)) return;
         if (lastOwner !== owner) reset(owner);
+        const rawMeta = await readKey(metaKey(owner));
+        if (!current(owner)) return;
+        const diskMeta = rawMeta ? JSON.parse(rawMeta) as CanvasMeta : null;
+        if (diskMeta && (diskMeta.format !== 1 || diskMeta.ownerUserId !== owner)) throw new Error("画布本地索引无效");
+        const diskDeletedIds = new Set(await ownedDiskIds(deletedKey(owner, "")));
+        if (!current(owner)) return;
+        const deletedIds = new Set([...(diskMeta?.deletedProjectIds || []), ...diskDeletedIds]);
+        const deletedDraftIds = new Set(diskMeta?.deletedConflictDraftIds || []);
+        const requestedIds = new Set(value.state.projects.map(project => project.id));
+        const requestedDraftIds = new Set((value.state.conflictDrafts || []).map(project => project.id));
+        // A later conflict for the same board is a new draft, not the old cleared one.
+        for (const id of requestedDraftIds) if (!drafts.has(id)) deletedDraftIds.delete(id);
+        // An omission is a deletion only if this instance previously knew that board.
+        // Unknown ids in the latest disk index belong to another tab and must survive.
+        for (const id of projects.keys()) if (!requestedIds.has(id)) deletedIds.add(id);
+        for (const id of drafts.keys()) if (!requestedDraftIds.has(id)) deletedDraftIds.add(id);
+        for (const id of deletedIds) {
+            if (!current(owner)) return;
+            if (!diskDeletedIds.has(id)) await writeKey(deletedKey(owner, id), JSON.stringify({ id, deletedAt: new Date().toISOString() }));
+        }
         // A remote summary must neither overwrite nor delete a complete local copy.
         const nextProjects = unique(value.state.projects.flatMap(project => {
+            if (deletedIds.has(project.id)) return [];
             if (isCanvasProjectHydrated(project)) return [project];
             const previous = projects.get(project.id)?.project;
             return previous && isCanvasProjectHydrated(previous) ? [previous] : [];
         }));
-        const conflictDrafts = unique((value.state.conflictDrafts || []).filter(isCanvasProjectHydrated));
+        const conflictDrafts = unique((value.state.conflictDrafts || []).filter(project => !deletedDraftIds.has(project.id) && isCanvasProjectHydrated(project)));
         const writeItems = async (items: CanvasProject[], previous: Map<string, Snapshot>, key: typeof projectKey) => {
             for (const project of items) {
                 if (!current(owner)) return;
@@ -204,36 +243,56 @@ export function createCanvasProjectStorage(canWriteProject: (owner: string, id: 
         if (!await writeItems(nextProjects, projects, projectKey)) return;
         await writeItems(conflictDrafts, drafts, draftKey);
         if (!current(owner)) return;
-        const nextIds = new Set(nextProjects.map(project => project.id));
-        const nextDraftIds = new Set(conflictDrafts.map(project => project.id));
+        const diskProjectIds = await ownedDiskIds(projectKey(owner, ""));
+        if (!current(owner)) return;
+        const nextIds = new Set([...(diskMeta?.projectIds || []), ...diskProjectIds, ...nextProjects.map(project => project.id)].filter(id => !deletedIds.has(id)));
+        const nextDraftIds = new Set([...(diskMeta?.conflictDraftIds || []), ...conflictDrafts.map(project => project.id)].filter(id => !deletedDraftIds.has(id)));
         let previousMeta: CanvasMeta | null = null;
         try { previousMeta = metadata ? JSON.parse(metadata) as CanvasMeta : null; } catch { previousMeta = null; }
         const sameIds = (left: string[], right: string[]) => left.length === right.length && left.every((id, index) => id === right[index]);
-        const structureChanged = !sameIds(previousMeta?.projectIds || [], nextProjects.map(project => project.id))
-            || !sameIds(previousMeta?.conflictDraftIds || [], conflictDrafts.map(project => project.id));
-        const writtenAt = structureChanged || !previousMeta?.writtenAt ? new Date().toISOString() : previousMeta.writtenAt;
+        const structureChanged = !sameIds(diskMeta?.projectIds || [], [...nextIds])
+            || !sameIds(diskMeta?.conflictDraftIds || [], [...nextDraftIds])
+            || (diskMeta?.deletedProjectIds?.length || 0) !== deletedIds.size
+            || (diskMeta?.deletedConflictDraftIds?.length || 0) !== deletedDraftIds.size;
+        const writtenAt = structureChanged || !diskMeta?.writtenAt ? new Date().toISOString() : diskMeta.writtenAt;
         const nextMeta = JSON.stringify({
             format: 1,
             ownerUserId: owner,
-            projectIds: nextProjects.map(project => project.id),
-            conflictDraftIds: conflictDrafts.map(project => project.id),
+            projectIds: [...nextIds],
+            conflictDraftIds: [...nextDraftIds],
             version: value.version ?? 0,
             writtenAt,
-            legacyImportedFingerprint: pendingLegacyFingerprint || previousMeta?.legacyImportedFingerprint,
+            legacyImportedFingerprint: pendingLegacyFingerprint || diskMeta?.legacyImportedFingerprint || previousMeta?.legacyImportedFingerprint,
+            ...(deletedIds.size ? { deletedProjectIds: [...deletedIds] } : {}),
+            ...(deletedDraftIds.size ? { deletedConflictDraftIds: [...deletedDraftIds] } : {}),
         } satisfies CanvasMeta);
         // Commit the index last: an interrupted migration must still read its complete legacy value.
-        if (metadata !== nextMeta) await writeKey(metaKey(owner), nextMeta);
-        for (const id of projects.keys()) {
+        if (rawMeta !== nextMeta) await writeKey(metaKey(owner), nextMeta);
+        for (const id of deletedIds) {
             if (!current(owner)) return;
-            if (!nextIds.has(id)) await removeKey(projectKey(owner, id));
+            await removeKey(projectKey(owner, id));
         }
-        for (const id of drafts.keys()) {
+        for (const id of deletedDraftIds) {
             if (!current(owner)) return;
-            if (!nextDraftIds.has(id)) await removeKey(draftKey(owner, id));
+            await removeKey(draftKey(owner, id));
         }
         if (!current(owner)) return;
-        projects = remember(nextProjects); drafts = remember(conflictDrafts); metadata = nextMeta;
+        // Remember what this tab observed, not the union: an unseen remote addition
+        // omitted by its next save must never be mistaken for a local deletion.
+        projects = remember(unique(value.state.projects.filter(isCanvasProjectHydrated)));
+        drafts = remember(unique((value.state.conflictDrafts || []).filter(isCanvasProjectHydrated)));
+        metadata = nextMeta;
         await removeLegacy(owner);
+    };
+    const write = async (value: CanvasValue, prepare: (project: CanvasProject) => CanvasProject) => {
+        const owner = value.state.ownerUserId;
+        if (!owner || !current(owner)) return;
+        // Per-tab queues cannot serialize the shared account index across tabs.
+        if (typeof navigator !== "undefined" && navigator.locks) {
+            await navigator.locks.request(metaKey(owner), () => writeUnlocked(value, prepare));
+        } else {
+            await writeUnlocked(value, prepare);
+        }
     };
 
     return {
@@ -253,20 +312,26 @@ export function createCanvasProjectStorage(canWriteProject: (owner: string, id: 
                         for (const id of ids) {
                             if (!current(owner)) return [];
                             const raw = await readKey(key(owner, id));
-                            if (!raw) throw new Error("画布本地数据不完整，请重试");
+                            if (!raw) {
+                                if (key === projectKey && await readKey(deletedKey(owner, id))) continue;
+                                throw new Error("画布本地数据不完整，请重试");
+                            }
                             const project = JSON.parse(raw) as CanvasProject;
                             if (project.id !== id || !isCanvasProjectHydrated(project)) throw new Error("画布本地数据无效");
                             items.push(project);
                         }
                         return items;
                     };
-                    const loadedProjects = await readItems(meta.projectIds, projectKey);
-                    const conflictDrafts = await readItems(meta.conflictDraftIds, draftKey);
+                    const deletedIds = new Set([...(meta.deletedProjectIds || []), ...await ownedDiskIds(deletedKey(owner, ""))]);
+                    const projectIds = new Set([...meta.projectIds, ...await ownedDiskIds(projectKey(owner, ""))]);
+                    if (!current(owner)) return null;
+                    const loadedProjects = await readItems([...projectIds].filter(id => !deletedIds.has(id)), projectKey);
+                    const conflictDrafts = await readItems(meta.conflictDraftIds.filter(id => !meta.deletedConflictDraftIds?.includes(id)), draftKey);
                     if (!current(owner)) return null;
                     projects = remember(loadedProjects); drafts = remember(conflictDrafts); metadata = rawMeta;
                     legacyPending = Boolean(await readKey(accountStorageKey(LEGACY_KEY, owner)!));
                     if (!current(owner)) return null;
-                    if (legacyPending) return mergeLegacy(owner, loadedProjects, conflictDrafts, meta, prepare);
+                    if (legacyPending) return mergeLegacy(owner, loadedProjects, conflictDrafts, { ...meta, deletedProjectIds: [...deletedIds] }, prepare);
                     return { state: { ownerUserId: owner, projects: loadedProjects, conflictDrafts }, version: meta.version };
                 }
             } catch (error) { readError = error; }

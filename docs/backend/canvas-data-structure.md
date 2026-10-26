@@ -11,12 +11,23 @@ description: 画布本地存储、节点结构、媒体文件与清理机制
 
 当前画布项目主要保存在浏览器本地：
 
-- 画布项目 JSON：`localForage`，数据库名 `infinite-canvas`，storeName `app_state`，key 为 `infinite-canvas:canvas_store`。
+- 画布项目 JSON：`localForage`，数据库名 `infinite-canvas`，storeName `app_state`；正文键为 `canvas_project:<owner>:<id>`，账号索引键为 `canvas_meta:<owner>`，冲突草稿正文键为 `canvas_conflict:<owner>:<id>`。
 - 我的素材 JSON：`localForage`，数据库名 `infinite-canvas`，storeName `app_state`，key 为 `infinite-canvas:asset_store`。
 - 图片 Blob：单独存到 `localForage` 实例，数据库名 `infinite-canvas`，storeName `image_files`。
 - 视频等媒体 Blob：单独存到 `localForage` 实例，数据库名 `infinite-canvas`，storeName `media_files`。
 
 画布 JSON 不直接长期保存大体积 base64 图片或视频。图片节点、视频节点、助手图片和素材媒体只保存展示 URL、`storageKey` 和元信息，真实 Blob 通过 `storageKey` 读取。
+
+## 复制与保存安全不变量
+
+- **复制不继承任务归属。** 单节点副本清除批次根／子图关系和图片、视频、音频任务及结果 ID，有内容时状态为 `success`，否则为 `idle`；稳定媒体 URL 与 `storageKey` 可共享。只有同时选中根与全部子图时才保留批次结构，根／子图／主图 ID 全部映射到新副本，连线也只连接副本。原节点不变，原批次的级联删除规则不变。
+- **后台同步不得提交请求前的旧快照。** 列表返回后以最新 store 为合并基准；补传或冲突详情请求期间的新编辑、新建和删除也要保留。若远端版本比本机编辑所基于的版本更新，继续由现有 `recordSaveError` 保存本机 `conflictDrafts`，使用远端完整副本作为当前版本，不修改 CAS／409 契约。列表晚于成功保存回包时不得回滚到旧标题。任何等待后 owner／epoch 不匹配则放弃。
+- **共享账号索引保留其他窗口新增的画板。** 写入前读取最新 `canvas_meta:<owner>`；只把本实例曾见过、此次明确省略的 ID 视为删除。支持 Web Locks 的浏览器按账号串行执行读改写；画板正文成功后才提交索引。
+- **删除记录不能被陈旧索引抹掉。** 索引使用可选 `deletedProjectIds`，并保存小型独立 `canvas_deleted:<owner>:<id>` 删除记录。旧 `format: 1` 索引仍可读取；删除记录不保存节点或媒体，后续合并与旧整包导入都不得恢复这些 ID。恢复已删除画板应另存为新 ID。
+- **没有 Web Locks 时仍可找回正文。** 水合会枚举当前 owner 的正文键，补足并发覆盖索引遗漏的 ID，再排除独立删除记录；仅枚举键名，不读取其他账号的正文。陈旧写入即使最后提交，也不能使已落盘的新画板从刷新后的列表中消失，或使已删除画板复活。
+- **摘要与账号边界保持。** `hydrated: false` 不写画板正文、不上报；只写有编辑权的完整副本，原有账号切换、单写者锁、远端删除保护和保存队列保留。
+
+确定性回归入口：`web/src/app/(user)/canvas/utils/canvas-node-copy.test.mjs` 与 `web/src/lib/canvas-data-loss-regressions.test.mjs`。测试实际执行页面复制／粘贴／删除回调，以及真实 Zustand store 和分键存储；受控 Promise 覆盖同步交错，独立存储实例覆盖共享索引。设置 `CANVAS_COPY_BASELINE`、`CANVAS_STORE_BASELINE`、`CANVAS_STORAGE_BASELINE` 可从指定 Git 提交加载对应旧实现，复跑红灯证据。
 
 ## 画布项目结构
 

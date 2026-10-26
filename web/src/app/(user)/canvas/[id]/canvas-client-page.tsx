@@ -41,6 +41,7 @@ import { canvasMediaRequestPrompt, submitCanvasImageRequest, submitCanvasVideoRe
 import { GROUP_PADDING, findContainingGroupId, findGroupDropTarget, getNodeBounds, snapNodesIntoGroup } from "../utils/canvas-group";
 import { arrangeCanvasNodes, snapNodesToCanvasGrid } from "../utils/canvas-layout";
 import { prepareCanvasNodeOverwrite, shouldOverwriteCanvasNode } from "../utils/canvas-regeneration";
+import { copiedCanvasNodeMetadata } from "../utils/canvas-node-copy";
 import { App, Button, Dropdown, Modal, Slider } from "antd";
 import { isCogVideoX3Model, modelKey, supportsVideoAudioGeneration, supportsVideoFrameReferences } from "@/lib/video-model-capabilities";
 import { isMimoVoiceCloneModel } from "@/lib/mimo-tts";
@@ -1592,6 +1593,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             id,
             title: `${source.title} Copy`,
             position: { x: source.position.x + 36, y: source.position.y + 36 },
+            metadata: copiedCanvasNodeMetadata(source, [source], new Map([[source.id, id]])),
         };
 
         setNodes((prev) => [...prev, next]);
@@ -1704,12 +1706,10 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             };
         });
 
-        const pastedNodes = nextNodes.map((node) => {
-            const groupId = node.metadata?.groupId;
-            const nextGroupId = groupId ? idMap.get(groupId) : undefined;
-            if (!groupId || nextGroupId) return nextGroupId ? { ...node, metadata: { ...node.metadata, groupId: nextGroupId } } : node;
-            return { ...node, metadata: { ...node.metadata, groupId: undefined } };
-        });
+        const pastedNodes = nextNodes.map((node, index) => ({
+            ...node,
+            metadata: copiedCanvasNodeMetadata(clipboard.nodes[index], clipboard.nodes, idMap),
+        }));
 
         const nextConnections = clipboard.connections.flatMap((connection, index) => {
             const fromNodeId = idMap.get(connection.fromNodeId);
