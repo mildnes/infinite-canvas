@@ -18,3 +18,13 @@ export type CanvasExportAsset = {
     mimeType: string;
     bytes: number;
 };
+
+export type CanvasExportMissingAsset = {
+    storageKey: string;
+    reason: string;
+};
+
+export type CanvasExportResult = {
+    cloudAssetCount: number;
+    missing: CanvasExportMissingAsset[];
+};

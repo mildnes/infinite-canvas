@@ -580,14 +580,17 @@ export const useCanvasStore = create<CanvasStore>()(
                 const token = useUserStore.getState().token;
                 const epoch = ownerEpoch;
                 if (!owner || get().ownerUserId !== owner) return null;
-                if (!token) {
-                    if (!refresh) return null;
+                const loadLocalProject = async () => {
                     const stored = await projectStorage.read(owner, persistentProject);
                     if (owner !== currentStorageOwnerId() || epoch !== ownerEpoch) return null;
                     const latest = stored?.state.projects.find(item => item.id === id);
                     if (!latest || !isCanvasProjectHydrated(latest)) return null;
                     set((state) => ({ projects: state.projects.map(item => item.id === id ? latest : item) }));
                     return latest;
+                };
+                if (!token || !accountCanvasSyncEnabled) {
+                    if (!refresh) return null;
+                    return loadLocalProject();
                 }
                 const pending = projectLoadsInFlight.get(id);
                 if (pending && !refresh) return pending;
@@ -595,7 +598,12 @@ export const useCanvasStore = create<CanvasStore>()(
                 const request = (async () => {
                     const fetched = await getCanvasProject(token, id);
                     if (!current() || deletingProjectIds.has(id)) return null;
-                    if (!fetched || fetched.id !== id || !isCanvasProjectHydrated(fetched)) throw new Error("画布数据不完整，请重试");
+                    if (!fetched || fetched.id !== id || !isCanvasProjectHydrated(fetched)) {
+                        const local = await loadLocalProject();
+                        if (!current()) return null;
+                        if (local) return local;
+                        throw new Error("画布数据不完整，请重试");
+                    }
                     const latest = get().projects.find(item => item.id === id);
                     if (latest !== project && latest?.pendingSave && isCanvasProjectHydrated(latest)) return latest;
                     const complete = canonicalProject({ ...fetched, hydrated: true });

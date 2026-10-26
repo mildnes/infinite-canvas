@@ -51,7 +51,14 @@ export function arrangeCanvasNodes(nodes: CanvasNodeData[]): CanvasNodeData[] {
                 .filter((node) => node.metadata?.groupId === group.id && !positions.has(node.id))
                 .forEach((node) => positions.set(node.id, { x: node.position.x + dx, y: node.position.y + dy }));
         });
-    targets
+    offsetBatchChildren(nodes, positions);
+    return nodes.map((node) => (positions.has(node.id) ? { ...node, position: positions.get(node.id)! } : node));
+}
+
+// 让批次根节点移动时，其声明的 batchChildIds 与指向它的 batchRootId 子节点按同一
+// 位移跟随，保证批次内部相对位置不变。工具栏与 Agent 整理共用此逻辑。
+export function offsetBatchChildren(nodes: CanvasNodeData[], positions: Map<string, Position>): void {
+    nodes
         .filter((node) => node.metadata?.isBatchRoot || (node.metadata?.batchChildIds?.length ?? 0) > 0)
         .forEach((root) => {
             const target = positions.get(root.id);
@@ -64,5 +71,4 @@ export function arrangeCanvasNodes(nodes: CanvasNodeData[]): CanvasNodeData[] {
                 .filter((node) => !positions.has(node.id) && (declared.has(node.id) || node.metadata?.batchRootId === root.id))
                 .forEach((node) => positions.set(node.id, { x: node.position.x + dx, y: node.position.y + dy }));
         });
-    return nodes.map((node) => (positions.has(node.id) ? { ...node, position: positions.get(node.id)! } : node));
 }

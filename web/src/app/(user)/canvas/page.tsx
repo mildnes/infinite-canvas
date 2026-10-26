@@ -6,14 +6,12 @@ import { App, Button } from "antd";
 import { Download, FileUp, Plus } from "lucide-react";
 
 import { readZip } from "@/lib/zip";
-import { setMediaBlob } from "@/services/file-storage";
-import { setImageBlob } from "@/services/image-storage";
 import { CanvasDeleteProjectsDialog } from "./components/canvas-delete-projects-dialog";
 import { CanvasProjectCard } from "./components/canvas-project-card";
 import type { CanvasExportFile } from "./export-types";
 import { useCanvasStore } from "./stores/use-canvas-store";
 import { useCanvasUiStore } from "./stores/use-canvas-ui-store";
-import { exportCanvasProjects } from "./utils/canvas-export";
+import { countCanvasCloudAssets, exportCanvasProjects, restoreCanvasExportAsset } from "./utils/canvas-export";
 
 export default function CanvasPage() {
     const { message } = App.useApp();
@@ -39,7 +37,20 @@ export default function CanvasPage() {
             const complete = await Promise.all(selectedIds.map(id => loadProject(id)));
             if (owner !== useCanvasStore.getState().ownerUserId) return;
             if (complete.some(project => !project)) throw new Error("部分画布无法加载，请重试");
-            await exportCanvasProjects(complete.filter((project): project is NonNullable<typeof project> => Boolean(project)), `无限画布-${selectedIds.length}个项目`);
+            const loaded = complete.filter((project): project is NonNullable<typeof project> => Boolean(project));
+            const cloudAssetCount = countCanvasCloudAssets(loaded);
+            const loadingKey = "canvas-export";
+            if (cloudAssetCount) message.loading({ content: `正在导出 ${cloudAssetCount} 个云端素材...`, key: loadingKey, duration: 0 });
+            try {
+                const result = await exportCanvasProjects(loaded, `无限画布-${selectedIds.length}个项目`);
+                if (result.missing.length) {
+                    message.warning(
+                        `${result.missing.length} 个素材导出失败：${result.missing.map((item) => `${item.storageKey}（${item.reason}）`).join("、")}`,
+                    );
+                }
+            } finally {
+                message.destroy(loadingKey);
+            }
         } catch (error) { message.error(error instanceof Error ? error.message : "画布导出失败，请重试"); }
     };
     const importCanvas = async (file?: File) => {
@@ -54,8 +65,7 @@ export default function CanvasPage() {
                     project.files.map(async (item) => {
                         const blob = zip.get(item.path);
                         if (!blob) return;
-                        const typedBlob = blob.type ? blob : blob.slice(0, blob.size, item.mimeType);
-                        await (item.storageKey.startsWith("image:") ? setImageBlob(item.storageKey, typedBlob) : setMediaBlob(item.storageKey, typedBlob));
+                        await restoreCanvasExportAsset(item, blob);
                     }),
                 ),
             );

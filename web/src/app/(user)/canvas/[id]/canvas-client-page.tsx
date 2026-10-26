@@ -39,7 +39,7 @@ import { canUploadCanvasMediaToServer, mergeCanvasMediaRepair, nodeNeedsCloudUpl
 import { applyCameraPrompt } from "../utils/canvas-camera";
 import { canvasMediaRequestPrompt, submitCanvasImageRequest, submitCanvasVideoRequest } from "../utils/canvas-media-requests";
 import { GROUP_PADDING, findContainingGroupId, findGroupDropTarget, getNodeBounds, snapNodesIntoGroup } from "../utils/canvas-group";
-import { arrangeCanvasNodes, snapNodesToCanvasGrid } from "../utils/canvas-layout";
+import { arrangeCanvasNodes, offsetBatchChildren, snapNodesToCanvasGrid } from "../utils/canvas-layout";
 import { prepareCanvasNodeOverwrite, shouldOverwriteCanvasNode } from "../utils/canvas-regeneration";
 import { copiedCanvasNodeMetadata } from "../utils/canvas-node-copy";
 import { App, Button, Dropdown, Modal, Slider } from "antd";
@@ -3416,10 +3416,21 @@ const generateAngleNode = useCallback(
             setRunningNodeId(nodeId);
             const sourceTextContent = sourceNode?.type === CanvasNodeType.Text ? sourceNode.metadata?.content?.trim() || "" : "";
             const editingTextNode = mode === "text" && Boolean(sourceTextContent);
-            const generationContext = await hydrateNodeGenerationContext(
-                buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, editingTextNode ? `请根据要求修改以下文本。\n\n原文：\n${sourceTextContent}\n\n修改要求：\n${prompt}` : prompt),
-            );
-            if (!requireCanvasWriter()) return;
+            let generationContext: NodeGenerationContext;
+            try {
+                generationContext = await hydrateNodeGenerationContext(
+                    buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, editingTextNode ? `请根据要求修改以下文本。\n\n原文：\n${sourceTextContent}\n\n修改要求：\n${prompt}` : prompt),
+                );
+            } catch (error) {
+                const reason = error instanceof Error && error.message ? error.message : "参考图读取失败";
+                message.error(`生成准备失败：${reason}`);
+                setRunningNodeId(null);
+                return;
+            }
+            if (!requireCanvasWriter()) {
+                setRunningNodeId(null);
+                return;
+            }
             const effectivePrompt = generationContext.prompt.trim();
             const requestPrompt =
                 mode === "image" && isPanoramaNodeType(sourceNode?.type)
@@ -4246,6 +4257,7 @@ const generateAngleNode = useCallback(
                                 .filter((node) => node.metadata?.groupId === group.id && !positions.has(node.id))
                                 .forEach((node) => positions.set(node.id, { x: node.position.x + offsetX, y: node.position.y + offsetY }));
                         });
+                    offsetBatchChildren(nodesRef.current, positions);
                     const nextNodes = nodesRef.current.map((node) => (positions.has(node.id) ? { ...node, position: positions.get(node.id)! } : node));
                     commitNodes(nextNodes);
                     return { ok: true, arrangedNodeIds: targetNodes.map((node) => node.id) };
