@@ -27,7 +27,8 @@ test("助手面板取消已选节点接回画布选择集合", () => {
     assert.match(page, /onSelectNodeIds=\{setSelectedNodeIds\}/);
     const assistantCall = page.match(/<CanvasAssistantPanel[\s\S]*?\/>/)?.[0] || "";
     assert.doesNotMatch(assistantCall, /\bcanvasId=/);
-    assert.match(assistant, /if \(selectedNodeIds\.has\(id\)\) onSelectNodeIds\(new Set\(Array\.from\(selectedNodeIds\)\.filter\(\(nodeId\) => nodeId !== id\)\)\)/);
+    assert.match(assistant, /if \(reason === "user"\) deselectNodeIds\(removedSelectedIds\)/);
+    assert.match(assistant, /onRemoveReference=\{\(id\) => \{[\s\S]*?removeComposerReference\(id\)/);
 });
 
 test("编辑请求 nonce 每次点击递增，其他节点保持 0", () => {

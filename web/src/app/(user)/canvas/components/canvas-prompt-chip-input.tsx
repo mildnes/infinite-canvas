@@ -19,7 +19,7 @@ type CanvasPromptChipInputProps = {
     references?: CanvasResourceReference[];
     pendingReferences?: CanvasResourceReference[];
     activeReferenceIds?: string[];
-    onReferenceIdsChange?: (nodeIds: string[]) => void;
+    onReferenceIdsChange?: (nodeIds: string[], reason: "prune" | "user") => void;
     skills?: CanvasAgentSkillReference[];
     onSelectSkill?: (skill: CanvasAgentSkillReference) => void;
     onChange: (value: string) => void;
@@ -45,9 +45,19 @@ export function CanvasPromptChipInput({ value, references = [], pendingReference
     const [skillMention, setSkillMention] = useState<MentionState | null>(null);
     const [activeIndex, setActiveIndex] = useState(0);
     const [imagePreview, setImagePreview] = useState<string | null>(null);
+    const onChangeRef = useRef(onChange);
+    const onReferenceIdsChangeRef = useRef(onReferenceIdsChange);
+    useLayoutEffect(() => {
+        onChangeRef.current = onChange;
+        onReferenceIdsChangeRef.current = onReferenceIdsChange;
+    });
     const activeReferences = useMemo(() => references.filter((reference) => reference.active), [references]);
     const referenceByLabel = useMemo(() => new Map(activeReferences.map((reference) => [reference.label, reference])), [activeReferences]);
     const activeLabels = useMemo(() => Array.from(new Set(activeReferences.map((reference) => reference.label))).sort((left, right) => right.length - left.length), [activeReferences]);
+    const activeReferenceKey = useMemo(
+        () => activeReferenceIds ? Array.from(new Set(activeReferenceIds)).sort().join("\u0000") : null,
+        [activeReferenceIds],
+    );
     const tokens = useMemo(() => parsePromptTokens(value, activeLabels), [activeLabels, value]);
     const candidates = useMemo(() => {
         if (!mention) return [];
@@ -65,16 +75,16 @@ export function CanvasPromptChipInput({ value, references = [], pendingReference
     useLayoutEffect(() => {
         const editor = editorRef.current;
         if (!editor) return;
-        if (activeReferenceIds) {
-            const allowedNodeIds = new Set(activeReferenceIds);
+        if (activeReferenceKey !== null) {
+            const allowedNodeIds = new Set(activeReferenceKey ? activeReferenceKey.split("\u0000") : []);
             const staleChips = Array.from(editor.querySelectorAll<HTMLElement>("[data-ref-node-id]"))
                 .filter((chip) => !chip.dataset.refNodeId || !allowedNodeIds.has(chip.dataset.refNodeId));
             if (staleChips.length) {
                 staleChips.forEach(removeReferenceChip);
                 const nextValue = serializePromptEditor(editor);
                 lastEmittedRef.current = nextValue;
-                onChange(nextValue);
-                onReferenceIdsChange?.(referenceIdsFromEditor(editor));
+                onChangeRef.current(nextValue);
+                onReferenceIdsChangeRef.current?.(referenceIdsFromEditor(editor), "prune");
                 return;
             }
         }
@@ -90,7 +100,7 @@ export function CanvasPromptChipInput({ value, references = [], pendingReference
             else editor.append(document.createTextNode(token.label));
         });
         lastEmittedRef.current = value;
-    }, [activeReferenceIds, onChange, onReferenceIdsChange, referenceByLabel, theme, tokens, value]);
+    }, [activeReferenceKey, referenceByLabel, theme, tokens, value]);
 
     useLayoutEffect(() => {
         const editor = editorRef.current;
@@ -102,7 +112,7 @@ export function CanvasPromptChipInput({ value, references = [], pendingReference
     const emitChange = (nextValue: string) => {
         lastEmittedRef.current = nextValue;
         onChange(nextValue);
-        if (editorRef.current) onReferenceIdsChange?.(referenceIdsFromEditor(editorRef.current));
+        if (editorRef.current) onReferenceIdsChangeRef.current?.(referenceIdsFromEditor(editorRef.current), "user");
     };
 
     const commitPendingReferences = () => {

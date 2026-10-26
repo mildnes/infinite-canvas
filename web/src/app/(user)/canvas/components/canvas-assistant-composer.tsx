@@ -33,7 +33,7 @@ export type CanvasAssistantComposerProps = {
     agentConfig: CanvasAgentConfig;
     onAgentConfigChange: (patch: Partial<CanvasAgentConfig>) => void;
     onPromptChange: (prompt: string) => void;
-    onReferenceIdsChange?: (ids: string[]) => void;
+    onReferenceIdsChange?: (ids: string[], reason: "prune" | "user") => void;
     onSubmit: (prompt?: string, referenceIds?: string[]) => void | Promise<void>;
     onStop?: () => void;
     onOpenUpload: () => void;

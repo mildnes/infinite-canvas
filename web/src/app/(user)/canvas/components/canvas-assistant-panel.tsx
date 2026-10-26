@@ -80,6 +80,10 @@ type PendingDeleteConfirmation = {
     resolve: (confirmed: boolean) => void;
 };
 
+function hasSameNodeIds(left: ReadonlySet<string>, right: ReadonlySet<string>) {
+    return left.size === right.size && Array.from(left).every((id) => right.has(id));
+}
+
 export function CanvasAssistantPanel({
     readOnly = false,
     canWrite,
@@ -117,6 +121,10 @@ export function CanvasAssistantPanel({
     const consumedInitialRequestRef = useRef<typeof initialRequest>(null);
     const consumedReferenceNodeClickVersionRef = useRef(0);
     const pendingDeleteRef = useRef<PendingDeleteConfirmation | null>(null);
+    const pendingDeselectRef = useRef<{ base: Set<string>; remove: Set<string> } | null>(null);
+    const deselectScheduledRef = useRef(false);
+    const selectedNodeIdsRef = useRef(selectedNodeIds);
+    selectedNodeIdsRef.current = selectedNodeIds;
     const messageListRef = useRef<HTMLDivElement>(null);
     const [view, setView] = useState<"chat" | "history">("chat");
     const [prompt, setPrompt] = useState("");
@@ -261,14 +269,31 @@ export function CanvasAssistantPanel({
     };
     const removeComposerReference = (id: string) => {
         removeComposerReferences([id]);
-        if (selectedNodeIds.has(id)) onSelectNodeIds(new Set(Array.from(selectedNodeIds).filter((nodeId) => nodeId !== id)));
+        deselectNodeIds([id]);
     };
     const deselectNodeIds = (ids: string[]) => {
         if (!ids.length || !selectedNodeIds.size) return;
-        const removeIds = new Set(ids);
-        const nextSelectedIds = new Set(Array.from(selectedNodeIds).filter((id) => !removeIds.has(id)));
-        if (nextSelectedIds.size !== selectedNodeIds.size) onSelectNodeIds(nextSelectedIds);
+        if (!pendingDeselectRef.current) {
+            pendingDeselectRef.current = { base: new Set(selectedNodeIds), remove: new Set() };
+        }
+        ids.forEach((id) => pendingDeselectRef.current?.remove.add(id));
+        if (deselectScheduledRef.current) return;
+        deselectScheduledRef.current = true;
+        queueMicrotask(() => {
+            const pending = pendingDeselectRef.current;
+            pendingDeselectRef.current = null;
+            deselectScheduledRef.current = false;
+            if (!pending) return;
+            const currentSelectedIds = selectedNodeIdsRef.current;
+            const nextSelectedIds = new Set(Array.from(currentSelectedIds).filter((id) => !pending.remove.has(id)));
+            if (!hasSameNodeIds(nextSelectedIds, currentSelectedIds)) onSelectNodeIds(nextSelectedIds);
+        });
     };
+
+    useEffect(() => () => {
+        pendingDeselectRef.current = null;
+        deselectScheduledRef.current = false;
+    }, []);
 
     useEffect(() => {
         setRemovedReferenceIds(new Set());
@@ -668,12 +693,12 @@ export function CanvasAssistantPanel({
                             agentConfig={agentConfig}
                             onAgentConfigChange={onAgentConfigChange}
                             onPromptChange={setPrompt}
-                            onReferenceIdsChange={(ids) => {
+                            onReferenceIdsChange={(ids, reason: "prune" | "user" = "user") => {
                                 consumedReferenceNodeClickVersionRef.current = referenceNodeClick.version;
                                 const knownReferenceIds = new Set([...composerReferenceIds, ...pendingReferences.map((reference) => reference.nodeId)]);
                                 const removedSelectedIds = Array.from(knownReferenceIds).filter((id) => selectedReferenceNodeIds.has(id) && !ids.includes(id));
                                 removeComposerReferences(removedSelectedIds);
-                                deselectNodeIds(removedSelectedIds);
+                                if (reason === "user") deselectNodeIds(removedSelectedIds);
                                 setComposerReferenceIds(ids);
                             }}
                             onSubmit={submit}
