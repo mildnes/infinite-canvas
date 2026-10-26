@@ -42,6 +42,7 @@ import { GROUP_PADDING, findContainingGroupId, findGroupDropTarget, getNodeBound
 import { arrangeCanvasNodes, offsetBatchChildren, snapNodesToCanvasGrid } from "../utils/canvas-layout";
 import { prepareCanvasNodeOverwrite, shouldOverwriteCanvasNode } from "../utils/canvas-regeneration";
 import { copiedCanvasNodeMetadata } from "../utils/canvas-node-copy";
+import { audioExtension, downloadSelectedCanvasNodes, imageExtension, prepareCanvasNodeDownloadSelection } from "../utils/canvas-selected-download";
 import { App, Button, Dropdown, Modal, Slider } from "antd";
 import { isCogVideoX3Model, modelKey, supportsVideoAudioGeneration, supportsVideoFrameReferences } from "@/lib/video-model-capabilities";
 import { isMimoVoiceCloneModel } from "@/lib/mimo-tts";
@@ -2643,6 +2644,41 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         saveAs(node.metadata.content, `canvas-${node.type}-${node.id}.${node.type === CanvasNodeType.Video ? "mp4" : node.type === CanvasNodeType.Audio ? audioExtension(node.metadata.mimeType) : imageExtension(node.metadata.content, node.metadata.mimeType)}`);
     }, []);
 
+    const downloadSelectedNodes = useCallback(async () => {
+        const selection = prepareCanvasNodeDownloadSelection(nodesRef.current, selectedNodeIds);
+        if (!selection.selectedCount) return;
+        if (!selection.downloadableNodes.length) {
+            message.warning(`已跳过 ${selection.skippedCount} 个不支持或没有素材的节点`);
+            return;
+        }
+        const downloadableCount = selection.downloadableNodes.length;
+        if (downloadableCount > 50) message.warning(`将打包 ${downloadableCount} 个文件，可能较慢`);
+        const hideLoading = message.loading(`正在打包 ${downloadableCount} 个文件...`, 0);
+        try {
+            const result = await downloadSelectedCanvasNodes(selection, {
+                token: useUserStore.getState().token,
+                projectTitle: currentProjectTitle || "画板",
+            });
+            if (!result.downloadedCount) {
+                const failureDetails = result.failures.map((failure) => `${failure.title}：${failure.reason}`).join("；");
+                const skipped = result.skippedCount ? `；另跳过 ${result.skippedCount} 个不支持或没有素材的节点` : "";
+                message.error(`全部 ${result.failures.length} 个素材下载失败${failureDetails ? `：${failureDetails}` : ""}${skipped}`);
+                return;
+            }
+            const warnings = [
+                result.failures.length
+                    ? `失败 ${result.failures.length} 个：${result.failures.map((failure) => `${failure.title}：${failure.reason}`).join("；")}`
+                    : "",
+                result.skippedCount ? `已跳过 ${result.skippedCount} 个不支持或没有素材的节点` : "",
+            ].filter(Boolean);
+            if (warnings.length) message.warning(`已下载 ${result.downloadedCount} 个文件。${warnings.join("。")}`, 8);
+        } catch (error) {
+            message.error(error instanceof Error ? `批量下载失败：${error.message}` : "批量下载失败");
+        } finally {
+            hideLoading();
+        }
+    }, [currentProjectTitle, message, selectedNodeIds]);
+
     const disconnectNodeReference = useCallback((fromNodeId: string, toNodeId: string) => {
         setConnections((prev) => prev.filter((connection) => connection.fromNodeId !== fromNodeId || connection.toNodeId !== toNodeId));
     }, []);
@@ -5135,6 +5171,7 @@ const generateAngleNode = useCallback(
                     onRedo={redoCanvas}
                     onUpload={() => handleUploadRequest()}
                     onUploadBoardToCloud={() => void uploadBoardMediaToCloud()}
+                    onDownloadSelected={downloadSelectedNodes}
                     onDelete={() => deleteNodes(new Set(selectedNodeIds))}
                     onClear={() => setClearConfirmOpen(true)}
                     onCanvasToolChange={setCanvasTool}
@@ -5847,20 +5884,6 @@ function Shortcut({ keys, value }: { keys: string[]; value: string }) {
             <span className="text-right text-sm opacity-55">{value}</span>
         </div>
     );
-}
-
-function imageExtension(dataUrl: string, mimeType?: string) {
-    const extension = mimeType?.toLowerCase().match(/^image[/]([^;+]+)/)?.[1] || dataUrl.match(/^data:image[/]([^;]+)/)?.[1] || dataUrl.match(/image[/]([^;]+)/)?.[1] || "png";
-    return extension === "jpeg" ? "jpg" : extension;
-}
-
-function audioExtension(mimeType?: string) {
-    if (mimeType?.includes("wav")) return "wav";
-    if (mimeType?.includes("opus")) return "opus";
-    if (mimeType?.includes("aac")) return "aac";
-    if (mimeType?.includes("flac")) return "flac";
-    if (mimeType?.includes("pcm")) return "pcm";
-    return "mp3";
 }
 
 function imageMetadata(image: UploadedImage): CanvasNodeMetadata {
