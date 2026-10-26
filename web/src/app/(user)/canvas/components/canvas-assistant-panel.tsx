@@ -253,6 +253,22 @@ export function CanvasAssistantPanel({
         setPendingDelete(null);
         pending.resolve(confirmed);
     };
+    const removeComposerReferences = (ids: string[]) => {
+        if (!ids.length) return;
+        const removeIds = new Set(ids);
+        setComposerReferenceIds((current) => current.filter((id) => !removeIds.has(id)));
+        setRemovedReferenceIds((previous) => new Set([...previous, ...removeIds]));
+    };
+    const removeComposerReference = (id: string) => {
+        removeComposerReferences([id]);
+        if (selectedNodeIds.has(id)) onSelectNodeIds(new Set(Array.from(selectedNodeIds).filter((nodeId) => nodeId !== id)));
+    };
+    const deselectNodeIds = (ids: string[]) => {
+        if (!ids.length || !selectedNodeIds.size) return;
+        const removeIds = new Set(ids);
+        const nextSelectedIds = new Set(Array.from(selectedNodeIds).filter((id) => !removeIds.has(id)));
+        if (nextSelectedIds.size !== selectedNodeIds.size) onSelectNodeIds(nextSelectedIds);
+    };
 
     useEffect(() => {
         setRemovedReferenceIds(new Set());
@@ -654,8 +670,10 @@ export function CanvasAssistantPanel({
                             onPromptChange={setPrompt}
                             onReferenceIdsChange={(ids) => {
                                 consumedReferenceNodeClickVersionRef.current = referenceNodeClick.version;
-                                const removedSelectedIds = composerReferenceIds.filter((id) => selectedReferenceNodeIds.has(id) && !ids.includes(id));
-                                if (removedSelectedIds.length) setRemovedReferenceIds((previous) => new Set([...previous, ...removedSelectedIds]));
+                                const knownReferenceIds = new Set([...composerReferenceIds, ...pendingReferences.map((reference) => reference.nodeId)]);
+                                const removedSelectedIds = Array.from(knownReferenceIds).filter((id) => selectedReferenceNodeIds.has(id) && !ids.includes(id));
+                                removeComposerReferences(removedSelectedIds);
+                                deselectNodeIds(removedSelectedIds);
                                 setComposerReferenceIds(ids);
                             }}
                             onSubmit={submit}
@@ -666,9 +684,7 @@ export function CanvasAssistantPanel({
                             onOpenUpload={onOpenUpload}
                             onOpenAssets={onOpenAssets}
                             onRemoveReference={(id) => {
-                                setComposerReferenceIds((current) => current.filter((nodeId) => nodeId !== id));
-                                setRemovedReferenceIds((previous) => new Set(previous).add(id));
-                                if (selectedNodeIds.has(id)) onSelectNodeIds(new Set(Array.from(selectedNodeIds).filter((nodeId) => nodeId !== id)));
+                                removeComposerReference(id);
                             }}
                             onPasteImage={onPasteImage}
                         />}

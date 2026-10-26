@@ -122,6 +122,7 @@ export function CanvasAssistantComposer({
                     value={prompt}
                     references={promptReferences}
                     pendingReferences={pendingReferences}
+                    activeReferenceIds={submitReferenceIds}
                     skills={skills}
                     onSelectSkill={onSelectSkill}
                     onChange={onPromptChange}

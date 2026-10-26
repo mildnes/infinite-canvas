@@ -18,6 +18,7 @@ type CanvasPromptChipInputProps = {
     value: string;
     references?: CanvasResourceReference[];
     pendingReferences?: CanvasResourceReference[];
+    activeReferenceIds?: string[];
     onReferenceIdsChange?: (nodeIds: string[]) => void;
     skills?: CanvasAgentSkillReference[];
     onSelectSkill?: (skill: CanvasAgentSkillReference) => void;
@@ -34,7 +35,7 @@ type MentionState = {
     rect: DOMRect | null;
 };
 
-export function CanvasPromptChipInput({ value, references = [], pendingReferences = [], onReferenceIdsChange, skills = [], onSelectSkill, onChange, onSubmit, onPasteImage, className, style, placeholder }: CanvasPromptChipInputProps) {
+export function CanvasPromptChipInput({ value, references = [], pendingReferences = [], activeReferenceIds, onReferenceIdsChange, skills = [], onSelectSkill, onChange, onSubmit, onPasteImage, className, style, placeholder }: CanvasPromptChipInputProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const editorRef = useRef<HTMLDivElement>(null);
     const caretRangeRef = useRef<Range | null>(null);
@@ -64,6 +65,19 @@ export function CanvasPromptChipInput({ value, references = [], pendingReference
     useLayoutEffect(() => {
         const editor = editorRef.current;
         if (!editor) return;
+        if (activeReferenceIds) {
+            const allowedNodeIds = new Set(activeReferenceIds);
+            const staleChips = Array.from(editor.querySelectorAll<HTMLElement>("[data-ref-node-id]"))
+                .filter((chip) => !chip.dataset.refNodeId || !allowedNodeIds.has(chip.dataset.refNodeId));
+            if (staleChips.length) {
+                staleChips.forEach(removeReferenceChip);
+                const nextValue = serializePromptEditor(editor);
+                lastEmittedRef.current = nextValue;
+                onChange(nextValue);
+                onReferenceIdsChange?.(referenceIdsFromEditor(editor));
+                return;
+            }
+        }
         if (document.activeElement === editor && value === lastEmittedRef.current) return;
         editor.textContent = "";
         tokens.forEach((token) => {
@@ -76,7 +90,7 @@ export function CanvasPromptChipInput({ value, references = [], pendingReference
             else editor.append(document.createTextNode(token.label));
         });
         lastEmittedRef.current = value;
-    }, [referenceByLabel, theme, tokens, value]);
+    }, [activeReferenceIds, onChange, onReferenceIdsChange, referenceByLabel, theme, tokens, value]);
 
     useLayoutEffect(() => {
         const editor = editorRef.current;
