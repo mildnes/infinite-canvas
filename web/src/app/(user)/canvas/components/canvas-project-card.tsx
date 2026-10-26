@@ -6,7 +6,7 @@ import { App, Button, Input } from "antd";
 
 import { useCanvasStore, type CanvasProject } from "../stores/use-canvas-store";
 import { useCanvasUiStore } from "../stores/use-canvas-ui-store";
-import { exportCanvasProjects } from "../utils/canvas-export";
+import { countCanvasCloudAssets, exportCanvasProjects } from "../utils/canvas-export";
 
 export function CanvasProjectCard({ project }: { project: CanvasProject }) {
     const { message } = App.useApp();
@@ -33,10 +33,20 @@ export function CanvasProjectCard({ project }: { project: CanvasProject }) {
         } catch (error) { message.error(error instanceof Error ? error.message : "画布加载失败，请重试"); }
     };
     const exportProject = async () => {
+        const loadingKey = "canvas-export";
         try {
             const complete = await loadProject(project.id);
-            if (complete) await exportCanvasProjects([complete], complete.title || "无限画布");
+            if (!complete) return;
+            const cloudAssetCount = countCanvasCloudAssets([complete]);
+            if (cloudAssetCount) message.loading({ content: `正在导出 ${cloudAssetCount} 个云端素材...`, key: loadingKey, duration: 0 });
+            const result = await exportCanvasProjects([complete], complete.title || "无限画布");
+            if (result.missing.length) {
+                message.warning(
+                    `${result.missing.length} 个素材导出失败：${result.missing.map((item) => `${item.storageKey}（${item.reason}）`).join("、")}`,
+                );
+            }
         } catch (error) { message.error(error instanceof Error ? error.message : "画布导出失败，请重试"); }
+        finally { message.destroy(loadingKey); }
     };
 
     return (
