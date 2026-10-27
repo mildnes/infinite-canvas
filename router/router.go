@@ -123,6 +123,13 @@ func New() *gin.Engine {
 	v1.GET("/canvas/projects/:id", func(c *gin.Context) {
 		handler.UserCanvasProject(c.Writer, c.Request, c.Param("id"))
 	})
+	v1.POST("/canvas/projects/:id/export", func(c *gin.Context) {
+		handler.CreateCanvasProjectExport(c.Writer, c.Request, c.Param("id"))
+	})
+	// Browser-native downloads use a signed single-use ticket, not an auth header.
+	api.GET("/v1/canvas/projects/:id/export", func(c *gin.Context) {
+		handler.DownloadCanvasProjectExport(c.Writer, c.Request, c.Param("id"))
+	})
 	v1.POST("/canvas/projects", gin.WrapF(handler.SaveUserCanvasProject))
 	v1.POST("/canvas/projects/sync", gin.WrapF(handler.SyncUserCanvasProjects))
 	v1.POST("/canvas/projects/delete", gin.WrapF(handler.DeleteUserCanvasProjects))

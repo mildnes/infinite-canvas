@@ -7,6 +7,7 @@ import { App, Button, Input } from "antd";
 import { useCanvasStore, type CanvasProject } from "../stores/use-canvas-store";
 import { useCanvasUiStore } from "../stores/use-canvas-ui-store";
 import { countCanvasCloudAssets, exportCanvasProjects } from "../utils/canvas-export";
+import { useCanvasProjectExport } from "../hooks/use-canvas-project-export";
 
 export function CanvasProjectCard({ project }: { project: CanvasProject }) {
     const { message } = App.useApp();
@@ -21,6 +22,7 @@ export function CanvasProjectCard({ project }: { project: CanvasProject }) {
     const stopEditing = useCanvasUiStore((state) => state.stopEditingProject);
     const toggleSelected = useCanvasUiStore((state) => state.toggleSelectedProjectId);
     const setDeleteIds = useCanvasUiStore((state) => state.setDeleteProjectIds);
+    const tryServerExport = useCanvasProjectExport();
     const editing = editingId === project.id;
     const selected = selectedIds.includes(project.id);
     const open = () => router.push(`/canvas/${project.id}`);
@@ -35,6 +37,7 @@ export function CanvasProjectCard({ project }: { project: CanvasProject }) {
     const exportProject = async () => {
         const loadingKey = "canvas-export";
         try {
+            if (await tryServerExport([project.id])) return;
             const complete = await loadProject(project.id);
             if (!complete) return;
             const cloudAssetCount = countCanvasCloudAssets([complete]);

@@ -617,11 +617,31 @@ func RefreshStorageCapacityScheduler() {
 
 // DownloadStorageObject 下载存储对象内容。
 func DownloadStorageObject(id string, rangeHeader string) (DownloadedStorageObject, error) {
+	return downloadStorageObject(context.Background(), id, rangeHeader, "")
+}
+
+// DownloadOwnedStorageObject uses the export request's cancellation and verifies
+// ownership before opening any local or remote body. FileContent stays unchanged.
+func DownloadOwnedStorageObject(ctx context.Context, id, rangeHeader string) (DownloadedStorageObject, error) {
+	user, ok := UserFromContext(ctx)
+	if !ok || user.ID == "" {
+		return DownloadedStorageObject{}, errors.New("请先登录")
+	}
+	return downloadStorageObject(ctx, id, rangeHeader, user.ID)
+}
+
+func downloadStorageObject(ctx context.Context, id, rangeHeader, ownerID string) (DownloadedStorageObject, error) {
+	if err := ctx.Err(); err != nil {
+		return DownloadedStorageObject{}, err
+	}
 	object, err := repository.GetStorageObject(id)
 	if err != nil {
 		return DownloadedStorageObject{}, err
 	}
 	if object.DeletedAt != "" {
+		return DownloadedStorageObject{}, gorm.ErrRecordNotFound
+	}
+	if ownerID != "" && object.CreatedBy != ownerID {
 		return DownloadedStorageObject{}, gorm.ErrRecordNotFound
 	}
 	if object.ProviderID == generatedMediaProviderID {
@@ -637,8 +657,11 @@ func DownloadStorageObject(id string, rangeHeader string) (DownloadedStorageObje
 	if settings, loadErr := repository.GetSettings(); loadErr == nil {
 		providers = append(providers, normalizePrivateStorageSetting(settings.Private.Storage).Providers...)
 	}
-	if stream, readErr := readStorageObjectStreamFromProviders(object, providers, rangeHeader); readErr == nil && stream.Body != nil {
+	if stream, readErr := readStorageObjectStreamFromProviders(object, providers, rangeHeader, ctx); readErr == nil && stream.Body != nil {
 		return downloadedStorageObject(object, stream), nil
+	}
+	if err := ctx.Err(); err != nil {
+		return DownloadedStorageObject{}, err
 	}
 	if local, readErr := generatedMediaFallback(object, rangeHeader); readErr == nil {
 		return local, nil
@@ -648,7 +671,7 @@ func DownloadStorageObject(id string, rangeHeader string) (DownloadedStorageObje
 	}
 
 	if object.PublicURL != "" {
-		request, err := http.NewRequest(http.MethodGet, object.PublicURL, nil)
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, object.PublicURL, nil)
 		if err != nil {
 			return DownloadedStorageObject{}, err
 		}
@@ -688,7 +711,11 @@ func storageDownloadStatus(status int) bool {
 	return status >= 200 && status < 300 || status == http.StatusRequestedRangeNotSatisfiable
 }
 
-func readStorageObjectStreamFromProviders(object model.StorageObject, providers []model.StorageProvider, rangeHeader string) (storageObjectStream, error) {
+func readStorageObjectStreamFromProviders(object model.StorageObject, providers []model.StorageProvider, rangeHeader string, contexts ...context.Context) (storageObjectStream, error) {
+	ctx := context.Background()
+	if len(contexts) > 0 {
+		ctx = contexts[0]
+	}
 	tried := map[string]bool{}
 	ordered := make([]model.StorageProvider, 0, len(providers))
 	if provider, ok := findStorageProviderForObject(object, providers); ok {
@@ -697,6 +724,9 @@ func readStorageObjectStreamFromProviders(object model.StorageObject, providers 
 	ordered = append(ordered, providers...)
 	var lastErr error
 	for _, provider := range ordered {
+		if err := ctx.Err(); err != nil {
+			return storageObjectStream{}, err
+		}
 		if !provider.Enabled || !storageProviderConfigured(provider) {
 			continue
 		}
@@ -712,9 +742,9 @@ func readStorageObjectStreamFromProviders(object model.StorageObject, providers 
 		var err error
 		switch provider.Type {
 		case model.StorageProviderTypeS3:
-			stream, err = getS3ObjectStream(provider, object.ObjectKey, rangeHeader)
+			stream, err = getS3ObjectStream(provider, object.ObjectKey, rangeHeader, ctx)
 		case model.StorageProviderTypeWebDAV:
-			stream, err = getWebDAVObjectStream(provider, object.ObjectKey, object.Bytes, rangeHeader)
+			stream, err = getWebDAVObjectStream(provider, object.ObjectKey, object.Bytes, rangeHeader, ctx)
 		default:
 			continue
 		}
@@ -894,13 +924,16 @@ func putS3Object(provider model.StorageProvider, objectKey string, contentType s
 }
 
 // getS3ObjectStream 从 S3 兼容存储流式读取对象。
-func getS3ObjectStream(provider model.StorageProvider, objectKey string, rangeHeader string) (storageObjectStream, error) {
+func getS3ObjectStream(provider model.StorageProvider, objectKey string, rangeHeader string, contexts ...context.Context) (storageObjectStream, error) {
 	request, err := newS3Request(http.MethodGet, provider, objectKey, nil, 0)
 	if err != nil {
 		return storageObjectStream{}, err
 	}
 	if strings.TrimSpace(rangeHeader) != "" {
 		request.Header.Set("Range", rangeHeader)
+	}
+	if len(contexts) > 0 {
+		request = request.WithContext(contexts[0])
 	}
 	response, err := SafeProxyHTTPClient().Do(request)
 	if err != nil {

@@ -9,6 +9,7 @@ import { readZip } from "@/lib/zip";
 import { CanvasDeleteProjectsDialog } from "./components/canvas-delete-projects-dialog";
 import { CanvasProjectCard } from "./components/canvas-project-card";
 import type { CanvasExportFile } from "./export-types";
+import { useCanvasProjectExport } from "./hooks/use-canvas-project-export";
 import { useCanvasStore } from "./stores/use-canvas-store";
 import { useCanvasUiStore } from "./stores/use-canvas-ui-store";
 import { countCanvasCloudAssets, exportCanvasProjects, restoreCanvasExportAsset } from "./utils/canvas-export";
@@ -26,6 +27,7 @@ export default function CanvasPage() {
     const retrySaves = useCanvasStore((state) => state.retrySaves);
     const selectedIds = useCanvasUiStore((state) => state.selectedProjectIds);
     const setDeleteIds = useCanvasUiStore((state) => state.setDeleteProjectIds);
+    const tryServerExport = useCanvasProjectExport();
 
     const enterProject = (id: string) => {
         router.push(`/canvas/${id}`);
@@ -33,6 +35,7 @@ export default function CanvasPage() {
     const createAndEnter = () => enterProject(createProject(`无限画布 ${projects.length + 1}`));
     const exportSelected = async () => {
         try {
+            if (await tryServerExport(selectedIds)) return;
             const owner = useCanvasStore.getState().ownerUserId;
             const complete = await Promise.all(selectedIds.map(id => loadProject(id)));
             if (owner !== useCanvasStore.getState().ownerUserId) return;

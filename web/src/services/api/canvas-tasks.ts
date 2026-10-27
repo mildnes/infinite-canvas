@@ -13,6 +13,14 @@ export function getCanvasProject(token: string, id: string) {
     return apiGet<CanvasProject>("/api/v1/canvas/projects/" + encodeURIComponent(id), undefined, token);
 }
 
+export function createCanvasProjectExportTicket(token: string, id: string) {
+    return apiPost<{ url: string; expiresAt: string }>(
+        "/api/v1/canvas/projects/" + encodeURIComponent(id) + "/export",
+        {},
+        token,
+    );
+}
+
 export async function saveCanvasProject(
     token: string,
     project: CanvasProject,

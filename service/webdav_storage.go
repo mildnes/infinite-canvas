@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -64,10 +65,14 @@ func putWebDAVObject(provider model.StorageProvider, objectKey string, data []by
 	return client.Write(remotePath, data, 0o644)
 }
 
-func getWebDAVObjectStream(provider model.StorageProvider, objectKey string, size int64, rangeHeader string) (storageObjectStream, error) {
+func getWebDAVObjectStream(provider model.StorageProvider, objectKey string, size int64, rangeHeader string, contexts ...context.Context) (storageObjectStream, error) {
 	client, err := newWebDAVClient(provider)
 	if err != nil {
 		return storageObjectStream{}, err
+	}
+	if len(contexts) > 0 {
+		status := 0
+		client.SetTransport(mediaContextTransport{contexts[0], webDAVStorageTransport(provider), &status})
 	}
 	remotePath, err := cleanStoragePath(objectKey)
 	if err != nil {

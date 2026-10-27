@@ -30,8 +30,6 @@ description: 当前项目后续值得处理的事项
 
 ## 画板导出
 
-- [ ] 服务端流式打包导出（**2026-10-26 已排期，交 codex 实现**；方案已定：一次性票据 `POST /export` 拿 URL + `GET /export?ticket=` 原生下载，ZIP 内文件名按 objectId）：当前导出完全在浏览器完成——`GET /api/files/<id>/content` 逐个把原图拉进内存，再由前端 `createZip` 拼成 Blob。实测「新浪篮球之夜」画板有 178 个云端素材、合计 1.33 GB，全并发下载加内存组装，峰值 2.6 GB 以上，大画板必然崩溃。计划新增服务端导出接口：流式从对象存储读文件直写 zip（`archive/zip` 直接写 ResponseWriter），不落盘、不整体缓冲；必须做归属校验（只能导出本人画板与可读对象），支持客户端中断与超时，文件名按画板与节点标题生成。前端改为下载该接口链接。**部署前置**：NPM 反代 `proxy_read_timeout` 需从 60 秒调到 600 秒（Hermes 负责）。
-
 - [x] 单画板卡片导出补缺失提示：已与列表页对齐（`509ddd7`）。卡片导出现在先按 `countCanvasCloudAssets` 提示「正在导出 N 个云端素材...」，导出后检查 `result.missing` 并用 `message.warning` 列出失败素材与原因，`finally` 清理 loading。守卫见 `web/src/lib/canvas-export-card-warning.test.mjs`（旧实现 4/4 红）。
 
 ## 前端类型检查后续（独立任务）
