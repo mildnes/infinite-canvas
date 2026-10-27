@@ -13,8 +13,15 @@ description: 当前版本已实现但仍需人工验证的变更项
 - [流式] 服务端逐个读取原对象直写 ZIP，不落临时文件、不整体缓冲；不设 `Content-Length`，不二次 gzip。客户端取消会关闭当前读取流并停止后续对象，单次导出最长 10 分钟；中途读取不完整的条目在 `missing.json` 标为失败，不作为完整素材使用。
 - [兼容] 游客保持浏览器导出；票据端点 404／501 或连接失败时提示「已使用兼容模式导出」并走原路径，401／403 等明确拒绝不降级。有未同步修改时先尝试既有保存，仍未同步则使用本地兼容导出；同账号 JWT 轮换用新 token，切号丢弃迟到票据。不改 `canvas-export.ts`、原缺失告警测试和导入格式。
 - [本机验证] 路由测试已验证 178 个合成对象全部导出且逐一 SHA-256 一致、无素材仅 `projects.json`、票据鉴权与他人物件 0 次读取；服务层流式用例验证取消当前流后不再打开后续对象、写入失败立即中止、读取不完整写 `missing.json` 后继续后续素材，178×8 MiB 合成导出仅分配约 8.8 MB、单次读取上限 32 KiB。真实 Go 路由产物已由前端 `readZip`＋`importCanvas` 还原。前端定向 14/14、全量 102 文件 665 项、`tsc` 零诊断、`go test ./...` 15 包全绿、`go test -race ./service/...` 通过；不等同于生产 1.33 GB／容器 RSS 验收。
-- [ ] Hermes 验收：真实大画板导出随机抽 5 个对象对比 SHA-256；对比容器导出前后及过程峰值 RSS；断开下载后确认服务端数秒内停止后续读取；注入他人对象／404 后核对 `missing.json`；使用现有导入入口重新打开 ZIP。
-- [部署前置] 由 Hermes 将 NPM 反代 `proxy_read_timeout` 调至 600 秒。本轮不修改反代、不部署、不操作生产数据。
+- [x] Hermes 验收（2026-10-27 实测通过，隔离容器 + 生产双环境）：
+  - **大画板**：真实「新浪篮球之夜」178 个云端素材 → ZIP **1,423,844,800 B**、**22.0s**、条目 179（178 素材 + projects.json）。
+  - **内存**：导出前 90.5 MiB → 导出后 148.5 MiB（+58 MiB，与 1.42 GB 无关，确认真流式）；服务层合成用例 178×8 MiB 仅分配 8.8 MB。
+  - **SHA-256**：生产导出「心流快手」**7/7 个素材**的 SHA-256 与 `storage_objects.sha256` 一致、字节数一致（超出抽查 5 个的要求）。
+  - **中断**：读 1 MB 后主动关闭连接 → 服务端日志 `canvas_export interrupted project=HL7wLTQaZK0Pf8xXkVv5e err=context canceled`，立即停止。
+  - **越权与票据**：不存在画板 404；票据换 projectID 403；无票据 403；同一票据首次 200、复用 **403**（一次性）。
+  - **生产双路径**：内网 `127.0.0.1:30101` 200 / 21,059,059 B / 0.3s；公网 `hh.910321.xyz:4443`（经 NPM）200 / 同字节 / 0.4s，`Content-Type: application/zip`、`Content-Disposition: attachment; filename*=utf-8''<画板名>-<时间>.zip`、chunked、no-store。
+  - **仍未验证**：注入他人对象后 `missing.json` 的实机表现（本人画板中无他人对象样本）、用现有导入入口重新打开导出的 ZIP（需浏览器）。
+- [部署前置·已完成 2026-10-27] NPM 已为 `hh.910321.xyz`（`68.conf`）新增专用 location `~ ^/api/v1/canvas/projects/[^/]+/export$`：`proxy_buffering off`（关键，避免 1.42 GB 缓冲到 NPM 磁盘）、`proxy_read_timeout/proxy_send_timeout 900s`、`Cache-Control: no-store`。同时写入 NPM 数据库 `advanced_config`（界面保存不丢）与渲染后的 `68.conf`，`nginx -s reload` 平滑生效；已验证命中（响应带 no-store）且 `/canvas`、API 鉴权回归正常。备份：`/root/npm/database.sqlite.bak-20261027-export`。生产已部署 `9b7b403`。
 
 ## 框选节点时 Agent 面板保持挂载
 
