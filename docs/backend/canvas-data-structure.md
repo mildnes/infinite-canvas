@@ -29,6 +29,8 @@ description: 画布本地存储、节点结构、媒体文件与清理机制
 
 确定性回归入口：`web/src/app/(user)/canvas/utils/canvas-node-copy.test.mjs` 与 `web/src/lib/canvas-data-loss-regressions.test.mjs`。测试实际执行页面复制／粘贴／删除回调，以及真实 Zustand store 和分键存储；受控 Promise 覆盖同步交错，独立存储实例覆盖共享索引。设置 `CANVAS_COPY_BASELINE`、`CANVAS_STORE_BASELINE`、`CANVAS_STORAGE_BASELINE` 可从指定 Git 提交加载对应旧实现，复跑红灯证据。
 
+保存会话身份（账号 vs JWT）、多窗口单写者锁、引用清理与画布选中的单向同步、批量下载命名规则见 [画布保存会话、多窗口写权与引用同步不变量](canvas-save-session-invariants.md)。
+
 ## 画布项目结构
 
 每个画布项目是一个 `CanvasProject`：

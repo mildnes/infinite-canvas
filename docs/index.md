@@ -22,6 +22,8 @@
 - [画布图片预览副本](backend/canvas-image-previews.md)
 - [后端数据库说明](backend/backend-database.md)
 - [画布数据结构](backend/canvas-data-structure.md)
+- [画布图片结果持久化不变量](backend/canvas-image-result-invariants.md)
+- [画布保存会话、多窗口写权与引用同步不变量](backend/canvas-save-session-invariants.md)
 - [ComfyUI 视频工作流网关计划](plans/comfyui-video-bridge.md)
 
 ## 商务合作

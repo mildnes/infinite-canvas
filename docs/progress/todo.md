@@ -32,7 +32,7 @@ description: 当前项目后续值得处理的事项
 
 - [ ] 服务端流式打包导出（新功能，不与缺陷修复混做）：当前导出完全在浏览器完成——`GET /api/files/<id>/content` 逐个把原图拉进内存，再由前端 `createZip` 拼成 Blob。实测「新浪篮球之夜」画板有 178 个云端素材、合计 1.33 GB，全并发下载加内存组装，峰值 2.6 GB 以上，大画板必然崩溃。计划新增服务端导出接口：流式从对象存储读文件直写 zip（`archive/zip` 直接写 ResponseWriter），不落盘、不整体缓冲；必须做归属校验（只能导出本人画板与可读对象），支持客户端中断与超时，文件名按画板与节点标题生成。前端改为下载该接口链接。
 
-- [ ] 单画板卡片导出补缺失提示：列表页多选导出已接 `result.missing` 并弹 `message.warning`，但 `canvas-project-card.tsx` 的卡片导出直接 `await exportCanvasProjects(...)` 丢掉了返回值，云端素材下载失败时用户无感知。与列表页对齐即可。
+- [x] 单画板卡片导出补缺失提示：已与列表页对齐（`509ddd7`）。卡片导出现在先按 `countCanvasCloudAssets` 提示「正在导出 N 个云端素材...」，导出后检查 `result.missing` 并用 `message.warning` 列出失败素材与原因，`finally` 清理 loading。守卫见 `web/src/lib/canvas-export-card-warning.test.mjs`（旧实现 4/4 红）。
 
 ## 前端类型检查后续（独立任务）
 
