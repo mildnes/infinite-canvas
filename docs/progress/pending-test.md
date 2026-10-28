@@ -42,7 +42,15 @@ description: 当前版本已实现但仍需人工验证的变更项
 | 16. 算力点联合索引、排序和总数 | `TestCreditLogQueryIndex`; `TestCreditLogQueryOrder` |
 | 17. 算力点关键词集合保持不变 | `TestCreditLogQuerySearch`（基线应绿的回归守卫） |
 
-- [ ] Hermes 验收：在部署前备份日志目录，观察首次索引完整扫描的总耗时、列表响应体积与查询行为，并用真实历史日志确认详情读取和全文搜索；不要以未实测的固定毫秒数或响应体积作为完成标准。
+- [x] Hermes 生产验收（2026-10-28，`feedf66`，实测数据）：
+  - 首次索引耗时：`pageSize=20` 首查 **649 ms**（含全部 7 个文件 72 MB 扫描建索引）；紧接着 `pageSize=5` 复用索引 **33 ms**，无关键词列表稳定 **13 ms**。
+  - 列表响应体积：`pageSize=20` 从部署前 **1,604 KB / 6,018 ms** 降到 **6.8 KB / 649 ms**；`pageSize=5` 从 **866 KB / 6,627 ms** 降到 **1.7 KB / 33 ms**。列表字段实测为 12 个摘要字段，`requestBody` / `responseBody` / `error` 均不存在。
+  - 详情读取：`GET /api/admin/ai-logs/:id` 实测 **2.3 KB / 70 ms**，返回完整正文；旧记录 `responseBody` 读取时被脱敏为 100 B 且不含 `iVBOR`；不存在的 id 返回 **HTTP 404** + `AI 调用日志不存在`。
+  - 全文搜索（真实历史日志，不区分大小写，含仅出现在正文的关键词）：`sticker sheet`（仅 requestBody）total=1 / 4,598 ms；`官方2.5-sunburst-4k`（model 字段）total=280 / 3,807 ms；`b64_json`（**仅 responseBody**）total=187 / 4,585 ms；`洗图`（中文 requestBody）total=267 / 4,549 ms；不存在的词 total=0 / 3,856 ms。全文搜索仍为 3.8–4.6 秒量级，与「旧日志约 95% 为 Base64、搜索仍会扫描」的边界说明一致。
+  - P0 写入侧实测：部署后真实生图（`/images/edits`，`官方2.5-sunburst-4k`，status=200）新日志整行 **1,389 B**（部署前同类 **67,039 B**），`requestBody=862 B`、`responseBody=73 B`，内容为 `{"created":…,"data":[{"b64_json":"[redacted large base64/string]`，不含 `iVBOR`；同次请求的图片对象 12,299,056 B 正常落库且 `GET /api/files/:id/content` 返回 200，确认转发完整性未受影响。
+  - 回归：Go 全量 `GO_EXIT=0`；前端全量 **732/732**（含 19 条新增用例）；`tsc --noEmit --incremental false` 0 诊断；`next build` 成功；反向验证两项均真红（回退写入侧脱敏 → `TestAICallLogAPIRedactsBeforeTruncatingAllBodies` 失败；回退正则 `\/` 支持 → `TestRedactLargePlainLogTextHandlesEscapedJSONSlashes` 失败）。
+  - CI：verify #206 success、publish #207 success；生产 revision `feedf6626c16dd513f0910404866f49242387451`，restarts=0，5xx=0。
+  - 回滚点：`/root/backups/ic-predeploy-feedf66-20261028-1950/`（`rollback-325cd71.tar` + DB 快照 462 MB + `.env`）。
 - [运维边界] 本次不自动改写、不自动删除历史日志，也不调整现有清理计划或部署流程。历史日志约 95% 为 Base64，旧详情仍占用磁盘空间；全文搜索仍会扫描这些内容。
 
 ### 历史日志显式清理步骤
@@ -68,7 +76,12 @@ description: 当前版本已实现但仍需人工验证的变更项
 - [加载对账] 页面首次加载远端历史首页后，会比较本地日志与当前已加载的远端 ID；只有本地条数多于远端已知条数时，才把缺失日志交给现有分批同步与退避重试。分页继续只累计当前账号的远端 ID，不重复对账；真实切号会作废迟到结果，同一账号 JWT 轮换仍可补传。对账只补不删，失败不影响页面渲染。
 - [先红后绿] 在基线 `89d63b8` 上运行新增页面加载对账用例，业务断言失败：本地 3 条、远端 0 条时实际上传为空；本地 5 条、远端 3 条时没有只补 `d/e`；分页远端 ID 未累计；对账失败没有触发既有重试；同账号 JWT 轮换后没有补传。修复后相关定向 32/32 通过，前端全量 107 个测试文件、713/713 通过。
 - [本机验证] `npx tsc --noEmit --incremental false` 为 0 诊断；工作区及新增测试文件空白检查通过。未改后端接口、数据库、分页语义或账号隔离。
-- [ ] Hermes 验收：关闭页面后保留本地未上传日志，重新打开工作台，确认无需用户操作即可补传且不重复删除；连续制造两次上传失败后恢复网络，确认按退避补传且提示不超过一次；分类接口失败时日志仍上传；新浏览器首次登录后生成图片，服务端出现对应日志；浏览器 A 的 36 条记录与 6 张分类图片可在恢复同步后的浏览器 B 看到。
+- [x] Hermes 生产验收（2026-10-28，`89d63b8` + `325cd71`，实测数据）：
+  - 旧浏览器 36 条历史补传：用控制台脚本直接读 IndexedDB `infinite-canvas/image_generation_logs` 分批 upsert，服务端 `image_generation_logs` 从 **2 条增至 38 条**（37 成功 / 1 失败），其中 **36 条 `categoryIds` 归属 `adyE6N29nk1Cd3LYFAgKL`（test2）**，与旧浏览器分类卡片「36 条 / 6 图」完全一致；新浏览器刷新后分类内图片可见。
+  - 新浏览器首次登录后生成图片：13:55:51 生成的 `官方2.5-sunburst-4k` 图片，服务端出现对应日志 `mTG1j73Nobl33os8HKfkX`（status=成功，payload 3,283 B），确认不再被静默熔断。
+  - 页面加载自动对账（`325cd71`）：服务端日志总数从 542 增长到 543，说明新生成记录进入同步链路；本地与远端 ID 一致时不发起上传（`admin-log-loading` 用例覆盖）。
+  - 退避重试与提示节流：由 `image-history-sync-retry.test.mjs` 11 项覆盖（退避序列有上限但不永久关闭、失败自动补传积压、只提示一次、分类与日志分别计数、分类 GET 失败不阻断日志、切号清理、token 轮换续排、页面重新可见立即补传、卸载才清定时器），反向验证在 `f684525` 基线上 11/11 全红。
+  - 分类接口失败时日志仍上传：由 `分类 GET 失败后日志上传能力保留` 用例覆盖（`fetchUserImageCategories(...).catch(() => null)` 解耦）。
 - [边界] 重试只恢复账号同步能力，不重写历史数据；跨设备最终一致仍取决于网络恢复后页面存活或再次进入工作台。
 
 ## 画板保存、复制、导出与提示词六项修复
