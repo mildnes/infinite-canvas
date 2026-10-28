@@ -35,14 +35,14 @@ test("连线显示开关只控制持久连线、不阻止新建连线", () => {
 });
 
 test("网格吸附开关持久化并在拖拽结束后只吸附本次移动节点", () => {
-    assert.ok(/const \[snapToGrid, setSnapToGrid\] = useState\(false\)/.test(page));
-    assert.ok(/setSnapToGrid\(project\.snapToGrid \?\? false\)/.test(page));
+    assert.ok(/const \[snapToGrid, setSnapToGrid\] = useState\(true\)/.test(page));
+    assert.ok(/setSnapToGrid\(project\.snapToGrid \?\? true\)/.test(page));
     assert.ok(/import \{[^}]*snapNodesToCanvasGrid[^}]*\} from "\.\.\/utils\/canvas-layout"/.test(page));
     assert.ok(/snapToGridRef\.current \? snapNodesToCanvasGrid\(finalNodes, movedIds\) : finalNodes/.test(page));
     assert.ok(/snapToGrid=\{snapToGrid\}/.test(page));
     assert.ok(/onSnapToGridChange=\{setSnapToGrid\}/.test(page));
-    assert.ok(/snapToGrid:\s*false/.test(store));
-    assert.ok(/snapToGrid:\s*source\.snapToGrid \?\? false/.test(store));
+    assert.ok(/snapToGrid:\s*true/.test(store));
+    assert.ok(/snapToGrid:\s*source\.snapToGrid \?\? true/.test(store));
     assert.ok(/网格吸附/.test(toolbar));
     assert.ok(/checked=\{snapToGrid\}/.test(toolbar));
 });

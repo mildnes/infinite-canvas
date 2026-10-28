@@ -426,9 +426,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const [runningNodeId, setRunningNodeId] = useState<string | null>(null);
     const [isMiniMapOpen, setIsMiniMapOpen] = useState(false);
     const [backgroundMode, setBackgroundMode] = useState<CanvasBackgroundMode>("lines");
-    const [showImageInfo, setShowImageInfo] = useState(false);
+    const [showImageInfo, setShowImageInfo] = useState(true);
     const [showConnections, setShowConnections] = useState(true);
-    const [snapToGrid, setSnapToGrid] = useState(false);
+    const [snapToGrid, setSnapToGrid] = useState(true);
     const [sidePanel, setSidePanel] = useState(() => DEFAULT_CANVAS_SIDE_PANEL);
     const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
@@ -769,9 +769,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 setActiveChatId(project.activeChatId || null);
                 setAgentConfig(project.agentConfig || null);
                 setBackgroundMode(project.backgroundMode);
-                setShowImageInfo(project.showImageInfo || false);
+                setShowImageInfo(project.showImageInfo ?? true);
                 setShowConnections(project.showConnections ?? true);
-                setSnapToGrid(project.snapToGrid ?? false);
+                setSnapToGrid(project.snapToGrid ?? true);
                 setViewport(project.viewport);
                 setSidePanel(project.sidePanel || DEFAULT_CANVAS_SIDE_PANEL);
                 const restoredAgentPanel = project.agentPanel || DEFAULT_CANVAS_AGENT_PANEL;
@@ -786,7 +786,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     nodes: restoredNodes,
                     connections: project.connections,
                     backgroundMode: project.backgroundMode,
-                    showImageInfo: project.showImageInfo || false,
+                    showImageInfo: project.showImageInfo ?? true,
                     showConnections: project.showConnections ?? true,
                 };
                 setHistoryState({ canUndo: false, canRedo: false });

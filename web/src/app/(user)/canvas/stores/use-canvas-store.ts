@@ -138,7 +138,7 @@ function listedProject(project: CanvasProjectSummary | CanvasProject): CanvasPro
     return {
         ...project, hydrated: false, nodes: [], connections: [], chatSessions: [],
         activeChatId: null, agentConfig: null, autoTitlePending: false,
-        backgroundMode: "lines", showImageInfo: false, showConnections: true, snapToGrid: false,
+        backgroundMode: "lines", showImageInfo: true, showConnections: true, snapToGrid: true,
         viewport: initialViewport, sidePanel: DEFAULT_CANVAS_SIDE_PANEL, agentPanel: DEFAULT_CANVAS_AGENT_PANEL,
     };
 }
@@ -530,9 +530,9 @@ export const useCanvasStore = create<CanvasStore>()(
                     autoTitlePending: true,
                     pendingAgentRequest: options?.pendingAgentRequest,
                     backgroundMode: "lines",
-                    showImageInfo: false,
+                    showImageInfo: true,
                     showConnections: true,
-                    snapToGrid: false,
+                    snapToGrid: true,
                     viewport: initialViewport,
                     sidePanel: DEFAULT_CANVAS_SIDE_PANEL,
                     agentPanel: options?.pendingAgentRequest ? { ...DEFAULT_CANVAS_AGENT_PANEL, open: true } : DEFAULT_CANVAS_AGENT_PANEL,
@@ -558,9 +558,9 @@ export const useCanvasStore = create<CanvasStore>()(
                     agentConfig: source.agentConfig || null,
                     autoTitlePending: false,
                     backgroundMode: source.backgroundMode || "lines",
-                    showImageInfo: source.showImageInfo || false,
+                    showImageInfo: source.showImageInfo ?? true,
                     showConnections: source.showConnections ?? true,
-                    snapToGrid: source.snapToGrid ?? false,
+                    snapToGrid: source.snapToGrid ?? true,
                     viewport: source.viewport || initialViewport,
                     sidePanel: source.sidePanel || DEFAULT_CANVAS_SIDE_PANEL,
                     agentPanel: source.agentPanel || DEFAULT_CANVAS_AGENT_PANEL,
