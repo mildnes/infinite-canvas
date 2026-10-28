@@ -103,7 +103,7 @@ function submissionScope(extra = {}) {
     let target = { image, model: "original-model", channelMode: "remote", channelId: "original-channel", quality: "high", size: "1536x1024", open: true };
     const scope = {
         token: "owner", effectiveConfig: config, maskEditTarget: target, IMAGE_MASK_EDIT_PROMPT_PREFIX,
-        useUserStore: { getState: () => ({ token: "owner" }) },
+        useUserStore: { getState: () => ({ token: "owner", user: { id: "owner" } }) },
         buildRequestSnapshot: (options) => ({
             text: options.promptText, requestConfig: { ...config, ...options.configOverride },
             displayConfig: { ...config, ...options.configOverride, count: String(options.taskCount) },
@@ -206,7 +206,8 @@ test("重绘复用持久任务链路，新增日志带当前分类与账号，�
         buildLog: callback("buildLog", { nanoid: () => `new-${++sequence}`, formatLogTime: () => "time" }),
         imageLogTaskId: (log) => log.task.id,
         createCanvasImageTask: async (...args) => { requests.push(args); return { id: "new-task", status: "queued" }; },
-        accountHistorySyncEnabledRef: { current: true }, saveLogChainRef: { current: Promise.resolve() },
+        historySyncRef: { current: { owner: "owner", failures: 0, timer: null, warnedAt: 0, running: false } },
+        saveLogChainRef: { current: Promise.resolve() },
         readStoredLogs: async () => saved, setLogs: (logs) => { saved = plain(logs); },
         categories: [{ id: "active-category", name: "当前分类" }],
         imageLogIdentityKeys: (log) => [log.id], dedupeGenerationLogs: (logs) => logs,
@@ -217,6 +218,12 @@ test("重绘复用持久任务链路，新增日志带当前分类与账号，�
         syncedImageCategoriesRef: { current: { token: "owner", state: {} } },
         sameImageCategoryState: () => true,
         message: { success: () => {}, warning: assert.fail },
+        clearTimeout: () => {},
+        Date,
+        IMAGE_HISTORY_SYNC_WARNING_INTERVAL_MS: 60000,
+        IMAGE_HISTORY_SYNC_FAILURE_HINT: "sync failed",
+        scheduleImageHistorySyncRetry: assert.fail,
+        retryImageHistorySync: async () => {},
     };
     scope.persistImageHistory = callback("persistImageHistory", scope);
     scope.saveLog = callback("saveLog", scope);

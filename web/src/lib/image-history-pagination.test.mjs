@@ -29,7 +29,7 @@ test("首屏只请求40条摘要，有加载更多入口，回写使用upsert", 
     assert.match(source, /fetchImageGenerationLogsPage<GenerationLog>\(token, 40, cursor\)/);
     assert.doesNotMatch(source, /fetchImageGenerationLogs<GenerationLog>/);
     assert.match(source, /加载更多/);
-    assert.match(source, /upsertImageGenerationLogs\(token,/);
+    assert.match(source, /upsertImageGenerationLogs\(ownerToken,/);
 });
 
 function pageCallback(name, scope) {
@@ -74,8 +74,9 @@ test("摘要回写前补详情，保留没有下发的 originalUrl 与其它 tas
     const inline = "data:image/png;base64,not-yet-verified";
     const requests = [];
     const persist = pageCallback("persistImageHistory", {
-        token: "owner", accountHistorySyncEnabledRef: { current: true },
-        useUserStore: { getState: () => ({ token: "owner" }) },
+        token: "owner",
+        historySyncRef: { current: { owner: "owner", failures: 0, timer: null, warnedAt: 0, running: false } },
+        useUserStore: { getState: () => ({ token: "owner", user: { id: "owner" } }) },
         fetchImageGenerationLog: async () => ({ id: "log", prompt: "完整原文", references: [], task: { id: "task", originalUrl: inline, response_body: "保留详情" } }),
         serializeLog: (log) => log,
         upsertImageGenerationLogs: async (...args) => { requests.push(args); },
@@ -85,6 +86,13 @@ test("摘要回写前补详情，保留没有下发的 originalUrl 与其它 tas
         sameImageCategoryState: () => true,
         syncStoredImageCategories: async (_, state) => state,
         setCategories: () => {},
+        message: { warning: assert.fail },
+        clearTimeout: () => {},
+        Date,
+        IMAGE_HISTORY_SYNC_WARNING_INTERVAL_MS: 60000,
+        IMAGE_HISTORY_SYNC_FAILURE_HINT: "sync failed",
+        scheduleImageHistorySyncRetry: assert.fail,
+        retryImageHistorySync: async () => {},
     });
     await persist([{ id: "log", summaryOnly: true, prompt: "", categoryIds: ["new"], task: { id: "task", progress: 100 } }], []);
     assert.equal(requests.length, 1);

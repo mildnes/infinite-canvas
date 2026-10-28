@@ -140,6 +140,23 @@ const RESULT_VIEW_MODE_KEY = "infinite-canvas:image-result-view-mode";
 const IMAGE_TASK_POLL_INTERVAL_MS = 10000;
 const WORKFLOW_BUTTON_POSITION_KEY = "infinite-canvas:workflow-button-position";
 const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
+const IMAGE_HISTORY_SYNC_RETRY_DELAYS_MS = [5000, 15000, 60000, 300000];
+const IMAGE_HISTORY_SYNC_WARNING_INTERVAL_MS = 60000;
+const IMAGE_HISTORY_SYNC_FAILURE_HINT = "历史记录已保存在本机，同步到账号失败，其他设备暂时看不到；正在重试";
+
+type ImageHistorySyncState = { owner: string; failures: number; timer: ReturnType<typeof setTimeout> | null; warnedAt: number; running: boolean };
+
+function imageHistorySyncBackoffMs(failures: number) {
+    return IMAGE_HISTORY_SYNC_RETRY_DELAYS_MS[Math.min(Math.max(failures - 1, 0), IMAGE_HISTORY_SYNC_RETRY_DELAYS_MS.length - 1)];
+}
+
+function scheduleImageHistorySyncRetry(state: ImageHistorySyncState, owner: string, run: (owner: string) => unknown) {
+    if (state.owner !== owner || state.timer !== null) return;
+    state.timer = setTimeout(() => {
+        state.timer = null;
+        void run(owner);
+    }, imageHistorySyncBackoffMs(state.failures));
+}
 export default function ImagePage() {
     const { message, modal } = App.useApp();
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -179,7 +196,8 @@ export default function ImagePage() {
     const [workflowButtonPosition, setWorkflowButtonPosition] = useState({ x: 0, y: 0 });
     const workflowButtonRef = useRef<HTMLButtonElement>(null);
     const workflowButtonDragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number; moved: boolean } | null>(null);
-    const accountHistorySyncEnabledRef = useRef(false);
+    const historySyncRef = useRef<ImageHistorySyncState>({ owner: "", failures: 0, timer: null, warnedAt: 0, running: false });
+    const retryImageHistorySyncRef = useRef<(owner?: string) => Promise<void>>(async () => {});
     const syncedImageCategoriesRef = useRef<{ token: string; state: UserImageCategories } | null>(null);
     const historyPageRequestRef = useRef<{ token: string; loading: boolean } | null>(null);
     const saveLogChainRef = useRef<Promise<void>>(Promise.resolve());
@@ -235,7 +253,6 @@ export default function ImagePage() {
     }, [logs]);
 
     useEffect(() => {
-        if (token) accountHistorySyncEnabledRef.current = true;
         setMaskEditTarget(null);
     }, [token, userId]);
 
@@ -255,6 +272,45 @@ export default function ImagePage() {
         }
         void refreshLogs().then((items) => syncBackendImageTasks(items));
     }, [isUserReady, token]);
+
+    useEffect(() => {
+        const owner = userId || token;
+        const state = historySyncRef.current;
+        if (!owner) {
+            if (state.timer !== null) clearTimeout(state.timer);
+            state.timer = null;
+            state.owner = "";
+            state.failures = 0;
+            state.warnedAt = 0;
+            return;
+        }
+        if (state.owner && state.owner !== owner) {
+            if (state.timer !== null) clearTimeout(state.timer);
+            state.timer = null;
+            state.failures = 0;
+            state.warnedAt = 0;
+            state.owner = owner;
+        }
+        const handler = () => {
+            if (document.visibilityState !== "visible") return;
+            if (state.timer !== null) {
+                clearTimeout(state.timer);
+                state.timer = null;
+            }
+            const currentOwner = useUserStore.getState().user?.id || useUserStore.getState().token;
+            if (currentOwner) void retryImageHistorySyncRef.current(currentOwner);
+        };
+        document.addEventListener("visibilitychange", handler);
+        return () => {
+            document.removeEventListener("visibilitychange", handler);
+        };
+    }, [token, userId]);
+
+    useEffect(() => () => {
+        const state = historySyncRef.current;
+        if (state.timer !== null) clearTimeout(state.timer);
+        state.timer = null;
+    }, []);
 
     useEffect(() => {
         if (!pendingCount && !pendingLogCount) return;
@@ -955,13 +1011,9 @@ export default function ImagePage() {
         setHistoryLoading(true);
         if (!cursor) setHistoryCursor(null);
         try {
-            accountHistorySyncEnabledRef.current = true;
             const [page, remoteCategories] = await Promise.all([
                 fetchImageGenerationLogsPage<GenerationLog>(token, 40, cursor),
-                fetchUserImageCategories(token).catch(() => {
-                    if (active()) accountHistorySyncEnabledRef.current = false;
-                    return null;
-                }),
+                fetchUserImageCategories(token).catch(() => null),
             ]);
             if (!active()) return;
             let mergedLogs: GenerationLog[] | undefined;
@@ -990,8 +1042,7 @@ export default function ImagePage() {
             await next;
             return mergedLogs;
         } catch {
-            // Keep local history available when account sync fails.
-            if (active()) accountHistorySyncEnabledRef.current = false;
+            // 加载失败只影响本次分页；日志与分类仍保存在本地，后续同步能力保持开启。
             if (cursor && active()) message.error("加载更多记录失败，请重试");
             return undefined;
         } finally {
@@ -1001,9 +1052,23 @@ export default function ImagePage() {
     };
 
     const persistImageHistory = async (nextLogs: GenerationLog[], nextCategories: GenerationCategory[]) => {
-        if (!token || !accountHistorySyncEnabledRef.current) return;
+        if (!token) return;
         const ownerToken = token;
-        await (async () => {
+        const owner = useUserStore.getState().user?.id || ownerToken;
+        const state = historySyncRef.current;
+        if (state.owner && state.owner !== owner) {
+            if (state.timer !== null) clearTimeout(state.timer);
+            state.timer = null;
+            state.failures = 0;
+            state.warnedAt = 0;
+        }
+        state.owner = owner;
+        const retryAfterTokenRefresh = () => {
+            const current = useUserStore.getState();
+            if ((current.user?.id || current.token) !== owner) return;
+            scheduleImageHistorySyncRetry(state, owner, (target) => retryImageHistorySync(target));
+        };
+        try {
             const complete = await Promise.all(nextLogs.map(async (log) => {
                 if (!log.summaryOnly) return serializeLog(log);
                 const full = await fetchImageGenerationLog<GenerationLog>(ownerToken, log.id);
@@ -1013,21 +1078,72 @@ export default function ImagePage() {
                     task: full.task || log.task ? { ...full.task, ...log.task } as CanvasImageTask : undefined,
                 });
             }));
-            if (useUserStore.getState().token !== ownerToken) return;
-            await upsertImageGenerationLogs(token, complete);
-            if (useUserStore.getState().token !== ownerToken) return;
+            if (useUserStore.getState().token !== ownerToken) {
+                retryAfterTokenRefresh();
+                return;
+            }
+            await upsertImageGenerationLogs(ownerToken, complete);
+            if (useUserStore.getState().token !== ownerToken) {
+                retryAfterTokenRefresh();
+                return;
+            }
             const storedCategories = await readStoredImageCategories();
             const categoryState = mergeImageCategories(nextCategories, storedCategories.categories, [], storedCategories.deletedCategories);
             const previous = syncedImageCategoriesRef.current;
-            if (previous?.token === ownerToken && sameImageCategoryState(previous.state, categoryState)) return;
+            if (previous?.token === ownerToken && sameImageCategoryState(previous.state, categoryState)) {
+                state.failures = 0;
+                if (state.timer !== null) {
+                    clearTimeout(state.timer);
+                    state.timer = null;
+                }
+                return;
+            }
             const synced = await syncStoredImageCategories(ownerToken, categoryState);
-            if (useUserStore.getState().token !== ownerToken) return;
+            if (useUserStore.getState().token !== ownerToken) {
+                retryAfterTokenRefresh();
+                return;
+            }
             syncedImageCategoriesRef.current = { token: ownerToken, state: synced };
             setCategories(synced.categories);
-        })().catch(() => {
-            if (useUserStore.getState().token === ownerToken) accountHistorySyncEnabledRef.current = false;
-        });
+            state.failures = 0;
+            if (state.timer !== null) {
+                clearTimeout(state.timer);
+                state.timer = null;
+            }
+        } catch {
+            if (useUserStore.getState().token !== ownerToken) {
+                retryAfterTokenRefresh();
+                return;
+            }
+            state.failures += 1;
+            const now = Date.now();
+            if (!state.warnedAt || now - state.warnedAt >= IMAGE_HISTORY_SYNC_WARNING_INTERVAL_MS) {
+                state.warnedAt = now;
+                message.warning(IMAGE_HISTORY_SYNC_FAILURE_HINT);
+            }
+            scheduleImageHistorySyncRetry(state, owner, (target) => retryImageHistorySync(target));
+        }
     };
+
+    const retryImageHistorySync = async (expectedOwner?: string) => {
+        const state = historySyncRef.current;
+        if (state.running) return;
+        const ownerToken = useUserStore.getState().token;
+        if (!ownerToken) return;
+        const owner = useUserStore.getState().user?.id || ownerToken;
+        if (expectedOwner && owner !== expectedOwner) return;
+        state.running = true;
+        try {
+            const [latestLogs, latestCategories] = await Promise.all([readStoredLogs(), readStoredCategories()]);
+            if (useUserStore.getState().token !== ownerToken) return;
+            await persistImageHistory(latestLogs, latestCategories);
+        } catch {
+            // persistImageHistory 已记录失败并安排下一次退避重试。
+        } finally {
+            state.running = false;
+        }
+    };
+    retryImageHistorySyncRef.current = retryImageHistorySync;
 
     const loadCompleteImageLog = async (log: GenerationLog) => {
         if (!log.summaryOnly || !token) return log;

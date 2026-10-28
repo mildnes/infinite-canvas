@@ -46,7 +46,7 @@ test("分页日志载入同时合并远端分类，保留工作流分类兜底",
     assert.match(load, /mergeImageCategories\(/);
     assert.match(load, /withWorkflowLogCategories\(/);
     assert.match(load, /sync\w*Categor/);
-    assert.match(load, /accountHistorySyncEnabledRef\.current = false/);
+    assert.doesNotMatch(load, /accountHistorySyncEnabledRef/);
 });
 
 test("工作流分类兜底复用未知 ID，但不会复活已删分类", () => {
@@ -86,10 +86,10 @@ test("日志仍逐次 upsert，只有分类变化才追加分类同步", async (
     const syncs = [];
     const logWrites = [];
     let stored = stateRef.current.state;
-    const syncEnabled = { current: true };
     const persist = callback("persistImageHistory", {
-        token: "owner", accountHistorySyncEnabledRef: syncEnabled, syncedImageCategoriesRef: stateRef,
-        useUserStore: { getState: () => ({ token: "owner" }) },
+        token: "owner", historySyncRef: { current: { owner: "owner", failures: 0, timer: null, warnedAt: 0, running: false } },
+        syncedImageCategoriesRef: stateRef,
+        useUserStore: { getState: () => ({ token: "owner", user: { id: "owner" } }) },
         serializeLog: (log) => log,
         upsertImageGenerationLogs: async (...args) => { logWrites.push(args); },
         readStoredImageCategories: async () => stored,
@@ -97,6 +97,13 @@ test("日志仍逐次 upsert，只有分类变化才追加分类同步", async (
         sameImageCategoryState: (a, b) => JSON.stringify(a) === JSON.stringify(b),
         syncStoredImageCategories: async (_, state) => { syncs.push(state); stored = state; return state; },
         setCategories: () => {},
+        message: { warning: assert.fail },
+        clearTimeout: () => {},
+        Date,
+        IMAGE_HISTORY_SYNC_WARNING_INTERVAL_MS: 60000,
+        IMAGE_HISTORY_SYNC_FAILURE_HINT: "sync failed",
+        scheduleImageHistorySyncRetry: assert.fail,
+        retryImageHistorySync: async () => {},
     });
     await persist([{ id: "log" }], [initial]);
     assert.equal(syncs.length, 0);
@@ -105,24 +112,35 @@ test("日志仍逐次 upsert，只有分类变化才追加分类同步", async (
     await persist([{ id: "log" }], [initial, added]);
     assert.equal(syncs.length, 1);
     assert.equal(logWrites.length, 3);
-    assert.equal(syncEnabled.current, true);
 });
 
-test("分类远端同步失败只降级账号同步，已保存的本地定义仍保留", async () => {
+test("分类远端同步失败只安排重试，已保存的本地定义仍保留", async () => {
     const stored = { categories: [{ id: "local", name: "本地分类", createdAt: 1 }], deletedCategories: [] };
-    const syncEnabled = { current: true };
+    const state = { current: { owner: "owner", failures: 0, timer: null, warnedAt: 0, running: false } };
+    const timers = [];
+    const warnings = [];
     const persist = callback("persistImageHistory", {
-        token: "owner", accountHistorySyncEnabledRef: syncEnabled, syncedImageCategoriesRef: { current: null },
-        useUserStore: { getState: () => ({ token: "owner" }) },
+        token: "owner", historySyncRef: state, syncedImageCategoriesRef: { current: null },
+        useUserStore: { getState: () => ({ token: "owner", user: { id: "owner" } }) },
         serializeLog: (log) => log,
         upsertImageGenerationLogs: async () => {},
         readStoredImageCategories: async () => stored,
         mergeImageCategories,
         syncStoredImageCategories: async () => { throw new Error("offline"); },
         setCategories: assert.fail,
+        message: { warning: (text) => warnings.push(text) },
+        clearTimeout: () => {},
+        setTimeout: () => { timers.push(1); return timers.length; },
+        Date,
+        IMAGE_HISTORY_SYNC_WARNING_INTERVAL_MS: 60000,
+        IMAGE_HISTORY_SYNC_FAILURE_HINT: "sync failed",
+        scheduleImageHistorySyncRetry: (current, owner) => { current.timer = 1; timers.push(owner); },
+        retryImageHistorySync: async () => {},
     });
     await persist([], stored.categories);
-    assert.equal(syncEnabled.current, false);
+    assert.equal(state.current.failures, 1);
+    assert.equal(state.current.timer, 1);
+    assert.deepEqual(warnings, ["sync failed"]);
     assert.equal(stored.categories[0].name, "本地分类");
 });
 
@@ -147,14 +165,14 @@ test("切号后旧页面的新建改名与删除回调不能写入当前账号�
     assert.equal(writes.length, 0);
 });
 
-test("分类 GET 离线仍加载日志页与本地分类，并降级后续账号写入", async () => {
+test("分类 GET 离线仍加载日志页与本地分类，并保留日志上传能力", async () => {
     const local = { categories: [{ id: "local", name: "本地分类", createdAt: 1 }], deletedCategories: [] };
-    const syncEnabled = { current: true };
+    const state = { current: { owner: "", failures: 0, timer: null, warnedAt: 0, running: false } };
     const categoryViews = [];
     const logViews = [];
     const load = callback("loadAccountImageHistory", {
         token: "owner", historyPageRequestRef: { current: null },
-        accountHistorySyncEnabledRef: syncEnabled, saveLogChainRef: { current: Promise.resolve() },
+        historySyncRef: state, saveLogChainRef: { current: Promise.resolve() },
         syncedImageCategoriesRef: { current: null },
         useUserStore: { getState: () => ({ token: "owner" }) },
         fetchImageGenerationLogsPage: async () => ({ items: [{ id: "remote-log" }], nextCursor: null }),
@@ -172,7 +190,8 @@ test("分类 GET 离线仍加载日志页与本地分类，并降级后续账号
         message: { error: assert.fail },
     });
     const result = await load();
-    assert.equal(syncEnabled.current, false);
+    assert.equal(state.current.failures, 0);
+    assert.equal(state.current.timer, null);
     assert.deepEqual(Array.from(result, ({ id }) => id), ["remote-log", "local-log"]);
     assert.equal(logViews.length, 1);
     assert.equal(categoryViews.at(-1)[0].id, "local");
