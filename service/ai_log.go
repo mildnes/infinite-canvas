@@ -23,11 +23,12 @@ import (
 )
 
 const (
-	aiLogRequestTextLimit = 256 * 1024
-	aiLogErrorTextLimit   = 16 * 1024
-	aiLogScannerMax       = 16 * 1024 * 1024
-	defaultAILogCron      = "0 3 * * *"
-	defaultAILogRetention = 14
+	aiLogRequestTextLimit     = 256 * 1024
+	aiLogErrorTextLimit       = 16 * 1024
+	AILogResponseCaptureLimit = 8 * 1024
+	aiLogScannerMax           = 16 * 1024 * 1024
+	defaultAILogCron          = "0 3 * * *"
+	defaultAILogRetention     = 14
 )
 
 var (
@@ -35,6 +36,7 @@ var (
 	whitespacePattern     = regexp.MustCompile(`\s+`)
 	longDataURLPattern    = regexp.MustCompile(`data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]{512,}`)
 	longBase64TextPattern = regexp.MustCompile(`"[A-Za-z0-9+/=]{512,}"`)
+	longBase64OpenPattern = regexp.MustCompile(`"[A-Za-z0-9+/=]{512,}`)
 
 	aiLogCleanupCron *cron.Cron
 	aiLogCleanupOnce sync.Once
@@ -72,9 +74,9 @@ func SaveAICallLog(input AICallLogInput) {
 		Status:          input.Status,
 		DurationMs:      input.DurationMs,
 		Credits:         input.Credits,
-		RequestBody:     truncateLogText(input.RequestBody, aiLogRequestTextLimit),
+		RequestBody:     truncateLogText(redactLogBase64Payload(input.RequestBody), aiLogRequestTextLimit),
 		ResponseBody:    responseBody,
-		Error:           truncateLogText(errorText, aiLogErrorTextLimit),
+		Error:           truncateLogText(redactLogBase64Payload(errorText), aiLogErrorTextLimit),
 		CreatedAt:       now(),
 	}
 	if err := appendAICallLog(item); err != nil {
@@ -310,6 +312,8 @@ func normalizeAICallResponseLog(responseBody string, errorMessage string) string
 	if responseBody == "" {
 		return ""
 	}
+	responseBody = redactLogBase64Payload(responseBody)
+	errorMessage = redactLogBase64Payload(errorMessage)
 	formatted := formatAICallLogPayload(responseBody)
 	reason := extractAICallFailureReason(errorMessage)
 	if reason == "" {
@@ -497,7 +501,14 @@ func cleanPlainLogText(value string) string {
 func redactLargePlainLogText(value string) string {
 	value = longDataURLPattern.ReplaceAllString(value, "[redacted image data]")
 	value = longBase64TextPattern.ReplaceAllString(value, `"[redacted large base64/string]"`)
+	value = longBase64OpenPattern.ReplaceAllString(value, `"[redacted large base64/string]`)
 	return strings.TrimSpace(value)
+}
+
+func redactLogBase64Payload(value string) string {
+	value = longDataURLPattern.ReplaceAllString(value, "[redacted image data]")
+	value = longBase64TextPattern.ReplaceAllString(value, `"[redacted large base64/string]"`)
+	return longBase64OpenPattern.ReplaceAllString(value, `"[redacted large base64/string]`)
 }
 
 func redactLargeLogStrings(value *any) {

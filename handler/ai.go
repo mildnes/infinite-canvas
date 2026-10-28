@@ -330,8 +330,8 @@ func copyAIResponseBody(w http.ResponseWriter, body io.Reader) string {
 			if _, writeErr := w.Write(buffer[:n]); writeErr != nil {
 				return logBuffer.String()
 			}
-			if logBuffer.Len() < 64*1024 {
-				_, _ = logBuffer.Write(buffer[:min(n, 64*1024-logBuffer.Len())])
+			if logBuffer.Len() < service.AILogResponseCaptureLimit {
+				_, _ = logBuffer.Write(buffer[:min(n, service.AILogResponseCaptureLimit-logBuffer.Len())])
 			}
 			if canFlush {
 				flusher.Flush()
