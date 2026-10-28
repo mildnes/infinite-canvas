@@ -5,6 +5,60 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
+## 后台日志加载优化
+
+- [实现] AI 调用日志列表与详情分离：列表只返回 12 个摘要字段，不含请求体、返回体和错误正文；详情接口按记录位置读取并复用原有规范化与失败原因前缀规则，已清理记录返回 404。
+- [实现] AI 日志文件摘要缓存保存摘要、记录 ID、字节偏移和长度，正文不进入常驻缓存；正常路径下全部日志文件摘要常驻，默认防御上限 200,000 条，超过上限时逐行流式扫描，只保留当前分页所需摘要并记录告警。文件未变化时复用索引，追加时读取新增完整记录，截断、替换、删除时失效；并发刷新共享同一构建，未完成末行和损坏记录按既有策略处理。
+- [实现] 无关键词查询按 `createdAt` 倒序、同时间 `id` 倒序分页；关键词仍扫描请求、返回和错误正文，存在历史 Base64 时可能较慢。
+- [实现] P0 写入侧先脱敏再截断，日志响应捕获上限为 8 KiB；客户端实际响应转发不受影响。读取历史详情时会修复旧记录的展示脱敏，但不改写磁盘文件。
+- [实现] 前端 AI 与算力点日志列表使用内存查询缓存，按登录身份、已提交关键词、页码和页大小隔离，新鲜期 30 秒、回收时间 5 分钟；查询／重置回到第一页，刷新和详情重试保持独立状态，切号清空缓存。
+- [实现] 算力点日志新增 `(created_at, id)` 联合索引，列表按时间与 ID 倒序；关键词仍使用包含匹配。该索引不作为本次性能收益宣称。生产记录曾测得列表响应约 7 KB／46 ms，仅说明当时 5,015 行规模的现状，不承诺部署后的耗时。
+- [本机验证] 聚焦与相关包回归全部通过：`go test -race ./service -run '^(TestAICallLog|TestRedactLargePlainLogText)' -count=1` 通过 31/31，其中并发超限降级用例连续 100 次、`-race` 下通过；`go test ./handler` 通过 197/197；`go test ./repository` 通过 61/61；`go test ./router` 通过 7/7；`go test -race ./service` 其余用例合计通过 279/279；从 `web/` 执行 `./node_modules/.bin/tsx --test --test-force-exit src/lib/admin-log-loading.test.mjs` 通过 19/19，失败 0。按本轮约定未运行前端全量、`tsc` 或 Next.js 构建；未做真实浏览器、容器或生产日志验收。本节自动测试不替代 Hermes 生产验收。
+- [验收边界] 基线正／反验收分开：转发完整性（第 3 项）与算力点关键词行为保持不变（第 17 项）是基线应绿的回归守卫；其余新增摘要、详情、缓存、索引和前端行为在规格基线回退后应红。不要把基线应绿的守卫误报为新功能已被基线证明。
+- [P2 收口约束] 首次索引耗时必须覆盖本次访问完成的全部日志文件扫描总耗时；超过防御性摘要上限时，逐行流式扫描，只保留当前分页所需摘要并记录告警；文件读取失败必须返回错误，不得伪装成空结果。
+- [缓存边界] 不引入 Redis。服务端内存索引只保留摘要、记录 ID、字节偏移和长度，正文不常驻缓存；关键词查询仍按需扫描原始请求体、返回体和错误正文。前端列表缓存新鲜期 30 秒、回收时间 5 分钟，详情缓存新鲜期和回收时间均为 5 分钟。
+
+### 自动验收证据映射
+
+以下记录 17 项验收与自动用例的映射。最终聚焦测试结果见上一节；基线正／反验收和真实生产日志表现仍需按 Hermes 边界验收，不以本机聚焦用例替代。
+
+| 验收项 | 自动测试映射 |
+| --- | --- |
+| 1. 新写入大 Base64 脱敏、记录有界 | `TestAIResponseLogRedactsLargeBase64WithoutTruncatingClient`; `TestAICallLogAPIWritesBoundedRedactedRecord`; `TestAICallLogAPIRedactsEscapedJSONBase64` |
+| 2. 截断 JSON 中的 Base64 脱敏 | `TestRedactLargePlainLogTextHandlesTruncatedBase64`; `TestRedactLargePlainLogTextHandlesEscapedJSONSlashes` |
+| 3. 客户端收到完整上游响应 | `TestAIResponseLogRedactsLargeBase64WithoutTruncatingClient` |
+| 4. 列表不返回三个正文域 | `TestAIAdminAICallLogListOmitsBodyFields` |
+| 5. 详情返回完整正文与失败原因规则 | `TestAIAdminAICallLogDetailAndMissing`; `TestAICallLogAPIReadsLegacyFailureReasonAndRedactsTruncatedBase64` |
+| 6. 已清理记录返回 404 | `TestAIAdminAICallLogDetailAndMissing`; `TestAICallLogIndexGetUsesOffsetsAndMissing` |
+| 7. 未变化文件复用摘要索引 | `TestAICallLogIndexReusesUnchangedAndAppendsOnlyNewBytes` |
+| 8. 追加只处理新增字节 | `TestAICallLogIndexReusesUnchangedAndAppendsOnlyNewBytes` |
+| 9. 跨日、截断、替换、删除后的总数和定位 | `TestAICallLogIndexDetectsCrossDayTruncateReplaceAndDelete`; `TestAICallLogIndexGetUsesOffsetsAndMissing`; `TestAICallLogIndexReplacementWithLargerSizeIsRebuilt` |
+| 10. 并发刷新只构建一次 | `TestAICallLogIndexConcurrentRefreshBuildsOnce`; `TestAICallLogIndexConcurrentRefreshDuringInvalidation` |
+| 11. 超限后的逐行流式回退 | `TestAICallLogIndexFallsBackWhenOverLimit`; `TestAICallLogIndexOverLimitDoesNotRetainAllSummaries`; `TestAICallLogIndexConcurrentOverLimitFallsBackWithoutErrors` |
+| 12. 前端列表缓存、分页、查询、重置和刷新 | `fresh list survives leaving and reopening the page`; `pagination and a failed new page retain rows; refresh retries the current page`; `AI search submits draft and resets page atomically; reset and refresh use submitted conditions`; `credit search/reset submits filters on page one without duplicate requests` |
+| 13. 失败保留旧数据、详情可重试 | `pagination and a failed new page retain rows; refresh retries the current page`; `AI request/response details load on click, share cache, and retry a failed detail` |
+| 14. 切换身份清理缓存且不显示旧数据 | `logout/account switch removes both log families even with pages unmounted; late responses cannot repopulate`; `a mounted account switch never paints the previous identity while the new request is pending`; `login, logout, and token rotation purge both log cache families while their pages are unmounted` |
+| 15. 迟到响应不覆盖当前条件 | `a late response for old parameters never replaces the active page` |
+| 16. 算力点联合索引、排序和总数 | `TestCreditLogQueryIndex`; `TestCreditLogQueryOrder` |
+| 17. 算力点关键词集合保持不变 | `TestCreditLogQuerySearch`（基线应绿的回归守卫） |
+
+- [ ] Hermes 验收：在部署前备份日志目录，观察首次索引完整扫描的总耗时、列表响应体积与查询行为，并用真实历史日志确认详情读取和全文搜索；不要以未实测的固定毫秒数或响应体积作为完成标准。
+- [运维边界] 本次不自动改写、不自动删除历史日志，也不调整现有清理计划或部署流程。历史日志约 95% 为 Base64，旧详情仍占用磁盘空间；全文搜索仍会扫描这些内容。
+
+### 历史日志显式清理步骤
+
+仅在确认不再需要对应日期详情与搜索结果后由运维执行。清理按整文件日期生效，不能删除单条记录。
+
+1. 确认 `AI_LOG_DIR`；未配置时为 `data/logs/ai-calls`，容器环境通常对应 `/app/data/logs/ai-calls`。记录目录路径、文件列表、总字节数和每条文件日期。
+2. 优先暂停业务写入，同时保持管理接口可用，再将该目录完整备份到日志盘之外并记录备份位置；至少保留 `ai-calls-*.log` 原件、校验和及恢复说明。若部署环境无法只暂停业务写入，则停服完成备份，启动服务后再调用管理接口完成清理和验证；不要在停服状态调用管理接口。确认备份可读取，不要只保留容器内副本。
+3. 选择明确的截止日期。现有接口 `DELETE /api/admin/ai-logs?olderThanDays=N` 会删除文件日期早于“今天减 N 天”当天 00:00 的全部日志文件，不支持单条、单请求或单用户删除；日程清理默认关闭，默认保留 14 天。
+4. 先列出将命中的文件并核对影响范围，再执行清理。不要手动改删文件行、不要导入到其他日期、不要批量重命名；操作完成后确认服务继续可写，并检查缓存是否识别文件删除。
+5. 验证剩余日期列表总数、空页和详情；被删除日期中的记录 ID 请求详情应返回 404。全文搜索不再包含已删文件内容，未删历史文件仍可能因 Base64 较慢。
+6. 回滚时停止服务写入，将备份原件恢复到原目录并核对文件数与校验和，再启动并复核列表与详情。不要从脱敏后的接口展示内容反推或重写原始日志。
+
+- [影响范围] 清理会永久移除所选日期的请求／返回正文、错误详情、全文搜索命中和详情入口，也会移除这些文件的摘要缓存来源；不会改动算力点流水、模型调用计费或用户余额，也不改变自动清理设置。
+- [安全] 历史日志可能包含之前未脱敏的敏感内容。备份和清理命令应限制权限，不将原件上传到公开位置或粘贴到工单、聊天记录中。
+
 ## 生图工作台历史与分类同步自愈
 
 - [实现] 账号历史同步失败后不再永久关闭同步能力。日志与分类上传失败会按 5 秒、15 秒、60 秒、300 秒退避重试，最长间隔保持在 300 秒；成功后失败计数归零。重试读取最新本地日志与分类，补传失败期间积压的数据。

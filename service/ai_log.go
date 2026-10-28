@@ -3,6 +3,7 @@ package service
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"log"
@@ -24,6 +25,7 @@ import (
 
 const (
 	aiLogRequestTextLimit     = 256 * 1024
+	aiLogResponseTextLimit    = AILogResponseCaptureLimit
 	aiLogErrorTextLimit       = 16 * 1024
 	AILogResponseCaptureLimit = 8 * 1024
 	aiLogScannerMax           = 16 * 1024 * 1024
@@ -35,8 +37,8 @@ var (
 	htmlTagPattern        = regexp.MustCompile(`(?s)<[^>]+>`)
 	whitespacePattern     = regexp.MustCompile(`\s+`)
 	longDataURLPattern    = regexp.MustCompile(`data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]{512,}`)
-	longBase64TextPattern = regexp.MustCompile(`"[A-Za-z0-9+/=]{512,}"`)
-	longBase64OpenPattern = regexp.MustCompile(`"[A-Za-z0-9+/=]{512,}`)
+	longBase64TextPattern = regexp.MustCompile(`"(?:[A-Za-z0-9+/=]|\\/){512,}"`)
+	longBase64OpenPattern = regexp.MustCompile(`"(?:[A-Za-z0-9+/=]|\\/){512,}`)
 
 	aiLogCleanupCron *cron.Cron
 	aiLogCleanupOnce sync.Once
@@ -60,8 +62,8 @@ type AICallLogInput struct {
 }
 
 func SaveAICallLog(input AICallLogInput) {
-	responseBody := normalizeAICallResponseLog(input.ResponseBody, input.Error)
-	errorText := normalizeAICallErrorLog(input.Error, input.ResponseBody)
+	responseBody := truncateLogText(redactLogBase64Payload(input.ResponseBody), aiLogResponseTextLimit)
+	errorText := truncateLogText(redactLogBase64Payload(input.Error), aiLogErrorTextLimit)
 	item := model.AICallLog{
 		ID:              uuid.NewString(),
 		UserID:          strings.TrimSpace(input.UserID),
@@ -76,7 +78,7 @@ func SaveAICallLog(input AICallLogInput) {
 		Credits:         input.Credits,
 		RequestBody:     truncateLogText(redactLogBase64Payload(input.RequestBody), aiLogRequestTextLimit),
 		ResponseBody:    responseBody,
-		Error:           truncateLogText(redactLogBase64Payload(errorText), aiLogErrorTextLimit),
+		Error:           errorText,
 		CreatedAt:       now(),
 	}
 	if err := appendAICallLog(item); err != nil {
@@ -85,33 +87,11 @@ func SaveAICallLog(input AICallLogInput) {
 }
 
 func ListAICallLogs(q model.Query) (model.AICallLogList, error) {
-	q.Normalize()
-	items, err := readAICallLogs()
-	if err != nil {
-		return model.AICallLogList{}, err
-	}
-	if keyword := strings.ToLower(strings.TrimSpace(q.Keyword)); keyword != "" {
-		filtered := make([]model.AICallLog, 0, len(items))
-		for _, item := range items {
-			if aiLogMatchesKeyword(item, keyword) {
-				filtered = append(filtered, item)
-			}
-		}
-		items = filtered
-	}
-	sort.SliceStable(items, func(i, j int) bool {
-		return items[i].CreatedAt > items[j].CreatedAt
-	})
-	total := len(items)
-	start := q.Offset()
-	if start >= total {
-		return model.AICallLogList{Items: []model.AICallLog{}, Total: total}, nil
-	}
-	end := start + q.PageSize
-	if end > total {
-		end = total
-	}
-	return model.AICallLogList{Items: items[start:end], Total: total}, nil
+	return listIndexedAICallLogs(q)
+}
+
+func GetAICallLog(id string) (model.AICallLog, bool, error) {
+	return indexedAICallLog(id)
 }
 
 func DeleteAICallLogsOlderThan(days int) (int, error) {
@@ -132,6 +112,7 @@ func DeleteAICallLogsOlderThan(days int) (int, error) {
 		if err := os.Remove(file); err != nil {
 			return removed, err
 		}
+		invalidateAICallLogFile(file)
 		removed++
 	}
 	return removed, nil
@@ -265,9 +246,7 @@ func readAICallLogFile(filePath string) ([]model.AICallLog, error) {
 		if err := json.Unmarshal([]byte(line), &item); err != nil {
 			continue
 		}
-		item.ResponseBody = normalizeAICallResponseLog(item.ResponseBody, item.Error)
-		item.Error = normalizeAICallErrorLog(item.Error, item.ResponseBody)
-		items = append(items, item)
+		items = append(items, normalizeAICallLogDetail(item))
 	}
 	return items, scanner.Err()
 }
@@ -277,9 +256,25 @@ func aiLogFiles() ([]string, error) {
 	if dir == "" {
 		dir = filepath.Join("data", "logs", "ai-calls")
 	}
-	files, err := filepath.Glob(filepath.Join(dir, "ai-calls-*.log"))
+	entries, err := os.ReadDir(dir)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return []string{}, nil
+		}
 		return nil, err
+	}
+	files := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		matched, err := filepath.Match("ai-calls-*.log", entry.Name())
+		if err != nil {
+			return nil, err
+		}
+		if matched {
+			files = append(files, filepath.Join(dir, entry.Name()))
+		}
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(files)))
 	return files, nil
@@ -305,6 +300,14 @@ func aiLogMatchesKeyword(item model.AICallLog, keyword string) bool {
 		}
 	}
 	return false
+}
+
+func normalizeAICallLogDetail(item model.AICallLog) model.AICallLog {
+	item.RequestBody = formatAICallLogPayload(redactLogBase64Payload(item.RequestBody))
+	item.Error = redactLogBase64Payload(item.Error)
+	item.ResponseBody = normalizeAICallResponseLog(item.ResponseBody, item.Error)
+	item.Error = normalizeAICallErrorLog(item.Error, item.ResponseBody)
+	return item
 }
 
 func normalizeAICallResponseLog(responseBody string, errorMessage string) string {

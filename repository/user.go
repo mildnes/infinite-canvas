@@ -185,7 +185,7 @@ func ListCreditLogs(q model.Query) ([]model.CreditLog, int64, error) {
 		return nil, 0, err
 	}
 	var logs []model.CreditLog
-	err = tx.Order("created_at desc").Offset(q.Offset()).Limit(q.PageSize).Find(&logs).Error
+	err = tx.Order("created_at desc, id desc").Offset(q.Offset()).Limit(q.PageSize).Find(&logs).Error
 	return logs, total, err
 }
 

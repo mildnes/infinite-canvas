@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -63,10 +65,42 @@ func TestAIResponseLogRedactsLargeBase64WithoutTruncatingClient(t *testing.T) {
 	if err := json.Unmarshal(bytes.TrimSpace(raw), &full); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(full.ResponseBody, strings.Repeat("iVBORw0KGgo", 64)) {
-		t.Fatal("persisted response retained the base64 payload")
+	if regexp.MustCompile(`[A-Za-z0-9+/=]{512,}`).MatchString(full.ResponseBody) {
+		t.Fatal("persisted response retained a contiguous base64 fragment of 512 characters or more")
 	}
 	if !strings.Contains(full.ResponseBody, "[redacted large base64/string]") {
 		t.Fatalf("redaction placeholder missing: %q", full.ResponseBody)
+	}
+}
+
+func TestAIUpstreamErrorDoesNotLogResponseBody(t *testing.T) {
+	const secret = "SENSITIVE-UPSTREAM-BODY"
+	payload := []byte(fmt.Sprintf(`{"error":{"message":"upstream failed"},"debug":"%s%s"}`, secret, strings.Repeat("A", 4096)))
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write(payload)
+	}))
+	defer upstream.Close()
+
+	request, err := http.NewRequest(http.MethodPost, upstream.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var processLog bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&processLog)
+	t.Cleanup(func() {
+		log.SetOutput(previous)
+	})
+
+	result := httptest.NewRecorder()
+	copyAIResponse(result, request, model.ModelChannel{Protocol: "openai"}, aiLogContext{SkipLog: true}, nil)
+
+	output := processLog.String()
+	if strings.Contains(output, secret) {
+		t.Fatalf("process log exposed upstream response body: %s", output)
+	}
+	if !strings.Contains(output, "status=502") || !strings.Contains(output, "bodyBytes=") {
+		t.Fatalf("process log did not describe the upstream failure safely: %s", output)
 	}
 }

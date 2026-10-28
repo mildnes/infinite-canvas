@@ -15,3 +15,14 @@ func TestRedactLargePlainLogTextHandlesTruncatedBase64(t *testing.T) {
 		t.Fatalf("redaction placeholder missing: %q", got)
 	}
 }
+
+func TestRedactLargePlainLogTextHandlesEscapedJSONSlashes(t *testing.T) {
+	payload := `{"data":[{"b64_json":"` + strings.Repeat(`abcd\/`, 2000)
+	got := redactLargePlainLogText(payload)
+	if strings.Contains(got, strings.Repeat(`abcd\/`, 128)) {
+		t.Fatal("escaped-slash base64 payload was not redacted")
+	}
+	if !strings.Contains(got, "[redacted large base64/string]") {
+		t.Fatalf("redaction placeholder missing: %q", got)
+	}
+}

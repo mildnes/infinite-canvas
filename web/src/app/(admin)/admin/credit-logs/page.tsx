@@ -18,7 +18,7 @@ const creditLogTypeLabels: Record<string, string> = {
 };
 
 export default function AdminCreditLogsPage() {
-    const { logs, keyword, page, pageSize, total, isLoading, searchLogs, changePage, changePageSize, resetFilters, refreshLogs, saveLog: saveAdminLog, deleteLog } = useAdminCreditLogs();
+    const { logs, keyword, page, pageSize, total, isLoading, isRefreshing, searchLogs, changePage, changePageSize, resetFilters, refreshLogs, saveLog: saveAdminLog, deleteLog } = useAdminCreditLogs();
     const [form] = Form.useForm<CreditLogFormValues>();
     const [keywordText, setKeywordText] = useState(keyword);
     const [editingLog, setEditingLog] = useState<Partial<AdminCreditLog> | null>(null);
@@ -104,6 +104,9 @@ export default function AdminCreditLogsPage() {
                             <Col flex="none">
                                 <Form.Item>
                                     <Space>
+                                        <Button icon={<ReloadOutlined />} loading={isRefreshing} onClick={() => void refreshLogs()}>
+                                            刷新
+                                        </Button>
                                         <Button
                                             onClick={() => {
                                                 setKeywordText("");
@@ -136,7 +139,7 @@ export default function AdminCreditLogsPage() {
                             <Tag>{total} 条</Tag>
                         </Space>
                     }
-                    options={{ density: true, setting: true, reload: () => void refreshLogs() }}
+                    options={{ density: true, setting: true }}
                     toolBarRender={() => [
                         <Button key="add" type="primary" icon={<PlusOutlined />} onClick={() => setEditingLog({ type: "admin_adjust", amount: 0, balance: 0 })}>
                             新增

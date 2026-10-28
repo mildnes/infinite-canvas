@@ -176,6 +176,9 @@ func New() *gin.Engine {
 		handler.AdminDeleteCreditLog(c.Writer, c.Request, c.Param("id"))
 	})
 	admin.GET("/ai-logs", gin.WrapF(handler.AdminAICallLogs))
+	admin.GET("/ai-logs/:id", func(c *gin.Context) {
+		handler.AdminAICallLog(c.Writer, c.Request, c.Param("id"))
+	})
 	admin.DELETE("/ai-logs", gin.WrapF(handler.AdminDeleteAICallLogs))
 	admin.GET("/settings", gin.WrapF(handler.AdminSettings))
 	admin.POST("/settings", gin.WrapF(handler.AdminSaveSettings))

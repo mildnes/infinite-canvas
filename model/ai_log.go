@@ -18,7 +18,32 @@ type AICallLog struct {
 	CreatedAt       string  `json:"createdAt" gorm:"index"`
 }
 
+type AICallLogSummary struct {
+	ID              string  `json:"id"`
+	UserID          string  `json:"userId"`
+	UserDisplayName string  `json:"userDisplayName"`
+	Endpoint        string  `json:"endpoint"`
+	Method          string  `json:"method"`
+	Model           string  `json:"model"`
+	ChannelID       string  `json:"channelId"`
+	ChannelName     string  `json:"channelName"`
+	Status          int     `json:"status"`
+	DurationMs      int64   `json:"durationMs"`
+	Credits         float64 `json:"credits"`
+	CreatedAt       string  `json:"createdAt"`
+}
+
 type AICallLogList struct {
-	Items []AICallLog `json:"items"`
-	Total int         `json:"total"`
+	Items []AICallLogSummary `json:"items"`
+	Total int                `json:"total"`
+}
+
+func (item AICallLog) Summary() AICallLogSummary {
+	return AICallLogSummary{
+		ID: item.ID, UserID: item.UserID, UserDisplayName: item.UserDisplayName,
+		Endpoint: item.Endpoint, Method: item.Method, Model: item.Model,
+		ChannelID: item.ChannelID, ChannelName: item.ChannelName,
+		Status: item.Status, DurationMs: item.DurationMs, Credits: item.Credits,
+		CreatedAt: item.CreatedAt,
+	}
 }

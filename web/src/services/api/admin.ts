@@ -389,13 +389,19 @@ export type AdminAICallLog = {
     createdAt: string;
 };
 
+export type AdminAICallLogSummary = Omit<AdminAICallLog, "requestBody" | "responseBody" | "error">;
+
 export type AdminAICallLogListResponse = {
-    items: AdminAICallLog[];
+    items: AdminAICallLogSummary[];
     total: number;
 };
 
 export async function fetchAdminAICallLogs(token: string, query: AdminUserQuery = {}) {
     return apiGet<AdminAICallLogListResponse>("/api/admin/ai-logs", compactApiParams(query), token);
+}
+
+export async function fetchAdminAICallLog(token: string, id: string) {
+    return apiGet<AdminAICallLog>(`/api/admin/ai-logs/${encodeURIComponent(id)}`, undefined, token);
 }
 
 export async function deleteAdminAICallLogs(token: string, olderThanDays = 7) {

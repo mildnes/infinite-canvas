@@ -48,7 +48,14 @@ func copyValidatedImageResponse(w http.ResponseWriter, request *http.Request, ch
 	}
 	w.WriteHeader(recorder.Code)
 	_, _ = io.Copy(w, recorder.Body)
-	saveAIProxyLog(logContext, recorder.Code, boundedTaskError(string(payload), 64*1024), errMessage)
+	saveAIProxyLog(logContext, recorder.Code, captureAILogResponse(payload), errMessage)
+}
+
+func captureAILogResponse(payload []byte) string {
+	if len(payload) > service.AILogResponseCaptureLimit {
+		payload = payload[:service.AILogResponseCaptureLimit]
+	}
+	return string(payload)
 }
 
 func validateImageResponseAlpha(ctx context.Context, payload []byte, contentType string) (string, string) {
