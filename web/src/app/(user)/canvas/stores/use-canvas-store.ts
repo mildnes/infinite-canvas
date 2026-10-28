@@ -89,6 +89,7 @@ const projectMaxTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pendingProjectSaves = new Map<string, CanvasProject>();
 const projectSavesInFlight = new Map<string, Promise<void>>();
 const projectLoadsInFlight = new Map<string, Promise<CanvasProject | null>>();
+const projectLoadGenerations = new Map<string, number>();
 const failedProjectSaves = new Set<string>();
 const remoteDeletedProjectIds = new Set<string>();
 const deletingProjectIds = new Set<string>();
@@ -580,37 +581,64 @@ export const useCanvasStore = create<CanvasStore>()(
                 const token = useUserStore.getState().token;
                 const epoch = ownerEpoch;
                 if (!owner || get().ownerUserId !== owner) return null;
-                const loadLocalProject = async () => {
-                    const stored = await projectStorage.read(owner, persistentProject);
-                    if (owner !== currentStorageOwnerId() || epoch !== ownerEpoch) return null;
-                    const latest = stored?.state.projects.find(item => item.id === id);
-                    if (!latest || !isCanvasProjectHydrated(latest)) return null;
-                    set((state) => ({ projects: state.projects.map(item => item.id === id ? latest : item) }));
-                    return latest;
-                };
-                if (!token || !accountCanvasSyncEnabled) {
-                    if (!refresh) return null;
-                    return loadLocalProject();
-                }
                 const pending = projectLoadsInFlight.get(id);
                 if (pending && !refresh) return pending;
-                const current = (): boolean => owner === currentStorageOwnerId() && epoch === ownerEpoch && projectLoadsInFlight.get(id) === request;
+                const generation = (projectLoadGenerations.get(id) || 0) + 1;
+                projectLoadGenerations.set(id, generation);
+                const current = (): boolean => owner === currentStorageOwnerId()
+                    && epoch === ownerEpoch
+                    && projectLoadGenerations.get(id) === generation
+                    && projectLoadsInFlight.get(id) === request;
+                const loadLocalProject = async (): Promise<CanvasProject | null> => {
+                    // A refresh must not teach the long-lived writer storage about projects
+                    // from another tab: omissions from that refreshed snapshot look like deletes
+                    // to its next write. Keep the reader's knowledge set isolated.
+                    const isolatedStorage = createCanvasProjectStorage(hasCanvasWriteAccess);
+                    const stored = await isolatedStorage.read(owner, persistentProject) as StorageValue<CanvasStore> | null;
+                    if (!current()) return null;
+                    const local = stored?.state.ownerUserId === owner
+                        ? stored.state.projects.find(item => item.id === id)
+                        : undefined;
+                    if (!local || !isCanvasProjectHydrated(local)) return null;
+                    const latest = get().projects.find(item => item.id === id);
+                    if (latest && latest !== project && isCanvasProjectHydrated(latest)) return latest;
+                    set((state) => ({
+                        projects: state.projects.some(item => item.id === id)
+                            ? state.projects.map(item => item.id === id ? local : item)
+                            : [local, ...state.projects],
+                    }));
+                    return local;
+                };
                 const request = (async () => {
-                    const fetched = await getCanvasProject(token, id);
-                    if (!current() || deletingProjectIds.has(id)) return null;
-                    if (!fetched || fetched.id !== id || !isCanvasProjectHydrated(fetched)) {
+                    if (!token || !accountCanvasSyncEnabled) {
+                        if (!refresh) return null;
+                        const local = await loadLocalProject();
+                        if (!current() || deletingProjectIds.has(id)) return null;
+                        return local;
+                    }
+                    try {
+                        const fetched = await getCanvasProject(token, id);
+                        if (!current() || deletingProjectIds.has(id)) return null;
+                        if (!fetched || fetched.id !== id || !isCanvasProjectHydrated(fetched)) {
+                            const local = await loadLocalProject();
+                            if (!current()) return null;
+                            if (local) return local;
+                            throw new Error("画布数据不完整，请重试");
+                        }
+                        const latest = get().projects.find(item => item.id === id);
+                        if (latest !== project && latest?.pendingSave && isCanvasProjectHydrated(latest)) return latest;
+                        const complete = canonicalProject({ ...fetched, hydrated: true });
+                        set((state) => ({ projects: state.projects.some(item => item.id === id)
+                            ? state.projects.map(item => item.id === id ? complete : item)
+                            : [complete, ...state.projects] }));
+                        return complete;
+                    } catch (error) {
+                        if (!current() || (error as { status?: number })?.status !== 404) throw error;
                         const local = await loadLocalProject();
                         if (!current()) return null;
                         if (local) return local;
-                        throw new Error("画布数据不完整，请重试");
+                        throw error;
                     }
-                    const latest = get().projects.find(item => item.id === id);
-                    if (latest !== project && latest?.pendingSave && isCanvasProjectHydrated(latest)) return latest;
-                    const complete = canonicalProject({ ...fetched, hydrated: true });
-                    set((state) => ({ projects: state.projects.some(item => item.id === id)
-                        ? state.projects.map(item => item.id === id ? complete : item)
-                        : [complete, ...state.projects] }));
-                    return complete;
                 })();
                 projectLoadsInFlight.set(id, request);
                 try { return await request; }

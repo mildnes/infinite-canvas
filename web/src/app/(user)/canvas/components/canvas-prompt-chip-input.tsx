@@ -75,7 +75,8 @@ export function CanvasPromptChipInput({ value, references = [], pendingReference
     useLayoutEffect(() => {
         const editor = editorRef.current;
         if (!editor) return;
-        if (activeReferenceKey !== null) {
+        const externalValueChanged = value !== lastEmittedRef.current;
+        if (!externalValueChanged && activeReferenceKey !== null) {
             const allowedNodeIds = new Set(activeReferenceKey ? activeReferenceKey.split("\u0000") : []);
             const staleChips = Array.from(editor.querySelectorAll<HTMLElement>("[data-ref-node-id]"))
                 .filter((chip) => !chip.dataset.refNodeId || !allowedNodeIds.has(chip.dataset.refNodeId));
@@ -88,7 +89,8 @@ export function CanvasPromptChipInput({ value, references = [], pendingReference
                 return;
             }
         }
-        if (document.activeElement === editor && value === lastEmittedRef.current) return;
+        if (!externalValueChanged && document.activeElement === editor) return;
+        caretRangeRef.current = null;
         editor.textContent = "";
         tokens.forEach((token) => {
             if (token.type === "text") {
@@ -231,7 +233,7 @@ export function CanvasPromptChipInput({ value, references = [], pendingReference
                 onFocus={commitPendingReferences}
                 onPointerDown={commitPendingReferences}
                 onInput={(event) => {
-                    if (composingRef.current) return;
+                    if (composingRef.current || (event.nativeEvent as InputEvent).isComposing) return;
                     const selection = window.getSelection();
                     const node = selection?.anchorNode;
                     // 浏览器在末行光标前保留的独立换行节点只是占位。

@@ -29,9 +29,9 @@ export function useCanvasProjectExport() {
         const downloads: string[] = [];
         for (const id of [...new Set(projectIds)]) {
             assertOwner();
-            let ticket: { url: string; expiresAt: string };
+            let response: Awaited<ReturnType<typeof createCanvasProjectExportTicket>>;
             try {
-                ticket = await createCanvasProjectExportTicket(useUserStore.getState().token, id);
+                response = await createCanvasProjectExportTicket(useUserStore.getState().token, id);
             } catch (error) {
                 assertOwner();
                 const status = (error as { status?: number })?.status;
@@ -42,7 +42,11 @@ export function useCanvasProjectExport() {
                 throw error;
             }
             assertOwner();
-            const url = new URL(ticket.url, window.location.origin);
+            if (response.mode === "browser") {
+                message.info("画板包含本地素材，已使用兼容模式导出");
+                return false;
+            }
+            const url = new URL(response.url, window.location.origin);
             if (url.origin !== window.location.origin || url.pathname !== `/api/v1/canvas/projects/${encodeURIComponent(id)}/export` || !url.searchParams.get("ticket")) {
                 throw new Error("导出票据地址无效，请重试");
             }

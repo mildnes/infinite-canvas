@@ -13,8 +13,12 @@ export function getCanvasProject(token: string, id: string) {
     return apiGet<CanvasProject>("/api/v1/canvas/projects/" + encodeURIComponent(id), undefined, token);
 }
 
+export type CanvasProjectExportResponse =
+    | { mode: "server"; url: string; expiresAt: string }
+    | { mode: "browser"; localAssetCount: number };
+
 export function createCanvasProjectExportTicket(token: string, id: string) {
-    return apiPost<{ url: string; expiresAt: string }>(
+    return apiPost<CanvasProjectExportResponse>(
         "/api/v1/canvas/projects/" + encodeURIComponent(id) + "/export",
         {},
         token,

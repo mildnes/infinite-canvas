@@ -19,12 +19,12 @@ export function canvasFixture({ owner = "anon", projects = [], drafts = [], disk
     const user = require("zustand").create(() => ({ token: owner === "anon" ? "" : `${owner}-token`, user: owner === "anon" ? null : { id: owner }, isReady: true }));
     user.persist = { hasHydrated: () => true };
     const writes = [], removes = [], reads = [], requests = [], errors = [], timers = new Map(), modules = {};
-    let failure, removeFailure, time = 0, sequence = 0, detailGate, listGate, syncGate, writeGate, localFailure, localRemoveFailure;
+    let failure, removeFailure, time = 0, sequence = 0, detailGate, listGate, syncGate, readGate, writeGate, localFailure, localRemoveFailure;
     if (projects.length || drafts.length) idbDisk.set(`${legacyKey}:${owner}`, JSON.stringify({ state: { ownerUserId: owner, projects, conflictDrafts: drafts }, version: 0 }));
     const forage = {
         config() {},
         async keys() { return [...idbDisk.keys()]; },
-        async getItem(key) { reads.push(key); return idbDisk.get(key) ?? null; },
+        async getItem(key) { reads.push(key); if (readGate) await readGate(key); return idbDisk.get(key) ?? null; },
         async setItem(key, value) {
             writes.push({ key, value, chars: typeof value === "string" ? value.length : JSON.stringify(value).length });
             if (failure?.(key, value)) throw new Error("injected disk failure");
@@ -101,6 +101,7 @@ export function canvasFixture({ owner = "anon", projects = [], drafts = [], disk
         setRemoveFailure: fn => { removeFailure = fn; },
         setLocalStorageFailure: fn => { localFailure = fn; },
         setLocalStorageRemoveFailure: fn => { localRemoveFailure = fn; },
+        setReadGate: fn => { readGate = fn; },
         setWriteGate: fn => { writeGate = fn; },
         detailGate: promise => { detailGate = promise; },
         listGate: promise => { listGate = promise; },

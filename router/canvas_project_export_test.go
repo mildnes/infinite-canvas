@@ -43,12 +43,16 @@ func canvasExportTicket(t *testing.T, router http.Handler, token, id string) str
 	var body struct {
 		Code int `json:"code"`
 		Data struct {
+			Mode      string    `json:"mode"`
 			URL       string    `json:"url"`
 			ExpiresAt time.Time `json:"expiresAt"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || response.Code != http.StatusOK || body.Code != 0 {
 		t.Fatalf("export ticket status=%d err=%v body=%s", response.Code, err, response.Body)
+	}
+	if body.Data.Mode != "server" {
+		t.Fatalf("cloud-only export mode=%q, want server; body=%s", body.Data.Mode, response.Body)
 	}
 	link, err := url.Parse(body.Data.URL)
 	if err != nil || link.Host != "" || link.Path != "/api/v1/canvas/projects/"+id+"/export" || link.Query().Get("ticket") == "" {
@@ -135,6 +139,38 @@ func canvasExportObject(t *testing.T, id, owner, mimeType, extension string, con
 		if err := os.WriteFile(filepath.Join(service.GeneratedMediaDir(), object.ObjectKey), content, 0600); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestCanvasProjectExportLocalMediaRoutes(t *testing.T) {
+	if canvasSummarySubprocess(t, t.Name()) {
+		return
+	}
+	router, token := canvasSummaryFixture(t)
+	canvasExportProject(t, "owner", "mixed-local-board", "包含本地媒体", map[string]any{
+		"nodes": []any{
+			map[string]any{"metadata": map[string]any{"storageKey": "image:local-image"}},
+			map[string]any{"metadata": map[string]any{"storageKey": "video:local-video"}},
+			map[string]any{"metadata": map[string]any{"storageKey": "server:cloud-object"}},
+		},
+		"chatSessions": []any{map[string]any{"messages": []any{map[string]any{
+			"references": []any{map[string]any{"storageKey": "image:local-image"}, map[string]any{"storageKey": "audio:chat-audio"}},
+		}}}},
+	}, false)
+	response := canvasExportRequest(router, http.MethodPost, token, "/api/v1/canvas/projects/mixed-local-board/export")
+	var body struct {
+		Code int                        `json:"code"`
+		Data map[string]json.RawMessage `json:"data"`
+		Msg  string                     `json:"msg"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || response.Code != http.StatusOK || body.Code != 0 || body.Msg != "ok" {
+		t.Fatalf("browser export response status=%d err=%v body=%s", response.Code, err, response.Body)
+	}
+	if len(body.Data) != 2 || string(body.Data["mode"]) != `"browser"` || string(body.Data["localAssetCount"]) != "3" {
+		t.Fatalf("local media must return browser mode with a deduplicated count and no ticket: %s", response.Body)
+	}
+	if response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("browser export response must not be cached: %v", response.Header())
 	}
 }
 

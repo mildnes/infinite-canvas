@@ -30,8 +30,10 @@ const canvasExportTicketLifetime = 5 * time.Minute
 var ErrCanvasExportTicket = errors.New("导出票据无效或已过期，请重新导出")
 
 type CanvasProjectExportTicket struct {
-	URL       string    `json:"url"`
-	ExpiresAt time.Time `json:"expiresAt"`
+	Mode            string     `json:"mode"`
+	URL             string     `json:"url,omitempty"`
+	ExpiresAt       *time.Time `json:"expiresAt,omitempty"`
+	LocalAssetCount int        `json:"localAssetCount,omitempty"`
 }
 
 type canvasExportClaims struct {
@@ -47,8 +49,16 @@ var canvasExportTickets = struct {
 }{pending: make(map[string]time.Time)}
 
 func CreateCanvasProjectExportTicket(ctx context.Context, id string) (CanvasProjectExportTicket, error) {
-	if _, err := CurrentUserCanvasProject(ctx, id); err != nil {
+	raw, err := CurrentUserCanvasProject(ctx, id)
+	if err != nil {
 		return CanvasProjectExportTicket{}, err
+	}
+	var project any
+	if err := json.Unmarshal(raw, &project); err != nil {
+		return CanvasProjectExportTicket{}, err
+	}
+	if keys := canvasExportLocalMediaKeys(project); len(keys) > 0 {
+		return CanvasProjectExportTicket{Mode: "browser", LocalAssetCount: len(keys)}, nil
 	}
 	user, _ := UserFromContext(ctx)
 	current := time.Now().UTC()
@@ -76,9 +86,44 @@ func CreateCanvasProjectExportTicket(ctx context.Context, id string) (CanvasProj
 	}
 	canvasExportTickets.pending[claims.ID] = expires
 	return CanvasProjectExportTicket{
+		Mode:      "server",
 		URL:       "/api/v1/canvas/projects/" + url.PathEscape(id) + "/export?ticket=" + url.QueryEscape(token),
-		ExpiresAt: expires,
+		ExpiresAt: &expires,
 	}, nil
+}
+
+// canvasExportLocalMediaKeys collects media references the browser media stores own. Only
+// "server:" keys live in object storage; the browser exporter treats every other storageKey as
+// local, so they must select browser export rather than being silently dropped server-side.
+func canvasExportLocalMediaKeys(project any) []string {
+	keys := make(map[string]struct{})
+	var visit func(any)
+	visit = func(value any) {
+		switch item := value.(type) {
+		case map[string]any:
+			for key, child := range item {
+				if key == "storageKey" {
+					if storageKey, ok := child.(string); ok {
+						if strings.Contains(storageKey, ":") && !strings.HasPrefix(storageKey, "server:") {
+							keys[storageKey] = struct{}{}
+						}
+					}
+				}
+				visit(child)
+			}
+		case []any:
+			for _, child := range item {
+				visit(child)
+			}
+		}
+	}
+	visit(project)
+	ordered := make([]string, 0, len(keys))
+	for key := range keys {
+		ordered = append(ordered, key)
+	}
+	sort.Strings(ordered)
+	return ordered
 }
 
 type canvasExportAsset struct {
@@ -131,6 +176,11 @@ func prepareCanvasProjectExport(ctx context.Context, userID, id string, raw json
 		return nil, err
 	}
 	result := &CanvasProjectExport{userID: userID, files: []canvasExportAsset{}, Title: "未命名画布"}
+	for _, key := range canvasExportLocalMediaKeys(project) {
+		result.missing = append(result.missing, canvasExportMissing{
+			StorageKey: key, Reason: "本地素材无法通过服务端票据导出，请在浏览器中导出",
+		})
+	}
 	keys := make(map[string]bool)
 	var visit func(any, string) any
 	visit = func(value any, location string) any {

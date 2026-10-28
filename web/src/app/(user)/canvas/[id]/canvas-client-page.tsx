@@ -2855,7 +2855,13 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     if (!isCurrentUpload()) return;
                     if (uploaded) {
                         ok += 1;
-                        setNodes((current) => current.map((item) => (item.id === node.id ? next : item)));
+                        setNodes((current) => mergeCanvasMediaRepair(current, [], [node], [], {
+                            nodes: [next],
+                            sessions: [],
+                            changed: true,
+                            uploaded: 1,
+                            broken: 0,
+                        }).nodes);
                     }
                 } catch {
                     fail += 1;

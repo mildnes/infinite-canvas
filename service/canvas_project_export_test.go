@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -91,6 +92,242 @@ func (stream *canvasExportGeneratedStream) Close() error {
 type canvasExportErrorReader struct{ err error }
 
 func (reader canvasExportErrorReader) Read([]byte) (int, error) { return 0, reader.err }
+
+func TestCanvasProjectExportLocalMedia(t *testing.T) {
+	const childEnv = "IC_CANVAS_EXPORT_LOCAL_MEDIA_TEST"
+	if os.Getenv(childEnv) != t.Name() {
+		command := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$", "-test.v")
+		command.Env = append(os.Environ(), childEnv+"="+t.Name())
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("isolated local media export fixture: %v\n%s", err, output)
+		}
+		t.Logf("%s", output)
+		return
+	}
+	config.Cfg.StorageDriver = "sqlite"
+	config.Cfg.DatabaseDSN = filepath.Join(t.TempDir(), "canvas-export-local-media.db")
+	config.Cfg.JWTSecret = "canvas-export-local-media-secret"
+	database, err := repository.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithUser(context.Background(), model.AuthUser{ID: "local-media-owner"})
+	saveProject := func(t *testing.T, id string, fields map[string]any) json.RawMessage {
+		t.Helper()
+		fields["id"] = id
+		raw, err := json.Marshal(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		project := model.CanvasProject{
+			UserID: "local-media-owner", ID: id, ProjectData: string(raw),
+			CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z",
+		}
+		if err := database.Create(&project).Error; err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	localNode := func(key string) any {
+		return map[string]any{"metadata": map[string]any{"storageKey": key}}
+	}
+	cases := []struct {
+		name   string
+		fields map[string]any
+		count  int
+	}{
+		{
+			name: "synced board with local image audio and video",
+			fields: map[string]any{"nodes": []any{
+				localNode("image:local-image"), localNode("audio:local-audio"), localNode("video:local-video"),
+			}},
+			count: 3,
+		},
+		{
+			name: "nested batch nodes",
+			fields: map[string]any{"nodes": []any{map[string]any{
+				"metadata": map[string]any{"storageKey": "image:batch-root", "isBatchRoot": true},
+				"batch":    []any{localNode("video:batch-child"), localNode("audio:batch-child")},
+			}}},
+			count: 3,
+		},
+		{
+			name: "chat-only references and assistant images",
+			fields: map[string]any{"nodes": []any{}, "chatSessions": []any{map[string]any{
+				"messages": []any{map[string]any{
+					"references": []any{map[string]any{"storageKey": "audio:chat-reference"}},
+					"images":     []any{map[string]any{"storageKey": "image:assistant-result"}},
+				}},
+			}}},
+			count: 2,
+		},
+		{
+			name: "mixed cloud and local media",
+			fields: map[string]any{"nodes": []any{
+				localNode("server:cloud-object"), localNode("image:local-image"),
+			}},
+			count: 1,
+		},
+		{
+			name: "duplicates across nodes batches and chats",
+			fields: map[string]any{
+				"nodes": []any{localNode("image:shared"), map[string]any{
+					"batch": []any{localNode("image:shared"), localNode("audio:shared")},
+				}},
+				"chatSessions": []any{map[string]any{"messages": []any{map[string]any{
+					"references": []any{map[string]any{"storageKey": "image:shared"}, map[string]any{"storageKey": "audio:shared"}},
+				}}}},
+			},
+			count: 2,
+		},
+		{
+			name: "prefixes produced by local media stores",
+			fields: map[string]any{"nodes": []any{
+				localNode("image:image"), localNode("video:video"), localNode("audio:audio"), localNode("media:media"),
+				localNode("file:file"), localNode("asset-media:asset"), localNode("asset-video:asset"),
+				localNode("asset-audio:asset"), localNode("workflow-video:workflow"), localNode("workflow-audio:workflow"),
+				localNode("generated-video:generated"), localNode("video-reference:reference"), localNode("audio-reference:reference"),
+			}},
+			count: 13,
+		},
+		{
+			name: "ordinary text fields are not media references",
+			fields: map[string]any{
+				"title": "image:title",
+				"nodes": []any{map[string]any{
+					"metadata": map[string]any{"content": "image:plain-text", "prompt": "video:plain-text"},
+				}},
+				"chatSessions": []any{map[string]any{"messages": []any{map[string]any{"text": "audio:plain-text"}}}},
+			},
+		},
+		{
+			name: "unknown storageKey prefixes follow the browser exporter",
+			fields: map[string]any{"nodes": []any{
+				localNode("custom:unsupported"), localNode("image:"), localNode("https://example.com/image.png"),
+			}},
+			count: 3,
+		},
+		{
+			name:   "pure cloud board keeps server ticket",
+			fields: map[string]any{"nodes": []any{localNode("server:cloud-only")}},
+		},
+	}
+	for index, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			id := fmt.Sprintf("local-media-%d", index)
+			saveProject(t, id, test.fields)
+			canvasExportTickets.Lock()
+			before := len(canvasExportTickets.pending)
+			canvasExportTickets.Unlock()
+			result, err := CreateCanvasProjectExportTicket(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			canvasExportTickets.Lock()
+			after := len(canvasExportTickets.pending)
+			canvasExportTickets.Unlock()
+			encoded, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var response struct {
+				Mode            string    `json:"mode"`
+				URL             string    `json:"url"`
+				ExpiresAt       time.Time `json:"expiresAt"`
+				LocalAssetCount int       `json:"localAssetCount"`
+			}
+			if err := json.Unmarshal(encoded, &response); err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &fields); err != nil {
+				t.Fatal(err)
+			}
+			if test.count > 0 {
+				if response.Mode != "browser" || response.LocalAssetCount != test.count ||
+					len(fields) != 2 || !response.ExpiresAt.IsZero() || before != after {
+					t.Fatalf("local assets must choose browser without a ticket: response=%s pending before=%d after=%d wantCount=%d",
+						encoded, before, after, test.count)
+				}
+				return
+			}
+			if response.Mode != "server" || response.URL == "" || response.ExpiresAt.IsZero() ||
+				len(fields) != 3 || response.LocalAssetCount != 0 || after != before+1 {
+				t.Fatalf("cloud-only export must retain server ticket: response=%s pending before=%d after=%d", encoded, before, after)
+			}
+		})
+	}
+	t.Run("local media introduced after ticket issuance is reported in missing json", func(t *testing.T) {
+		const id = "local-media-after-ticket"
+		saveProject(t, id, map[string]any{"nodes": []any{}, "chatSessions": []any{}})
+		result, err := CreateCanvasProjectExportTicket(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		link, err := url.Parse(result.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.Marshal(map[string]any{
+			"id": id,
+			"nodes": []any{
+				localNode("image:late-image"), localNode("image:late-image"),
+				localNode("video:late-video"), localNode("audio:late-audio"),
+			},
+			"chatSessions": []any{map[string]any{"messages": []any{map[string]any{
+				"references": []any{map[string]any{"storageKey": "media:late-chat"}, map[string]any{"storageKey": "image:late-image"}},
+			}}}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := database.Model(&model.CanvasProject{}).Where("user_id = ? AND id = ?", "local-media-owner", id).
+			Update("project_data", string(raw)).Error; err != nil {
+			t.Fatal(err)
+		}
+		export, err := OpenCanvasProjectExport(context.Background(), id, link.Query().Get("ticket"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		if err := export.Write(context.Background(), &out); err != nil {
+			t.Fatal(err)
+		}
+		archive, err := zip.NewReader(bytes.NewReader(out.Bytes()), int64(out.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var missing []canvasExportMissing
+		for _, file := range archive.File {
+			if file.Name != "missing.json" {
+				continue
+			}
+			reader, err := file.Open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = json.NewDecoder(reader).Decode(&missing)
+			_ = reader.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		want := map[string]bool{"image:late-image": true, "audio:late-audio": true, "video:late-video": true, "media:late-chat": true}
+		if len(missing) != len(want) {
+			t.Fatalf("missing.json reports %d local assets, want %d: %+v", len(missing), len(want), missing)
+		}
+		for _, asset := range missing {
+			if !want[asset.StorageKey] || !strings.Contains(asset.Reason, "浏览器") {
+				t.Errorf("unexpected local missing entry: %+v", asset)
+			}
+			delete(want, asset.StorageKey)
+		}
+		if len(want) != 0 {
+			t.Errorf("missing.json omitted local keys: %v", want)
+		}
+	})
+}
 
 func TestCanvasProjectExportStreaming(t *testing.T) {
 	const childEnv = "IC_CANVAS_EXPORT_STREAMING_TEST"
