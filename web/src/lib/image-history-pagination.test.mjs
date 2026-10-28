@@ -53,6 +53,7 @@ test("真实分页回调只拉一页并用合并全集更新本地，不按页�
         setHistoryLoading: () => {}, setHistoryCursor: (next) => { cursor = next; },
         accountHistorySyncEnabledRef: { current: false }, saveLogChainRef: { current: Promise.resolve() },
         syncedImageCategoriesRef: { current: null },
+        remoteHistoryLogIdsRef: { current: null },
         fetchImageGenerationLogsPage: async (...args) => { requests.push(args); return { items: [{ id: "page", config: { channelMode: "remote" } }], nextCursor: "next" }; },
         fetchUserImageCategories: async () => ({ categories: [], deletedCategories: [] }),
         readStoredLogs: async () => saved, readStoredImageCategories: async () => ({ categories: [], deletedCategories: [] }),
@@ -62,6 +63,8 @@ test("真实分页回调只拉一页并用合并全集更新本地，不按页�
         replaceStoredImageHistory: async (logs, categories, deletedCategories) => { saved = logs; return { categories, deletedCategories }; },
         sameImageCategoryState: () => true,
         syncStoredImageCategories: async (_, state) => state,
+        persistImageHistory: async () => {},
+        imageHistoryLogsMissingFromRemote: (local, remoteIds) => local.filter((log) => !remoteIds.has(log.id)),
         setCategories: () => {}, setLogs: () => {}, message: { error: assert.fail },
     });
     await load();

@@ -145,9 +145,15 @@ const IMAGE_HISTORY_SYNC_WARNING_INTERVAL_MS = 60000;
 const IMAGE_HISTORY_SYNC_FAILURE_HINT = "历史记录已保存在本机，同步到账号失败，其他设备暂时看不到；正在重试";
 
 type ImageHistorySyncState = { owner: string; failures: number; timer: ReturnType<typeof setTimeout> | null; warnedAt: number; running: boolean };
+type RemoteImageHistoryLogIds = { owner: string; ids: Set<string> };
 
 function imageHistorySyncBackoffMs(failures: number) {
     return IMAGE_HISTORY_SYNC_RETRY_DELAYS_MS[Math.min(Math.max(failures - 1, 0), IMAGE_HISTORY_SYNC_RETRY_DELAYS_MS.length - 1)];
+}
+
+function imageHistoryLogsMissingFromRemote<T extends { id: string }>(localLogs: T[], remoteIds: Set<string>) {
+    if (localLogs.length <= remoteIds.size) return [];
+    return localLogs.filter((log) => log.id && !remoteIds.has(log.id));
 }
 
 function scheduleImageHistorySyncRetry(state: ImageHistorySyncState, owner: string, run: (owner: string) => unknown) {
@@ -200,6 +206,7 @@ export default function ImagePage() {
     const retryImageHistorySyncRef = useRef<(owner?: string) => Promise<void>>(async () => {});
     const syncedImageCategoriesRef = useRef<{ token: string; state: UserImageCategories } | null>(null);
     const historyPageRequestRef = useRef<{ token: string; loading: boolean } | null>(null);
+    const remoteHistoryLogIdsRef = useRef<RemoteImageHistoryLogIds | null>(null);
     const saveLogChainRef = useRef<Promise<void>>(Promise.resolve());
     const pollingLogIdsRef = useRef(new Set<string>());
     const logsRef = useRef<GenerationLog[]>([]);
@@ -1006,8 +1013,10 @@ export default function ImagePage() {
     const loadAccountImageHistory = async (cursor?: string | null) => {
         if (historyPageRequestRef.current?.token === token && historyPageRequestRef.current.loading) return;
         const request = { token, loading: true };
+        const requestOwner = useUserStore.getState().user?.id || token;
         historyPageRequestRef.current = request;
-        const active = () => historyPageRequestRef.current === request && useUserStore.getState().token === token;
+        const active = () => historyPageRequestRef.current === request
+            && (useUserStore.getState().user?.id || useUserStore.getState().token) === requestOwner;
         setHistoryLoading(true);
         if (!cursor) setHistoryCursor(null);
         try {
@@ -1023,6 +1032,12 @@ export default function ImagePage() {
                 if (!active()) return;
                 const [localLogs, storedCategories] = await Promise.all([readStoredLogs(), readStoredImageCategories()]);
                 if (!active()) return;
+                const previousRemoteIds = remoteHistoryLogIdsRef.current;
+                const remoteIds = new Set(!cursor || previousRemoteIds?.owner !== requestOwner ? [] : previousRemoteIds.ids);
+                page.items.forEach((log) => {
+                    if (log.id) remoteIds.add(log.id);
+                });
+                remoteHistoryLogIdsRef.current = { owner: requestOwner, ids: remoteIds };
                 const merged = await mergeGenerationLogs(page.items.map((log) => ({ ...log, summaryOnly: true })), localLogs, true);
                 const mergedCategories = mergeImageCategories(storedCategories.categories, remoteCategories?.categories || [], storedCategories.deletedCategories, remoteCategories?.deletedCategories || []);
                 const categorized = withWorkflowLogCategories(merged, mergedCategories.categories, mergedCategories.deletedCategories);
@@ -1037,6 +1052,15 @@ export default function ImagePage() {
                 if (!active()) return;
                 if (remoteCategories) syncedImageCategoriesRef.current = { token, state: synced };
                 setCategories(synced.categories);
+                if (!cursor) {
+                    if ((useUserStore.getState().user?.id || useUserStore.getState().token) !== requestOwner) return;
+                    const missingLogs = imageHistoryLogsMissingFromRemote(localLogs, remoteIds);
+                    if (missingLogs.length) {
+                        const storageOwner = useUserStore.getState().user?.id || useUserStore.getState().token;
+                        if (storageOwner !== requestOwner) return;
+                        void Promise.resolve(persistImageHistory(missingLogs, synced.categories)).catch(() => undefined);
+                    }
+                }
             })();
             saveLogChainRef.current = next;
             await next;

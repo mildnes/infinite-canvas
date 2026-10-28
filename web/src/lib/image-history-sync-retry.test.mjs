@@ -50,6 +50,7 @@ function syncScope(overrides = {}) {
         token: "owner-token",
         historySyncRef: { current: { owner: "", failures: 0, timer: null, warnedAt: 0, running: false } },
         syncedImageCategoriesRef: { current: null },
+        remoteHistoryLogIdsRef: { current: null },
         persistImageHistoryRef: { current: null },
         useUserStore: { getState: () => ({ token: "owner-token", user: { id: "owner-a" } }) },
         serializeLog: (log) => ({ ...log }),
@@ -84,6 +85,8 @@ function syncScope(overrides = {}) {
         IMAGE_HISTORY_SYNC_FAILURE_HINT: "历史记录已保存在本机，同步到账号失败，其他设备暂时看不到；正在重试",
         IMAGE_HISTORY_SYNC_WARNING_INTERVAL_MS: constant("IMAGE_HISTORY_SYNC_WARNING_INTERVAL_MS"),
         retryImageHistorySync: async () => {},
+        persistImageHistory: async () => {},
+        imageHistoryLogsMissingFromRemote: (local, remoteIds) => local.filter((log) => !remoteIds.has(log.id)),
         storedLogs: [{ id: "a" }],
         storedCategories: [],
     };
@@ -163,6 +166,7 @@ test("分类 GET 失败后日志上传能力保留", async () => {
         historyPageRequestRef: { current: null },
         saveLogChainRef: { current: Promise.resolve() },
         syncedImageCategoriesRef: { current: null },
+        remoteHistoryLogIdsRef: { current: null },
         historySyncRef: { current: { owner: "", failures: 0, timer: null, warnedAt: 0, running: false } },
         useUserStore: { getState: () => ({ token: "owner-token", user: { id: "owner-a" } }) },
         fetchImageGenerationLogsPage: async () => ({ items: [], nextCursor: null }),
@@ -183,6 +187,8 @@ test("分类 GET 失败后日志上传能力保留", async () => {
         setCategories: () => {},
         setLogs: () => {},
         message: { error: () => {} },
+        persistImageHistory: async () => {},
+        imageHistoryLogsMissingFromRemote: (local, remoteIds) => local.filter((log) => !remoteIds.has(log.id)),
     };
     const load = callback("loadAccountImageHistory", scope);
     await load();
@@ -215,6 +221,7 @@ test("新浏览器首次登录远端为空后，新生成日志仍会进入同�
         historyPageRequestRef: { current: null },
         saveLogChainRef: { current: Promise.resolve() },
         syncedImageCategoriesRef: { current: null },
+        remoteHistoryLogIdsRef: { current: null },
         historySyncRef: h.scope.historySyncRef,
         useUserStore: h.scope.useUserStore,
         fetchImageGenerationLogsPage: async () => ({ items: [], nextCursor: null }),
@@ -232,6 +239,8 @@ test("新浏览器首次登录远端为空后，新生成日志仍会进入同�
         setCategories: () => {},
         setLogs: () => {},
         message: { error: () => {} },
+        persistImageHistory: async () => {},
+        imageHistoryLogsMissingFromRemote: (local, remoteIds) => local.filter((log) => !remoteIds.has(log.id)),
     });
     await load();
     assert.equal(h.scope.historySyncRef.current.failures, 0);

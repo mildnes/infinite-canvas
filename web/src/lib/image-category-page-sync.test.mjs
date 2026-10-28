@@ -174,6 +174,7 @@ test("分类 GET 离线仍加载日志页与本地分类，并保留日志上传
         token: "owner", historyPageRequestRef: { current: null },
         historySyncRef: state, saveLogChainRef: { current: Promise.resolve() },
         syncedImageCategoriesRef: { current: null },
+        remoteHistoryLogIdsRef: { current: null },
         useUserStore: { getState: () => ({ token: "owner" }) },
         fetchImageGenerationLogsPage: async () => ({ items: [{ id: "remote-log" }], nextCursor: null }),
         fetchUserImageCategories: async () => { throw new Error("offline"); },
@@ -187,6 +188,8 @@ test("分类 GET 离线仍加载日志页与本地分类，并保留日志上传
         setCategories: (categories) => { categoryViews.push(categories); },
         setLogs: (logs) => { logViews.push(logs); },
         syncStoredImageCategories: assert.fail,
+        persistImageHistory: async () => {},
+        imageHistoryLogsMissingFromRemote: (local, remoteIds) => local.filter((log) => !remoteIds.has(log.id)),
         message: { error: assert.fail },
     });
     const result = await load();
