@@ -16,6 +16,7 @@ import { CanvasResourceMentionTextarea } from "./canvas-resource-mention-textare
 import { CanvasNodeType, type CanvasNodeData, type Position } from "../types";
 import { isCanvasImageNodeType } from "../utils/canvas-panorama";
 import type { CanvasResourceReference } from "../utils/canvas-resource-references";
+import { interpolateGenerationProgress } from "../utils/canvas-progress";
 
 function mediaPlaybackUrl(url?: string) {
     const value = String(url || "").trim();
@@ -550,7 +551,9 @@ function LoadingContent({ node, theme, now, onRetry }: Pick<NodeContentRendererP
     const currentNow = now ?? localNow;
     const startedAt = typeof node.metadata?.startedAt === "number" ? node.metadata.startedAt : startTimeRef.current;
     const elapsedMs = Math.max(0, currentNow - startedAt);
-    const progress = Math.max(0, Math.min(100, Math.round(node.metadata?.progress || 0)));
+    const backendProgress = Math.max(0, Math.min(100, Math.round(node.metadata?.progress || 0)));
+    // 后端只在 0/10/30/100 几个台阶给值，10 会持续很久；按已用时间平滑推进，完成后由 100 覆盖
+    const progress = interpolateGenerationProgress(backendProgress, elapsedMs);
 	if (elapsedMs >= 30 * 60 * 1000) {
 		return <ErrorContent node={{ ...node, metadata: { ...node.metadata, errorDetails: "任务已中断（超过 30 分钟未完成）" } }} theme={theme} onRetry={onRetry} />;
 	}
