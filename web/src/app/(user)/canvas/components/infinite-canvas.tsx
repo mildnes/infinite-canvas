@@ -5,6 +5,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { ViewportTransform } from "../types";
+import type { CanvasAlignmentGuides } from "../utils/canvas-alignment";
 
 type InfiniteCanvasProps = {
     containerRef: React.RefObject<HTMLDivElement | null>;
@@ -13,6 +14,7 @@ type InfiniteCanvasProps = {
     scaleRef: React.MutableRefObject<number>;
     tool: "select" | "pan";
     backgroundMode?: CanvasBackgroundMode;
+    alignmentGuides?: CanvasAlignmentGuides;
     onViewportChange: (viewport: ViewportTransform) => void;
     onCanvasMouseDown?: (event: React.PointerEvent<HTMLDivElement>) => void;
     onCanvasDeselect?: () => void;
@@ -22,7 +24,7 @@ type InfiniteCanvasProps = {
     children: React.ReactNode;
 };
 
-export function InfiniteCanvas({ containerRef, viewport, viewportRef, scaleRef, tool, backgroundMode = "lines", onViewportChange, onCanvasMouseDown, onCanvasDeselect, onCanvasDoubleClick, onContextMenu, onDrop, children }: InfiniteCanvasProps) {
+export function InfiniteCanvas({ containerRef, viewport, viewportRef, scaleRef, tool, backgroundMode = "lines", alignmentGuides = {}, onViewportChange, onCanvasMouseDown, onCanvasDeselect, onCanvasDoubleClick, onContextMenu, onDrop, children }: InfiniteCanvasProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const panState = useRef({
         isPanning: false,
@@ -282,6 +284,24 @@ export function InfiniteCanvas({ containerRef, viewport, viewportRef, scaleRef, 
             onDrop={onDrop}
         >
             <CanvasGrid viewport={viewport} mode={backgroundMode} />
+            {typeof alignmentGuides.vertical === "number" ? (
+                <div
+                    className="pointer-events-none absolute inset-y-0 z-[90] w-px opacity-[.48]"
+                    style={{
+                        left: viewport.x + alignmentGuides.vertical * viewport.k,
+                        backgroundImage: `repeating-linear-gradient(to bottom, ${theme.canvas.selectionStroke} 0 5px, transparent 5px 10px)`,
+                    }}
+                />
+            ) : null}
+            {typeof alignmentGuides.horizontal === "number" ? (
+                <div
+                    className="pointer-events-none absolute inset-x-0 z-[90] h-px opacity-[.48]"
+                    style={{
+                        top: viewport.y + alignmentGuides.horizontal * viewport.k,
+                        backgroundImage: `repeating-linear-gradient(to right, ${theme.canvas.selectionStroke} 0 5px, transparent 5px 10px)`,
+                    }}
+                />
+            ) : null}
             <div
                 className="absolute origin-top-left"
                 ref={transformLayerRef}

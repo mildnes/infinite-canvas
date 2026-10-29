@@ -38,11 +38,26 @@ test("网格吸附开关持久化并在拖拽结束后只吸附本次移动节�
     assert.ok(/const \[snapToGrid, setSnapToGrid\] = useState\(true\)/.test(page));
     assert.ok(/setSnapToGrid\(project\.snapToGrid \?\? true\)/.test(page));
     assert.ok(/import \{[^}]*snapNodesToCanvasGrid[^}]*\} from "\.\.\/utils\/canvas-layout"/.test(page));
-    assert.ok(/snapToGridRef\.current \? snapNodesToCanvasGrid\(finalNodes, movedIds\) : finalNodes/.test(page));
+    assert.ok(/snapToGridRef\.current && !alignmentMatched \? snapNodesToCanvasGrid\(finalNodes, movedIds\) : finalNodes/.test(page));
     assert.ok(/snapToGrid=\{snapToGrid\}/.test(page));
     assert.ok(/onSnapToGridChange=\{setSnapToGrid\}/.test(page));
     assert.ok(/snapToGrid:\s*true/.test(store));
     assert.ok(/snapToGrid:\s*source\.snapToGrid \?\? true/.test(store));
     assert.ok(/网格吸附/.test(toolbar));
     assert.ok(/checked=\{snapToGrid\}/.test(toolbar));
+});
+
+test("节点对齐优先于网格吸附并在拖动期间显示辅助线", () => {
+    assert.ok(/import \{[^}]*calculateCanvasAlignment[^}]*\} from "\.\.\/utils\/canvas-alignment"/.test(page));
+    assert.ok(/alignmentContextRef\.current = createCanvasAlignmentContext/.test(page));
+    assert.ok(/const aligned = calculateCanvasAlignment\(alignmentContextRef\.current/.test(page));
+    assert.ok(/snapToGridRef\.current && !alignmentMatched/.test(page));
+    assert.ok(/alignmentGuides=\{alignmentGuides\}/.test(page));
+    assert.ok(/setAlignmentGuides\(\{\}\)/.test(page));
+});
+
+test("定向上传关闭多选，批量选择仍进入统一导入流程", () => {
+    assert.ok(/imageInputRef\.current\.multiple = !nodeId/.test(page));
+    assert.ok(/await importFiles\(files, position\)/.test(page));
+    assert.ok(/const resetUploadInput = \(\) =>/.test(page));
 });

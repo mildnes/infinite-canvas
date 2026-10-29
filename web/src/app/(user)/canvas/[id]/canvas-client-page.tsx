@@ -40,6 +40,7 @@ import { applyCameraPrompt } from "../utils/canvas-camera";
 import { canvasMediaRequestPrompt, submitCanvasImageRequest, submitCanvasVideoRequest } from "../utils/canvas-media-requests";
 import { GROUP_PADDING, findContainingGroupId, findGroupDropTarget, getNodeBounds, snapNodesIntoGroup } from "../utils/canvas-group";
 import { arrangeCanvasNodes, offsetBatchChildren, snapNodesToCanvasGrid } from "../utils/canvas-layout";
+import { calculateCanvasAlignment, createCanvasAlignmentContext, type CanvasAlignmentContext, type CanvasAlignmentGuides } from "../utils/canvas-alignment";
 import { prepareCanvasNodeOverwrite, shouldOverwriteCanvasNode } from "../utils/canvas-regeneration";
 import { copiedCanvasNodeMetadata } from "../utils/canvas-node-copy";
 import { audioExtension, downloadSelectedCanvasNodes, imageExtension, prepareCanvasNodeDownloadSelection } from "../utils/canvas-selected-download";
@@ -362,6 +363,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const uploadingMediaNodeIdsRef = useRef(new Set<string>());
     const uploadingImageNodeIdsRef = useRef(new Set<string>());
     const nodeDraggingRef = useRef(false);
+    const alignmentContextRef = useRef<CanvasAlignmentContext | null>(null);
     const dragRef = useRef<{
         isDraggingNode: boolean;
         hasMoved: boolean;
@@ -467,6 +469,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const [openingBatchIds, setOpeningBatchIds] = useState<Set<string>>(new Set());
     const [isNodeDragging, setIsNodeDragging] = useState(false);
     const [dropTargetGroupId, setDropTargetGroupId] = useState<string | null>(null);
+    const [alignmentGuides, setAlignmentGuides] = useState<CanvasAlignmentGuides>({});
     const [referencePickerNodeId, setReferencePickerNodeId] = useState<string | null>(null);
     const [canvasNow, setCanvasNow] = useState(Date.now());
     const requestTextEdit = useCallback((node: CanvasNodeData) => {
@@ -1886,27 +1889,44 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             startY: event.clientY,
             initialSelectedNodes: currentNodes.filter((node) => dragIds.has(node.id)).map((node) => ({ id: node.id, x: node.position.x, y: node.position.y })),
         };
+        alignmentContextRef.current = createCanvasAlignmentContext(
+            currentNodes.filter((node) => !isHiddenBatchChild(node, currentNodes)),
+            dragIds,
+        );
         historyPausedRef.current = true;
         nodeDraggingRef.current = true;
         setIsNodeDragging(true);
+        setAlignmentGuides({});
     }, []);
 
     const finishNodeDrag = useCallback((clientX?: number, clientY?: number) => {
-        if (!canWriteCanvas()) { dragRef.current.isDraggingNode = false; return; }
+        if (!canWriteCanvas()) {
+            dragRef.current.isDraggingNode = false;
+            alignmentContextRef.current = null;
+            setAlignmentGuides({});
+            return;
+        }
         if (rafRef.current) {
             cancelAnimationFrame(rafRef.current);
             rafRef.current = null;
         }
         if (!dragRef.current.isDraggingNode) {
             setDropTargetGroupId(null);
+            alignmentContextRef.current = null;
+            setAlignmentGuides({});
             return;
         }
 
         const wasClick = !dragRef.current.hasMoved && dragRef.current.initialSelectedNodes.length === 1;
         const clickedNodeId = dragRef.current.clickedGroupId || dragRef.current.initialSelectedNodes[0]?.id;
         const currentViewport = viewportRef.current;
-        const dx = clientX == null ? 0 : (clientX - dragRef.current.startX) / currentViewport.k;
-        const dy = clientY == null ? 0 : (clientY - dragRef.current.startY) / currentViewport.k;
+        const rawOffset = {
+            x: clientX == null ? 0 : (clientX - dragRef.current.startX) / currentViewport.k,
+            y: clientY == null ? 0 : (clientY - dragRef.current.startY) / currentViewport.k,
+        };
+        const aligned = calculateCanvasAlignment(alignmentContextRef.current, rawOffset, 7 / currentViewport.k);
+        const { x: dx, y: dy } = aligned.offset;
+        const alignmentMatched = typeof aligned.guides.vertical === "number" || typeof aligned.guides.horizontal === "number";
         const initialPositions = dragRef.current.initialSelectedNodes;
 
         historyPausedRef.current = false;
@@ -1924,7 +1944,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     const groupId = findContainingGroupId(node, moved);
                     return node.metadata?.groupId === groupId ? node : { ...node, metadata: { ...node.metadata, groupId } };
             });
-            const settledNodes = snapToGridRef.current ? snapNodesToCanvasGrid(finalNodes, movedIds) : finalNodes;
+            const settledNodes = snapToGridRef.current && !alignmentMatched ? snapNodesToCanvasGrid(finalNodes, movedIds) : finalNodes;
             nodesRef.current = settledNodes;
             setNodes(settledNodes);
             persistCurrentCanvasRef.current(settledNodes);
@@ -1936,7 +1956,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         dragRef.current.hasMoved = false;
         dragRef.current.clickedGroupId = null;
         dragRef.current.initialSelectedNodes = [];
+        alignmentContextRef.current = null;
         setDropTargetGroupId(null);
+        setAlignmentGuides({});
         if (wasClick && clickedNodeId) {
             const clickedNode = nodesRef.current.find((node) => node.id === clickedNodeId);
             if (clickedNode?.type === CanvasNodeType.Group) {
@@ -1954,12 +1976,17 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             const currentViewport = viewportRef.current;
 
             if (dragRef.current.isDraggingNode) {
-                const dx = (event.clientX - dragRef.current.startX) / currentViewport.k;
-                const dy = (event.clientY - dragRef.current.startY) / currentViewport.k;
+                const rawOffset = {
+                    x: (event.clientX - dragRef.current.startX) / currentViewport.k,
+                    y: (event.clientY - dragRef.current.startY) / currentViewport.k,
+                };
+                const aligned = calculateCanvasAlignment(alignmentContextRef.current, rawOffset, 7 / currentViewport.k);
+                const { x: dx, y: dy } = aligned.offset;
                 const initialPositions = dragRef.current.initialSelectedNodes;
                 if (Math.abs(event.clientX - dragRef.current.startX) > 3 || Math.abs(event.clientY - dragRef.current.startY) > 3) {
                     dragRef.current.hasMoved = true;
                 }
+                const nextGuides = dragRef.current.hasMoved ? aligned.guides : {};
 
                 const movedIds = new Set(initialPositions.map((item) => item.id));
                 const previewNodes = nodesRef.current.map((node) => {
@@ -1970,6 +1997,11 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
                 if (rafRef.current) cancelAnimationFrame(rafRef.current);
                 rafRef.current = requestAnimationFrame(() => {
+                    setAlignmentGuides((current) =>
+                        current.vertical === nextGuides.vertical && current.horizontal === nextGuides.horizontal
+                            ? current
+                            : nextGuides,
+                    );
                     setNodes((prev) =>
                         prev.map((node) => {
                             const initial = initialPositions.find((item) => item.id === node.id);
@@ -3215,38 +3247,48 @@ const generateAngleNode = useCallback(
     const handleUploadRequest = useCallback((nodeId?: string, position?: Position) => {
         if (!requireCanvasWriter()) return;
         uploadTargetRef.current = { nodeId, position };
+        if (imageInputRef.current) imageInputRef.current.multiple = !nodeId;
         imageInputRef.current?.click();
     }, []);
 
     const handleImageInputChange = useCallback(
         async (event: ReactChangeEvent<HTMLInputElement>) => {
-            if (!requireCanvasWriter()) { event.target.value = ""; return; }
+            const resetUploadInput = () => {
+                uploadTargetRef.current = null;
+                event.target.value = "";
+            };
+            if (!requireCanvasWriter()) { resetUploadInput(); return; }
             const files = Array.from(event.target.files || []);
             const target = uploadTargetRef.current;
             if (!files.length) {
-                event.target.value = "";
+                resetUploadInput();
                 return;
             }
             if (!target?.nodeId && files.length > 1) {
                 const position = target?.position || screenToCanvas((containerRef.current?.getBoundingClientRect().left || 0) + size.width / 2, (containerRef.current?.getBoundingClientRect().top || 0) + size.height / 2);
-                await importFiles(files, position);
-                uploadTargetRef.current = null;
-                event.target.value = "";
+                try {
+                    await importFiles(files, position);
+                } finally {
+                    resetUploadInput();
+                }
                 return;
             }
             const file = files[0];
             if (!file || (!file.type.startsWith("image/") && !file.type.startsWith("video/") && !isAudioFile(file))) {
                 message.warning("不支持的文件类型");
-                uploadTargetRef.current = null;
-                event.target.value = "";
+                resetUploadInput();
                 return;
             }
             if (target?.nodeId && files.length > 1) message.warning("填充指定节点时仅支持单个文件，已使用第一个文件");
             const targetNode = target?.nodeId ? nodesRef.current.find((node) => node.id === target.nodeId) : null;
+            if (target?.nodeId && !targetNode) {
+                message.warning("目标节点不存在，请重新选择");
+                resetUploadInput();
+                return;
+            }
             if (isPanoramaNodeType(targetNode?.type) && !file.type.startsWith("image/")) {
                 message.warning("全景图节点仅支持上传图片作为参考");
-                uploadTargetRef.current = null;
-                event.target.value = "";
+                resetUploadInput();
                 return;
             }
 
@@ -3322,8 +3364,7 @@ const generateAngleNode = useCallback(
                 void (isAudioFile(file) ? createAudioFileNode(file, position) : file.type.startsWith("video/") ? createVideoFileNode(file, position) : createImageFileNode(file, position, true));
             }
 
-            uploadTargetRef.current = null;
-            event.target.value = "";
+            resetUploadInput();
         },
         [createAudioFileNode, createImageFileNode, createVideoFileNode, importFiles, message, screenToCanvas, size.height, size.width],
     );
@@ -4974,6 +5015,7 @@ const generateAngleNode = useCallback(
                     scaleRef={scaleRef}
                     tool={canvasTool}
                     backgroundMode={backgroundMode}
+                    alignmentGuides={alignmentGuides}
                     onViewportChange={commitViewport}
                     onCanvasMouseDown={(event) => {
                         if (!referencePickerNodeId) handleCanvasMouseDown(event);
