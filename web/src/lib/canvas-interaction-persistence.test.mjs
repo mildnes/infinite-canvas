@@ -44,6 +44,10 @@ function dragContext(snapToGrid) {
         setDialogNodeId() {},
         snapToGridRef: { current: snapToGrid },
         snapNodesToCanvasGrid,
+        // 节点对齐：默认无对齐上下文（不吸附），保持原有「按指针位置落点」断言不变。
+        alignmentContextRef: { current: null },
+        setAlignmentGuides() {},
+        calculateCanvasAlignment: (context, offset) => ({ offset, guides: {} }),
     };
     return { context, writes };
 }
