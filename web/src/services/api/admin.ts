@@ -413,12 +413,16 @@ export type AdminSettings = {
     private: AdminPrivateSettings;
 };
 
+export type AdminModelRename = { channelId: string; from: string; to: string };
+export type AdminUserGroupScopeChange = { groupId: string; channelId: string; model: string; reason: "channel_removed" | "model_removed" | "model_renamed" | "unresolvable" };
+export type AdminSettingsSaveResult = AdminSettings & { cleaned?: AdminUserGroupScopeChange[] };
+
 export async function fetchAdminSettings(token: string) {
     return apiGet<AdminSettings>("/api/admin/settings", undefined, token);
 }
 
-export async function saveAdminSettings(token: string, settings: AdminSettings) {
-    return apiPost<AdminSettings>("/api/admin/settings", settings, token);
+export async function saveAdminSettings(token: string, settings: AdminSettings, modelRenames: AdminModelRename[] = []) {
+    return apiPost<AdminSettingsSaveResult>("/api/admin/settings", { ...settings, modelRenames }, token);
 }
 
 export async function fetchMCPServerTools(token: string, payload: { server: Partial<AdminMCPServer> }) {

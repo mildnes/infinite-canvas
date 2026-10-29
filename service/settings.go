@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
 	"net/http"
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tigerowo/infinite-canvas/model"
@@ -20,6 +22,19 @@ import (
 )
 
 var adminModelHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
+type SettingsSaveResult struct {
+	model.Settings
+	Cleaned []UserGroupScopeChange `json:"cleaned"`
+}
+
+var settingsSaveMu sync.Mutex
+
+// One receipt makes an exact retry of a cleanup request idempotent without exempting new invalid input.
+var lastSettingsSave struct {
+	request [32]byte
+	saved   [32]byte
+}
 
 func PublicSettings() (model.PublicSetting, error) {
 	settings, err := repository.GetSettings()
@@ -53,25 +68,58 @@ func AdminSettings() (model.Settings, error) {
 }
 
 func SaveSettings(settings model.Settings) (model.Settings, error) {
+	result, err := SaveSettingsWithModelRenames(settings, nil)
+	return result.Settings, err
+}
+
+func SaveSettingsWithModelRenames(settings model.Settings, renames []ModelRename) (SettingsSaveResult, error) {
+	settingsSaveMu.Lock()
+	defer settingsSaveMu.Unlock()
 	saved, err := repository.GetSettings()
 	if err != nil {
-		return model.Settings{}, err
+		return SettingsSaveResult{}, err
+	}
+	requestData, err := json.Marshal(struct {
+		model.Settings
+		Renames []ModelRename
+	}{settings, renames})
+	if err != nil {
+		return SettingsSaveResult{}, err
+	}
+	savedData, err := json.Marshal(saved)
+	if err != nil {
+		return SettingsSaveResult{}, err
+	}
+	requestDigest := sha256.Sum256(requestData)
+	if lastSettingsSave.request == requestDigest && lastSettingsSave.saved == sha256.Sum256(savedData) {
+		return SettingsSaveResult{Settings: hidePrivateAPIKeys(normalizeSettings(saved)), Cleaned: []UserGroupScopeChange{}}, nil
 	}
 	rawGroups := settings.Public.ModelChannel.UserGroups
 	if rawGroups == nil {
 		rawGroups = saved.Public.ModelChannel.UserGroups
 		settings.Public.ModelChannel.UserGroups = rawGroups
 	}
+	if err := validateUserGroupStructure(rawGroups, saved.Public.ModelChannel.UserGroups); err != nil {
+		return SettingsSaveResult{}, err
+	}
 	settings = normalizeSettings(settings)
 	groupAvailableModels := settings.Public.ModelChannel.AvailableModels
 	if len(groupAvailableModels) == 0 {
 		groupAvailableModels = enabledChannelModels(settings.Private.Channels)
 	}
-	if err := validateUserGroups(rawGroups, saved.Public.ModelChannel.UserGroups, groupAvailableModels, settings.Private.Channels); err != nil {
-		return model.Settings{}, err
+	groups, cleaned, err := reconcileUserGroupScopes(rawGroups, saved.Public.ModelChannel.UserGroups, saved.Private.Channels, settings.Private.Channels, groupAvailableModels, renames)
+	if err != nil {
+		return SettingsSaveResult{}, err
+	}
+	if err := validateUserGroups(groups, saved.Public.ModelChannel.UserGroups, groupAvailableModels, settings.Private.Channels); err != nil {
+		return SettingsSaveResult{}, err
+	}
+	settings.Public.ModelChannel.UserGroups = normalizeUserGroups(groups, groupAvailableModels, settings.Private.Channels)
+	if err := validateUserGroups(settings.Public.ModelChannel.UserGroups, saved.Public.ModelChannel.UserGroups, groupAvailableModels, settings.Private.Channels); err != nil {
+		return SettingsSaveResult{}, err
 	}
 	if err := validateUniqueModelChannelIDs(settings.Private.Channels); err != nil {
-		return model.Settings{}, err
+		return SettingsSaveResult{}, err
 	}
 	settings.Private.Agent.Skills = []model.LegacyAgentSkill{}
 	keepPrivateAPIKeys(&settings, normalizeSettings(saved))
@@ -79,15 +127,20 @@ func SaveSettings(settings model.Settings) (model.Settings, error) {
 	keepPrivateAgentSecrets(&settings, normalizeSettings(saved))
 	keepPrivateStorageSecrets(&settings, normalizeSettings(saved))
 	if err := validateEnabledStorageProviderTypes(settings.Private.Storage.Providers); err != nil {
-		return model.Settings{}, err
+		return SettingsSaveResult{}, err
 	}
 	result, err := repository.SaveSettings(settings, now())
 	if err == nil {
+		resultData, _ := json.Marshal(result)
+		lastSettingsSave.request, lastSettingsSave.saved = requestDigest, sha256.Sum256(resultData)
+		for _, item := range cleaned {
+			log.Printf("user_group_scope_sync group=%q channel=%q model=%q reason=%s", item.GroupID, item.ChannelID, item.Model, item.Reason)
+		}
 		RefreshPromptSyncScheduler()
 		RefreshStorageCapacityScheduler()
 		RefreshAILogCleanupScheduler()
 	}
-	return hidePrivateAPIKeys(result), err
+	return SettingsSaveResult{Settings: hidePrivateAPIKeys(result), Cleaned: cleaned}, err
 }
 
 func AdminChannelModels(index *int, channel model.ModelChannel) ([]string, error) {

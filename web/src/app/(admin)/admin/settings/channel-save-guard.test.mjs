@@ -6,6 +6,7 @@ import ts from "typescript";
 
 const source = readFileSync(new URL("./page.tsx", import.meta.url), "utf8");
 const ast = ts.createSourceFile("page.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const helpers = ast.statements.filter(node => ts.isFunctionDeclaration(node) && ["prepareUserGroupsForSave", "newModelsOutsideDefaultGroup", "notifyUserGroupScopeChanges"].includes(node.name?.text)).map(node => node.getText(ast)).join("\n");
 let persist, load;
 function visit(node) {
     if (ts.isFunctionDeclaration(node) && node.name?.text === "persistChannels") persist = node.getText(ast);
@@ -22,12 +23,13 @@ function fixture() {
         form: { getFieldsValue: () => data, setFieldsValue: () => {} }, normalizeSettings: v => v, normalizeUserGroups: () => [], availableUserGroupModels: () => [],
         collectChannelWorkflows: () => [], collectChannelModels: v => v.map(c => c.id), filterModels: v => v, resolveAvailableModels: v => v,
         savedRequestModelNamesRef: { current: [] }, savedUserGroupsRef: { current: [] },
+        savedChannelsRef: { current: [] }, setNewGroupModelHints: () => {},
         saveAdminSettings: async (_token, value) => { writes.push(value); return value; }, fetchAdminSettings: async () => data,
         clearImageStorageConfigCache: () => {}, clearMediaStorageConfigCache: () => {}, mergeChannelApiKeys: (_channels, saved) => saved,
         setChannels: () => {}, setModelCosts: () => {}, rememberKnownModels: () => {}, notifyPublicSettingsUpdated: () => {}, setJsonText: () => {},
         setIsLoading: () => {}, setHasLoadedSettings: () => {}, setKnownModels: () => {}, collectKnownModels: () => [],
     };
-    vm.runInNewContext(ts.transpileModule(persist + '\nconst load = ' + load + ';', { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText, context);
+    vm.runInNewContext(ts.transpileModule(helpers + "\n" + persist + '\nconst load = ' + load + ';', { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText, context);
     return { context, writes, errors, data, settingsLoadedRef };
 }
 

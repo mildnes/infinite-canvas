@@ -23,6 +23,27 @@ description: 业务接口统一响应结构与前端处理约定
 
 接口连接失败、服务不可达、返回体不是约定 JSON 时，前端按网络或接口异常处理。
 
+## 渠道变更与分组引用
+
+`POST /api/admin/settings` 仍接收完整 `public`、`private` 配置。`private.channels` 是渠道和本地模型名称的权威源，管理端模型映射表改名时附加顶层 `modelRenames`。下面只展示新增请求字段，提交时仍需带完整设置：
+
+```json
+{
+  "modelRenames": [
+    { "channelId": "channel-example", "from": "旧请求名", "to": "新请求名" }
+  ]
+}
+```
+
+- scope 按 `(channelId, model)` 精确引用当前渠道的本地模型名。保存先与已保存分组比较，继承的失效 scope 自动移除；本次新增或修改为不存在渠道、非该渠道模型或未开放模型的 scope 则拒绝。错误包含分组名（空时为 ID）、渠道名或 ID、模型名；失败不落库。
+- 显式改名只迁移原有对应 scope，不添加其他授权。未提供映射时，只在旧、新 `modelMap` 中存在相同上游名、旧本地名消失且只有一个新增本地名匹配时推断改名；纯透传、上游同时变化或候选不唯一时按移除处理。
+- 成功响应的 `data` 保持 `public`、`private` 并新增 `cleaned` 数组。每项为 `{ groupId, channelId, model, reason }`，`model` 是变更前名称，`reason` 为 `channel_removed`、`model_removed`、`model_renamed` 或 `unresolvable`。清理与改名仅在成功落库后记录 `user_group_scope_sync` 日志。规范化后的响应分组与数据库保存内容一致。
+- 存量修复采用**首次保存时自动清理**：即使管理端读取已经隐藏旧失效项，保存仍会检查数据库中的原始分组并持久化清理，返回清理条目；不改写渠道来迁就失效引用。同一进程中原样连续重试、且已保存配置未变化时复用最近一次成功请求的摘要，`cleaned` 为空，不重复记录日志；不新增数据库字段或历史数据迁移脚本。进程重启后不保留此请求重试凭据，客户端应以保存响应作为后续编辑基线。
+- 新增渠道模型不会自动追加任何受限分组 scope。管理端保存后提示未加入默认组的新增模型，并提供“一键加入默认用户分组”；只有点击后才按渠道追加授权。默认组已有旧格式名称授权或 `unrestricted=true` 时维持既有权限语义。
+- `unrestricted=true` 的分组不参与联动，`models`、`scopes` 保持为空。受限空白名单仍拒绝全部；未指定渠道时仅从分组允许的渠道选取，不回退到未授权同名渠道。分组 ID 唯一、唯一默认组且 ID 为 `default` 的校验不变，计费、权重和渠道顺序不变。
+
+运行 `go test ./handler ./service -run UserGroup -count=1` 可验证临时 SQLite 保存、归属、精确渠道模型校验、幂等重试及既有 fail-closed 守卫；前端对应 `web/src/app/(admin)/admin/settings/user-group-channel-sync.test.mjs`，覆盖改名载荷、影响数量、新增模型提示与显式授权、保存反馈和删除后新建行不误判改名。
+
 ## 后台日志接口
 
 后台日志接口位于 `/api/admin` 下，统一使用管理员鉴权并返回标准 `{ code, data, msg }` 响应。

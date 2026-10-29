@@ -2,12 +2,26 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/tigerowo/infinite-canvas/model"
 )
 
 const defaultUserGroupID = "default"
+
+type ModelRename struct {
+	ChannelID string `json:"channelId"`
+	From      string `json:"from"`
+	To        string `json:"to"`
+}
+
+type UserGroupScopeChange struct {
+	GroupID   string `json:"groupId"`
+	ChannelID string `json:"channelId"`
+	Model     string `json:"model"`
+	Reason    string `json:"reason"`
+}
 
 func normalizeUserGroups(groups []model.UserGroupSetting, available []string, channels []model.ModelChannel) []model.UserGroupSetting {
 	if len(groups) == 0 {
@@ -35,8 +49,8 @@ func normalizeUserGroups(groups []model.UserGroupSetting, available []string, ch
 	return result
 }
 
-// Validate raw input before normalization can hide a deleted default or an empty intersection.
-func validateUserGroups(groups, saved []model.UserGroupSetting, available []string, channels []model.ModelChannel) error {
+// Keep structural checks before normalization can hide a removed default or duplicate ID.
+func validateUserGroupStructure(groups, saved []model.UserGroupSetting) error {
 	if len(groups) == 0 && len(saved) == 0 {
 		return nil
 	}
@@ -59,6 +73,18 @@ func validateUserGroups(groups, saved []model.UserGroupSetting, available []stri
 		} else if id == defaultUserGroupID {
 			return safeMessageError{message: "默认分组身份不可修改"}
 		}
+	}
+	if defaults != 1 {
+		return safeMessageError{message: "必须保留唯一的默认分组，不可删除或改名 ID"}
+	}
+	return nil
+}
+
+func validateUserGroups(groups, saved []model.UserGroupSetting, available []string, channels []model.ModelChannel) error {
+	if err := validateUserGroupStructure(groups, saved); err != nil {
+		return err
+	}
+	for _, group := range groups {
 		if group.Unrestricted {
 			continue
 		}
@@ -68,30 +94,164 @@ func validateUserGroups(groups, saved []model.UserGroupSetting, available []stri
 				continue
 			}
 			hasScopes = true
-			if !userGroupScopeChannelExists(strings.TrimSpace(scope.ChannelID), channels) {
-				return safeMessageError{message: "用户分组配置的渠道不存在"}
-			}
-			if len(filterEnabledModels([]string{scope.Model}, available)) == 0 {
-				return safeMessageError{message: "该分组配置的模型均未开放"}
+			scope = trimmedUserGroupScope(scope)
+			if userGroupScopeInvalidReason(scope, available, channels) != "" {
+				return invalidUserGroupScopeError(group, scope, channels)
 			}
 		}
 		if (len(uniqueModelNames(group.Models)) > 0 || hasScopes) && len(filterEnabledModels(group.Models, available)) == 0 && len(normalizeUserGroupScopes(group.Scopes, available, channels)) == 0 {
 			return safeMessageError{message: "该分组配置的模型均未开放"}
 		}
 	}
-	if defaults != 1 {
-		return safeMessageError{message: "必须保留唯一的默认分组，不可删除或改名 ID"}
-	}
 	return nil
 }
 
-func userGroupScopeChannelExists(id string, channels []model.ModelChannel) bool {
+func trimmedUserGroupScope(scope model.UserGroupModelScope) model.UserGroupModelScope {
+	return model.UserGroupModelScope{ChannelID: strings.TrimSpace(scope.ChannelID), Model: strings.TrimSpace(scope.Model)}
+}
+
+func userGroupScopeInvalidReason(scope model.UserGroupModelScope, available []string, channels []model.ModelChannel) string {
 	for _, channel := range channels {
-		if channel.ID == id {
-			return true
+		if channel.ID != scope.ChannelID {
+			continue
+		}
+		if len(filterEnabledModels([]string{scope.Model}, channel.Models)) == 0 {
+			return "model_removed"
+		}
+		if len(filterEnabledModels([]string{scope.Model}, available)) == 0 {
+			return "unresolvable"
+		}
+		return ""
+	}
+	return "channel_removed"
+}
+
+func invalidUserGroupScopeError(group model.UserGroupSetting, scope model.UserGroupModelScope, channels []model.ModelChannel) error {
+	for _, channel := range channels {
+		if channel.ID == scope.ChannelID {
+			return safeMessageError{message: fmt.Sprintf("%s 分组引用了不存在或未开放的模型「%s」（渠道 %s / %s）", firstNonEmpty(group.Name, group.ID), scope.Model, firstNonEmpty(channel.Name, channel.ID), channel.ID)}
 		}
 	}
-	return false
+	return safeMessageError{message: fmt.Sprintf("%s 分组引用了不存在的渠道「%s」（模型「%s」）", firstNonEmpty(group.Name, group.ID), scope.ChannelID, scope.Model)}
+}
+
+func userGroupModelRenames(previous, channels []model.ModelChannel, explicit []ModelRename) (map[model.UserGroupModelScope]string, error) {
+	result := map[model.UserGroupModelScope]string{}
+	oldChannels, newChannels := map[string]model.ModelChannel{}, map[string]model.ModelChannel{}
+	for _, channel := range previous {
+		oldChannels[channel.ID] = channel
+	}
+	for _, channel := range channels {
+		newChannels[channel.ID] = channel
+	}
+	for _, rename := range explicit {
+		rename.ChannelID, rename.From, rename.To = strings.TrimSpace(rename.ChannelID), strings.TrimSpace(rename.From), strings.TrimSpace(rename.To)
+		key := model.UserGroupModelScope{ChannelID: rename.ChannelID, Model: rename.From}
+		old, next := oldChannels[rename.ChannelID], newChannels[rename.ChannelID]
+		if rename.From == "" || rename.To == "" || rename.From == rename.To ||
+			len(filterEnabledModels([]string{rename.From}, old.Models)) == 0 ||
+			len(filterEnabledModels([]string{rename.From}, next.Models)) != 0 ||
+			len(filterEnabledModels([]string{rename.To}, next.Models)) == 0 ||
+			(result[key] != "" && result[key] != rename.To) {
+			return nil, safeMessageError{message: fmt.Sprintf("渠道 %s 的模型改名无效：「%s」→「%s」", rename.ChannelID, rename.From, rename.To)}
+		}
+		result[key] = rename.To
+	}
+	for _, old := range previous {
+		next, exists := newChannels[old.ID]
+		if !exists {
+			continue
+		}
+		for _, from := range old.Models {
+			key := model.UserGroupModelScope{ChannelID: old.ID, Model: from}
+			upstream := strings.TrimSpace(old.ModelMap[from])
+			if result[key] != "" || upstream == "" || len(filterEnabledModels([]string{from}, next.Models)) > 0 {
+				continue
+			}
+			candidates := []string{}
+			for _, to := range next.Models {
+				if strings.TrimSpace(next.ModelMap[to]) == upstream && len(filterEnabledModels([]string{to}, old.Models)) == 0 {
+					candidates = append(candidates, to)
+				}
+			}
+			if len(candidates) == 1 {
+				result[key] = candidates[0]
+			}
+		}
+	}
+	return result, nil
+}
+
+func reconcileUserGroupScopes(groups, saved []model.UserGroupSetting, previous, channels []model.ModelChannel, available []string, renames []ModelRename) ([]model.UserGroupSetting, []UserGroupScopeChange, error) {
+	mapping, err := userGroupModelRenames(previous, channels, renames)
+	if err != nil {
+		return nil, nil, err
+	}
+	savedGroups := map[string]model.UserGroupSetting{}
+	for _, group := range saved {
+		savedGroups[strings.TrimSpace(group.ID)] = group
+	}
+	result := make([]model.UserGroupSetting, 0, len(groups))
+	cleaned := []UserGroupScopeChange{}
+	seenChanges := map[UserGroupScopeChange]bool{}
+	record := func(groupID string, scope model.UserGroupModelScope, reason string) {
+		change := UserGroupScopeChange{GroupID: groupID, ChannelID: scope.ChannelID, Model: scope.Model, Reason: reason}
+		if !seenChanges[change] {
+			cleaned = append(cleaned, change)
+			seenChanges[change] = true
+		}
+	}
+	for _, group := range groups {
+		group.ID = strings.TrimSpace(group.ID)
+		if group.Unrestricted {
+			group.Scopes = nil
+			result = append(result, group)
+			continue
+		}
+		old := savedGroups[group.ID]
+		inherited := map[model.UserGroupModelScope]bool{}
+		if !old.Unrestricted {
+			for _, scope := range old.Scopes {
+				inherited[trimmedUserGroupScope(scope)] = true
+			}
+		}
+		scopes := []model.UserGroupModelScope{}
+		submitted := map[model.UserGroupModelScope]bool{}
+		for _, scope := range group.Scopes {
+			scope = trimmedUserGroupScope(scope)
+			if scope.ChannelID == "" || scope.Model == "" {
+				continue
+			}
+			submitted[scope] = true
+			original := scope
+			if to := mapping[scope]; inherited[original] && to != "" {
+				scope.Model = to
+			}
+			if reason := userGroupScopeInvalidReason(scope, available, channels); reason != "" {
+				if !inherited[original] {
+					return nil, nil, invalidUserGroupScopeError(group, scope, channels)
+				}
+				record(group.ID, original, reason)
+				continue
+			}
+			if scope.Model != original.Model {
+				record(group.ID, original, "model_renamed")
+			}
+			scopes = append(scopes, scope)
+		}
+		// Admin reads already normalize legacy data; still report what this save removes from disk.
+		for _, scope := range old.Scopes {
+			scope = trimmedUserGroupScope(scope)
+			if !old.Unrestricted && !submitted[scope] {
+				if reason := userGroupScopeInvalidReason(scope, available, channels); reason != "" {
+					record(group.ID, scope, reason)
+				}
+			}
+		}
+		group.Scopes = scopes
+		result = append(result, group)
+	}
+	return result, cleaned, nil
 }
 
 func normalizeUserGroupScopes(scopes []model.UserGroupModelScope, available []string, channels []model.ModelChannel) []model.UserGroupModelScope {
@@ -100,7 +260,7 @@ func normalizeUserGroupScopes(scopes []model.UserGroupModelScope, available []st
 	for _, scope := range scopes {
 		scope.ChannelID = strings.TrimSpace(scope.ChannelID)
 		scope.Model = strings.TrimSpace(scope.Model)
-		if scope.ChannelID == "" || scope.Model == "" || seen[scope] || !userGroupScopeChannelExists(scope.ChannelID, channels) || len(filterEnabledModels([]string{scope.Model}, available)) == 0 {
+		if scope.ChannelID == "" || scope.Model == "" || seen[scope] || userGroupScopeInvalidReason(scope, available, channels) != "" {
 			continue
 		}
 		seen[scope] = true

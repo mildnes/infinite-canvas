@@ -14,7 +14,7 @@ import { IMAGE_QUALITY_OPTIONS, type ImageQualityCapability } from "@/lib/image-
 import { imageOutputFormatOptions, type ImageOutputCapability } from "@/lib/image-output-format";
 import { isWorkflowProtocol, modelChannelApiKeyUrls, modelChannelDefaultBaseUrls, modelChannelProtocolOptions } from "@/lib/model-channel";
 import type { ModelCapability } from "@/lib/model-capability";
-import { fetchAdminSettings, fetchChannelModels, fetchMCPServerTools, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminMCPServer, type AdminMCPTool, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider } from "@/services/api/admin";
+import { fetchAdminSettings, fetchChannelModels, fetchMCPServerTools, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminMCPServer, type AdminMCPTool, type AdminModelChannel, type AdminModelCost, type AdminModelRename, type AdminSettings, type AdminStorageProvider, type AdminUserGroup, type AdminUserGroupScopeChange } from "@/services/api/admin";
 import { clearStorageConfigCache as clearMediaStorageConfigCache } from "@/services/file-storage";
 import { clearStorageConfigCache as clearImageStorageConfigCache } from "@/services/image-storage";
 import { modelMatchesCapability, notifyPublicSettingsUpdated } from "@/stores/use-config-store";
@@ -74,6 +74,7 @@ const emptyMCPServer: AdminMCPServer = { id: "", name: "", endpoint: "", apiKey:
 
 type SettingsTabKey = "public" | "private";
 type EditorMode = "visual" | "json";
+type NewGroupModelHint = { channelId: string; channelName: string; models: string[] };
 
 export default function AdminSettingsPage() {
     const token = useUserStore((state) => state.token);
@@ -106,11 +107,15 @@ export default function AdminSettingsPage() {
     // Snapshot all saved request names, including same-name passthrough rows.
     const savedRequestModelNamesRef = useRef<string[]>([]);
     const savedUserGroupsRef = useRef<NonNullable<AdminSettings["public"]["modelChannel"]["userGroups"]>>([]);
+    const savedChannelsRef = useRef<AdminModelChannel[]>([]);
+    const originalModelRowsRef = useRef<ModelMappingRow[]>([]);
+    const [newGroupModelHints, setNewGroupModelHints] = useState<NewGroupModelHint[]>([]);
     const [modelMappingRows, setModelMappingRows] = useState<ModelMappingRow[]>([]);
     const [channelUpstreamModels, setChannelUpstreamModels] = useState<string[]>([]);
     const committedModelRowsRef = useRef<ModelMappingRow[]>([]);
     const publicModels = Form.useWatch(["public", "modelChannel", "availableModels"], { form, preserve: true }) || [];
     const userGroups = Form.useWatch(["public", "modelChannel", "userGroups"], { form, preserve: true }) || [];
+    const pendingModelRenames = useMemo(() => modelRenamesFromRows(editingChannelIndex === null ? "" : channels[editingChannelIndex]?.id || "", originalModelRowsRef.current, modelMappingRows), [channels, editingChannelIndex, modelMappingRows]);
     const publicWorkflows = Form.useWatch(["public", "modelChannel", "availableWorkflows"], form) || [];
     const storageProviders = Form.useWatch(["private", "storage", "providers"], form) || [];
     const agentMCPServers = Form.useWatch(["private", "agent", "mcpServers"], form) || [];
@@ -148,6 +153,8 @@ export default function AdminSettingsPage() {
             const data = normalizeSettings(await fetchAdminSettings(token));
             data.public.modelChannel.userGroups = normalizeUserGroups(data.public.modelChannel.userGroups, availableUserGroupModels(data), undefined, data.private.channels);
             savedUserGroupsRef.current = data.public.modelChannel.userGroups;
+            savedChannelsRef.current = data.private.channels;
+            setNewGroupModelHints([]);
             form.setFieldsValue(data);
             setChannels(data.private.channels);
             savedRequestModelNamesRef.current = collectChannelModels(data.private.channels);
@@ -187,10 +194,14 @@ export default function AdminSettingsPage() {
         }
         setIsSaving(true);
         try {
-            const saved = normalizeSettings(await saveAdminSettings(token, values));
+            const response = await saveAdminSettings(token, values);
+            const saved = normalizeSettings(response);
             clearImageStorageConfigCache();
             clearMediaStorageConfigCache();
             const merged = mergeChannelApiKeys(values.private.channels, saved);
+            setNewGroupModelHints(newModelsOutsideDefaultGroup(savedChannelsRef.current, merged.private.channels, merged.public.modelChannel.userGroups || []));
+            savedChannelsRef.current = merged.private.channels;
+            notifyUserGroupScopeChanges(response.cleaned, message);
             savedUserGroupsRef.current = merged.public.modelChannel.userGroups || [];
             form.setFieldsValue(merged);
             setChannels(merged.private.channels);
@@ -253,6 +264,7 @@ export default function AdminSettingsPage() {
         const rows = buildModelMappingRows(channel, existingUpstreamModels);
         setModelMappingRows(rows);
         committedModelRowsRef.current = rows;
+        originalModelRowsRef.current = rows;
         setChannelUpstreamModels(uniqueModels(existingUpstreamModels));
         setBulkTargetModels([]);
         setBulkModelCapabilities([]);
@@ -266,6 +278,7 @@ export default function AdminSettingsPage() {
         channelForm.resetFields();
         setModelMappingRows([]);
         setChannelUpstreamModels([]);
+        originalModelRowsRef.current = [];
     };
 
     const saveChannel = async () => {
@@ -281,7 +294,8 @@ export default function AdminSettingsPage() {
         const nextChannels = [...channels];
         if (editingChannelIndex === null) nextChannels.push(channel);
         else nextChannels[editingChannelIndex] = channel;
-        await persistChannels(nextChannels);
+        const modelRenames = modelRenamesFromRows(editingChannelIndex === null ? "" : channels[editingChannelIndex].id, originalModelRowsRef.current, modelMappingRows);
+        await persistChannels(nextChannels, modelRenames);
         closeChannelDrawer();
     };
 
@@ -317,6 +331,8 @@ export default function AdminSettingsPage() {
 
     const removeModelMapping = (item: ModelMappingRow) => {
         const next = modelMappingRows.filter((row) => row.id !== item.id);
+        // A subsequently added row may reuse this ID; it must not inherit the deleted row's permissions.
+        originalModelRowsRef.current = originalModelRowsRef.current.filter((row) => row.id !== item.id);
         setModelMappingRows(next);
         commitModelMappingRows(next);
     };
@@ -419,7 +435,7 @@ export default function AdminSettingsPage() {
     const testChannel = testChannelIndex === null ? null : normalizeChannel(channels[testChannelIndex]);
     const testModels = (testChannel?.models || []).filter((model) => `${model} ${modelLabel(model, testChannel)}`.toLowerCase().includes(testKeyword.trim().toLowerCase()));
 
-    async function persistChannels(nextChannels: AdminModelChannel[]) {
+    async function persistChannels(nextChannels: AdminModelChannel[], modelRenames: AdminModelRename[] = [], groups?: AdminUserGroup[]) {
         if (!settingsLoadedRef.current) {
             const error = "设置尚未加载完成，已阻止覆盖保存";
             message.error(error);
@@ -434,11 +450,15 @@ export default function AdminSettingsPage() {
             public: { ...values.public, modelChannel: { ...values.public.modelChannel, availableModels: resolveAvailableModels(values.public.modelChannel.availableModels, nextChannels, newlyAddedRequestNames), availableWorkflows: filterModels(values.public.modelChannel.availableWorkflows, nextChannelWorkflows.map((item) => item.value)) } },
             private: { ...values.private, channels: nextChannels },
         });
-        nextSettings.public.modelChannel.userGroups = normalizeUserGroups(nextSettings.public.modelChannel.userGroups, availableUserGroupModels(nextSettings), savedUserGroupsRef.current, nextSettings.private.channels);
-        const saved = normalizeSettings(await saveAdminSettings(token, nextSettings));
+        nextSettings.public.modelChannel.userGroups = prepareUserGroupsForSave(groups || nextSettings.public.modelChannel.userGroups, availableUserGroupModels(nextSettings), savedUserGroupsRef.current);
+        const response = await saveAdminSettings(token, nextSettings, modelRenames);
+        const saved = normalizeSettings(response);
         clearImageStorageConfigCache();
         clearMediaStorageConfigCache();
         const merged = mergeChannelApiKeys(nextChannels, saved);
+        setNewGroupModelHints(newModelsOutsideDefaultGroup(savedChannelsRef.current, merged.private.channels, merged.public.modelChannel.userGroups || []));
+        savedChannelsRef.current = merged.private.channels;
+        notifyUserGroupScopeChanges(response.cleaned, message);
         savedUserGroupsRef.current = merged.public.modelChannel.userGroups || [];
         setChannels(merged.private.channels);
         savedRequestModelNamesRef.current = collectChannelModels(merged.private.channels);
@@ -542,6 +562,11 @@ export default function AdminSettingsPage() {
                         ) : (
                             <Typography.Text type="secondary">{activeTab === "public" ? "这些配置会暴露给前端读取" : "这些配置只会在后台保存"}</Typography.Text>
                         )}
+                    </Flex> : null}
+
+                    {newGroupModelHints.length ? <Flex vertical gap={8} role="status" style={{ marginBottom: 16 }}>
+                        {newGroupModelHints.map(hint => <Typography.Text key={hint.channelId} type="warning">渠道「{hint.channelName}」新增 {hint.models.length} 个模型，尚未加入默认用户分组：{hint.models.join("、")}</Typography.Text>)}
+                        <Button onClick={() => void persistChannels(channels, [], addModelsToDefaultGroup(form.getFieldValue(["public", "modelChannel", "userGroups"]) || [], newGroupModelHints, channels)).catch(error => message.error(error instanceof Error ? error.message : "加入分组失败"))}>一键加入默认用户分组</Button>
                     </Flex> : null}
 
                     {activeTab === "groups" ? <UserGroupEditor groups={userGroups} models={publicModels.length ? publicModels : channelModels} channels={channels} onChange={(groups) => {
@@ -1214,6 +1239,7 @@ export default function AdminSettingsPage() {
                             <Col span={24}>
                                 <Form.Item label="模型映射">
                                     <ModelMappingEditor rows={modelMappingRows} requestModels={uniqueModels([...rawSelectedChannelModels, ...selectedChannelModels])} upstreamModels={uniqueModels([...channelUpstreamModels, ...knownModels])} onChange={updateModelMappingRows} onCommit={() => commitModelMappingRows(modelMappingRows)} onRemove={removeModelMapping} onAdd={addModelMapping} />
+                                    {pendingModelRenames.length ? <Typography.Text role="status" type="warning">保存后将同步 {renamedUserGroupBindingCount(userGroups, pendingModelRenames)} 条用户分组绑定：{pendingModelRenames.map(item => `${item.from} → ${item.to}`).join("、")}（上游名同时修改也会跟随）</Typography.Text> : null}
                                 </Form.Item>
                             </Col>
                             {selectedChannelModels.length ? (
@@ -1700,6 +1726,60 @@ function renameChannelModel(channel: Partial<AdminModelChannel>, oldModel: strin
     } as AdminModelChannel;
 }
 
+function modelRenamesFromRows(channelId: string, previousRows: ModelMappingRow[], rows: ModelMappingRow[]): AdminModelRename[] {
+    if (!channelId) return [];
+    return previousRows.flatMap(previous => {
+        const current = rows.find(row => row.id === previous.id);
+        const from = previous.requestName.trim() || previous.upstreamName.trim();
+        const to = current && (current.requestName.trim() || current.upstreamName.trim());
+        return from && to && from !== to ? [{ channelId, from, to }] : [];
+    });
+}
+
+function renamedUserGroupBindingCount(groups: AdminUserGroup[], renames: AdminModelRename[]) {
+    return groups.reduce((count, group) => count + (group.unrestricted ? 0 : (group.scopes || []).filter(scope => renames.some(rename => rename.channelId === scope.channelId && rename.from === scope.model)).length), 0);
+}
+
+function prepareUserGroupsForSave(groups: AdminUserGroup[] | undefined, available: string[], saved?: AdminUserGroup[]) {
+    const input = groups === undefined ? saved : groups;
+    const normalized = normalizeUserGroups(input?.map(group => ({ ...group, scopes: [] })), available, saved);
+    // Scope provenance must reach the server, which can distinguish inherited stale references from invalid edits.
+    return normalized.map(group => ({
+        ...group,
+        scopes: group.unrestricted ? [] : (input?.find(item => item.id.trim() === group.id)?.scopes || []),
+    }));
+}
+
+function newModelsOutsideDefaultGroup(previous: AdminModelChannel[], channels: AdminModelChannel[], groups: AdminUserGroup[]): NewGroupModelHint[] {
+    const group = groups.find(item => item.id === "default" && item.isDefault);
+    if (!group || group.unrestricted) return [];
+    return channels.filter(channel => channel.enabled && !isWorkflowProtocol(channel.protocol)).flatMap(channel => {
+        const old = previous.find(item => item.id === channel.id);
+        const models = channel.models.filter(model => !old?.models.includes(model) && !group.models.includes(model) && !group.scopes?.some(scope => scope.channelId === channel.id && scope.model === model));
+        return models.length ? [{ channelId: channel.id, channelName: channel.name || channel.id, models }] : [];
+    });
+}
+
+function addModelsToDefaultGroup(groups: AdminUserGroup[], hints: NewGroupModelHint[], channels: AdminModelChannel[]) {
+    return groups.map(group => {
+        if (group.id !== "default" || !group.isDefault || group.unrestricted) return group;
+        const scopes = [...(group.scopes || [])];
+        for (const hint of hints) {
+            const channel = channels.find(item => item.id === hint.channelId && item.enabled && !isWorkflowProtocol(item.protocol));
+            for (const model of hint.models) {
+                if (channel?.models.includes(model) && !scopes.some(scope => scope.channelId === channel.id && scope.model === model)) scopes.push({ channelId: channel.id, model });
+            }
+        }
+        return { ...group, scopes };
+    });
+}
+
+function notifyUserGroupScopeChanges(cleaned: AdminUserGroupScopeChange[] | undefined, message: { info: (value: string) => unknown }) {
+    if (!cleaned?.length) return;
+    const renamed = cleaned.filter(item => item.reason === "model_renamed").length;
+    message.info(`已自动清理 ${cleaned.length - renamed} 条失效引用，已同步 ${renamed} 条改名绑定`);
+}
+
 function applyModelMappingRows(channel: Partial<AdminModelChannel>, rows: ModelMappingRow[], previousRows: ModelMappingRow[]): AdminModelChannel {
     let next = { ...channel };
     for (const previous of previousRows) {
@@ -1827,7 +1907,7 @@ async function collectSettings(form: any, editorMode: Record<SettingsTabKey, Edi
     const newlyAddedRequestNames = collectChannelModels(values.private.channels).filter((name) => !savedRequestNames.includes(name));
     values.public.modelChannel.availableModels = resolveAvailableModels(values.public.modelChannel.availableModels, values.private.channels, newlyAddedRequestNames);
     try {
-        values.public.modelChannel.userGroups = normalizeUserGroups(values.public.modelChannel.userGroups, availableUserGroupModels(values), savedGroups, values.private.channels);
+        values.public.modelChannel.userGroups = prepareUserGroupsForSave(values.public.modelChannel.userGroups, availableUserGroupModels(values), savedGroups);
     } catch (error) {
         message.error(error instanceof Error ? error.message : "用户分组配置错误");
         return null;

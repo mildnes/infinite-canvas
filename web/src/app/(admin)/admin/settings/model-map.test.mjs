@@ -10,7 +10,7 @@ import { availableUserGroupModels, normalizeUserGroups } from "@/lib/user-groups
 
 const source = readFileSync(process.env.MODEL_MAPPING_PAGE_SOURCE || new URL("./page.tsx", import.meta.url), "utf8");
 const ast = ts.createSourceFile("page.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const names = new Set(["normalizeChannel", "normalizeModelMap", "normalizeModelCapabilities", "uniqueModels", "uniqueCapabilities", "renameChannelModel", "applyModelMappingRows", "mergeChannelModelSelection", "resolveAvailableModels", "filterModels", "collectChannelModels", "collectChannelModelMapKeys", "collectSettings"]);
+const names = new Set(["normalizeChannel", "normalizeModelMap", "normalizeModelCapabilities", "uniqueModels", "uniqueCapabilities", "renameChannelModel", "applyModelMappingRows", "mergeChannelModelSelection", "resolveAvailableModels", "filterModels", "collectChannelModels", "collectChannelModelMapKeys", "collectSettings", "prepareUserGroupsForSave", "modelRenamesFromRows"]);
 const functions = ast.statements.filter(node => ts.isFunctionDeclaration(node) && names.has(node.name?.text)).map(node => node.getText(ast)).join("\n");
 const context = {
     normalizeImageOutputCapabilities,
@@ -22,6 +22,7 @@ const context = {
     availableUserGroupModels,
     normalizeSettings: value => value,
     collectChannelWorkflows: () => [],
+    originalModelRowsRef: { current: [] },
 };
 vm.runInNewContext(ts.transpileModule(functions, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText, context);
 const plain = value => JSON.parse(JSON.stringify(value));

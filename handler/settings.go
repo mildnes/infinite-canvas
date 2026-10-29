@@ -36,12 +36,15 @@ func AdminSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func AdminSaveSettings(w http.ResponseWriter, r *http.Request) {
-	var settings model.Settings
-	if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
+	var request struct {
+		model.Settings
+		ModelRenames []service.ModelRename `json:"modelRenames"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		Fail(w, "设置数据格式错误")
 		return
 	}
-	result, err := service.SaveSettings(settings)
+	result, err := service.SaveSettingsWithModelRenames(request.Settings, request.ModelRenames)
 	if err != nil {
 		FailError(w, err)
 		return
