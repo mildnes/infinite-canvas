@@ -2,13 +2,13 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { App, Button, Empty, Input, Modal, Pagination, Spin, Tabs, Tag } from "antd";
+import { App, Button, Empty, Input, Modal, Pagination, Segmented, Spin, Tabs, Tag } from "antd";
 import { ImagePlus, Plus, Search } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useAssetStore, type Asset } from "@/stores/use-asset-store";
 import { useAssetMediaUrl } from "@/hooks/use-asset-media-url";
-import { fetchAssetLibrary, type AssetLibraryItem } from "@/services/api/assets";
+import { fetchAssetLibrary, type AssetLibraryItem, type AssetTagMode } from "@/services/api/assets";
 import { uploadAssetMediaFile } from "@/services/file-storage";
 import { uploadImage } from "@/services/image-storage";
 import type { InsertAssetPayload } from "../types";
@@ -60,15 +60,19 @@ function AssetFilters({
     tags,
     category,
     selectedTags,
+    tagMode,
     onCategoryChange,
     onTagsChange,
+    onTagModeChange,
 }: {
     categories: string[];
     tags: string[];
     category: string;
     selectedTags: string[];
+    tagMode: AssetTagMode;
     onCategoryChange: (value: string) => void;
     onTagsChange: (values: string[]) => void;
+    onTagModeChange: (value: AssetTagMode) => void;
 }) {
     return (
         <div className="grid gap-3">
@@ -100,6 +104,20 @@ function AssetFilters({
                     ))}
                 </div>
             </div>
+            {selectedTags.length > 1 ? (
+                <div className="flex items-center gap-2 sm:pl-[56px]">
+                    <span className="text-xs text-stone-500 dark:text-stone-400">匹配</span>
+                    <Segmented
+                        size="small"
+                        value={tagMode}
+                        options={[
+                            { label: "任一标签", value: "any" },
+                            { label: "全部标签", value: "all" },
+                        ]}
+                        onChange={(value) => onTagModeChange(value as AssetTagMode)}
+                    />
+                </div>
+            ) : null}
         </div>
     );
 }
@@ -110,12 +128,13 @@ function LibraryTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => v
     const [kindFilter, setKindFilter] = useState("");
     const [category, setCategory] = useState("");
     const [selectedTags, setSelectedTags] = useState<string[]>([]);
+    const [tagMode, setTagMode] = useState<AssetTagMode>("any");
     const [page, setPage] = useState(1);
     const [inserting, setInserting] = useState<string | null>(null);
 
     const query = useQuery({
-        queryKey: ["asset-picker-library", keyword, kindFilter, category, selectedTags, page],
-        queryFn: () => fetchAssetLibrary({ keyword, type: kindFilter, category, tag: selectedTags, page, pageSize: PAGE_SIZE }),
+        queryKey: ["asset-picker-library", keyword, kindFilter, category, selectedTags, tagMode, page],
+        queryFn: () => fetchAssetLibrary({ keyword, type: kindFilter, category, tag: selectedTags, tagMode, page, pageSize: PAGE_SIZE }),
         retry: false,
     });
 
@@ -180,7 +199,16 @@ function LibraryTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => v
                     ))}
                 </div>
             </div>
-            <AssetFilters categories={categories} tags={tags} category={category} selectedTags={selectedTags} onCategoryChange={(value) => { setPage(1); setCategory(value); }} onTagsChange={(values) => { setPage(1); setSelectedTags(values); }} />
+            <AssetFilters
+                categories={categories}
+                tags={tags}
+                category={category}
+                selectedTags={selectedTags}
+                tagMode={tagMode}
+                onCategoryChange={(value) => { setPage(1); setCategory(value); }}
+                onTagsChange={(values) => { setPage(1); setSelectedTags(values); }}
+                onTagModeChange={(value) => { setPage(1); setTagMode(value); }}
+            />
 
             {query.isLoading ? (
                 <div className="flex justify-center py-16">
@@ -247,6 +275,7 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
     const [kindFilter, setKindFilter] = useState("all");
     const [category, setCategory] = useState("");
     const [selectedTags, setSelectedTags] = useState<string[]>([]);
+    const [tagMode, setTagMode] = useState<AssetTagMode>("any");
     const [page, setPage] = useState(1);
     const [createOpen, setCreateOpen] = useState(false);
     const [createKind, setCreateKind] = useState<"text" | "image" | "video" | "audio">("image");
@@ -266,9 +295,9 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
             .filter((a) => a.kind === "text" || a.kind === "image" || a.kind === "video" || a.kind === "audio")
             .filter((a) => kindFilter === "all" || a.kind === kindFilter)
             .filter((a) => !category || a.category === category)
-            .filter((a) => !selectedTags.length || selectedTags.some((tag) => (a.tags || []).includes(tag)))
+            .filter((a) => !selectedTags.length || (tagMode === "all" ? selectedTags.every((tag) => (a.tags || []).includes(tag)) : selectedTags.some((tag) => (a.tags || []).includes(tag))))
             .filter((a) => !query || [a.title, ...(a.tags || [])].join(" ").toLowerCase().includes(query));
-    }, [assets, keyword, kindFilter, category, selectedTags]);
+    }, [assets, keyword, kindFilter, category, selectedTags, tagMode]);
 
     const visible = useMemo(() => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [filtered, page]);
 
@@ -403,7 +432,16 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
                     新增素材
                 </Button>
             </div>
-            <AssetFilters categories={categories} tags={tags} category={category} selectedTags={selectedTags} onCategoryChange={(value) => { setPage(1); setCategory(value); }} onTagsChange={(values) => { setPage(1); setSelectedTags(values); }} />
+            <AssetFilters
+                categories={categories}
+                tags={tags}
+                category={category}
+                selectedTags={selectedTags}
+                tagMode={tagMode}
+                onCategoryChange={(value) => { setPage(1); setCategory(value); }}
+                onTagsChange={(values) => { setPage(1); setSelectedTags(values); }}
+                onTagModeChange={(value) => { setPage(1); setTagMode(value); }}
+            />
 
             {visible.length ? (
                 <div className="grid grid-cols-4 gap-3">

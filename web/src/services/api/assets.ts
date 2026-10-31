@@ -1,5 +1,7 @@
 import { apiGet, compactApiParams } from "@/services/api/request";
 
+export type AssetTagMode = "any" | "all";
+
 export type AssetLibraryItem = {
     id: string;
     title: string;
@@ -26,6 +28,7 @@ export type AssetLibraryQuery = {
     type?: string;
     category?: string;
     tag?: string[];
+    tagMode?: AssetTagMode;
     page?: number;
     pageSize?: number;
 };

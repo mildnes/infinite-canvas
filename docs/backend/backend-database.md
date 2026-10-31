@@ -174,7 +174,9 @@ S3/R2、WebDAV 与服务端本地生成媒体共用的文件索引表，不保�
 | `created_at` | string | 创建时间 |
 | `updated_at` | string | 更新时间 |
 
-素材列表响应包含当前可用的 `categories`；查询可同时使用 `category` 与标签筛选。
+素材列表响应包含当前可用的 `categories` 和 `tags`；查询可同时使用 `category` 与标签筛选，并通过可选的 `tagMode=any|all` 选择任一标签或全部标签匹配。缺少或非法的 `tagMode` 按 `any` 处理。
+
+WebDAV Provider 的 endpoint 只允许 scheme、host 和 path，不接受 query 参数、账号、密码或 fragment；包含中文、空格等特殊字符的 path 会按 WebDAV 根路径处理。
 
 ### comfy_bridges
 
