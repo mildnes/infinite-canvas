@@ -12,6 +12,7 @@ import { autoSyncToCloud, imageToDataUrl, resolveImageUrl } from "@/services/ima
 import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig, type VideoElementReference } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { externalMediaURL } from "@/lib/external-media-url";
+import { publicMediaOrigin, sameOriginPublicMediaUrl } from "@/lib/same-origin-public-media-url";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
@@ -649,8 +650,14 @@ async function agnesVideoV25ReferenceUrl(reference: ReferenceImage | ReferenceVi
     const resolvedUrl = "dataUrl" in reference
         ? await resolveImageUrl(reference.storageKey, reference.url || "")
         : await resolveMediaUrl(reference.storageKey, reference.url);
-    const url = publicHttpUrl(reference.url) || ("dataUrl" in reference ? publicHttpUrl(reference.dataUrl) : "") || publicHttpUrl(resolvedUrl);
-    if (!url) throw new VideoRequestError("Agnes Video 2.5 的参考素材必须具有公网访问地址");
+    const url = publicHttpUrl(reference.url) || ("dataUrl" in reference ? publicHttpUrl(reference.dataUrl) : "") || publicHttpUrl(resolvedUrl)
+        || sameOriginPublicMediaUrl(reference.url) || sameOriginPublicMediaUrl(resolvedUrl);
+    if (!url) {
+        const reason = publicMediaOrigin()
+            ? "参考地址不是允许的站内媒体接口或公网 HTTP/HTTPS 地址（不支持 blob/data）"
+            : "当前页面不是公网域名访问，站内参考素材无法供上游拉取";
+        throw new VideoRequestError(`Agnes Video 2.5 的参考素材必须具有公网访问地址：${reason}`);
+    }
     return url;
 }
 
