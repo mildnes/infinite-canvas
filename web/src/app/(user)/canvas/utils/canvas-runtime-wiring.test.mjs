@@ -52,3 +52,19 @@ test("画板生成默认配置继承 Agent 设置，节点显式参数仍由节�
     assert.match(configPanel, /buildNodeConfig\(generationDefaults \|\| globalConfig, node, mode\)/);
     assert.match(configPanel, /modePatch\(generationDefaults \|\| globalConfig/);
 });
+
+test("媒体节点提示词面板使用新尺寸并将相机与生成放入右侧控件组", () => {
+    assert.match(promptPanel, /thin-scrollbar h-32 w-full resize-none rounded-xl px-3 py-2 text-sm leading-5 outline-none/);
+    assert.match(node, /isCanvasImageNodeType\(data\.type\) \|\| data\.type === CanvasNodeType\.Video \|\| data\.type === CanvasNodeType\.Audio \? "w-\[682px\]" : "w-\[500px\]"/);
+
+    const controls = promptPanel.match(/<div className="mt-2 flex min-w-0 items-center justify-between gap-2">([\s\S]*?)<Modal title="编辑提示词"/)?.[1] || "";
+    const cameraIndex = controls.indexOf("<CanvasCameraControl");
+    const rightGroupIndex = controls.indexOf('<div className="flex shrink-0 items-center gap-2">');
+    const generateIndex = controls.indexOf('aria-label="生成"');
+
+    assert.ok(cameraIndex >= 0, "camera control should exist");
+    assert.ok(rightGroupIndex >= 0, "right control group should exist");
+    assert.ok(cameraIndex > rightGroupIndex, "camera control should be in the right group");
+    assert.ok(generateIndex > rightGroupIndex, "generate button should be in the right group");
+    assert.ok(cameraIndex < generateIndex, "camera control should precede the generate button");
+});

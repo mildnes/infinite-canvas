@@ -55,21 +55,74 @@ const kindOptions = [
     { label: "音频", value: "audio" },
 ];
 
+function AssetFilters({
+    categories,
+    tags,
+    category,
+    selectedTags,
+    onCategoryChange,
+    onTagsChange,
+}: {
+    categories: string[];
+    tags: string[];
+    category: string;
+    selectedTags: string[];
+    onCategoryChange: (value: string) => void;
+    onTagsChange: (values: string[]) => void;
+}) {
+    return (
+        <div className="grid gap-3">
+            <div className="grid gap-2 sm:grid-cols-[56px_minmax(0,1fr)] sm:items-center">
+                <div className="text-xs font-medium text-stone-500 dark:text-stone-400">分类</div>
+                <div className="thin-scrollbar flex max-h-[112px] flex-wrap gap-2 overflow-y-auto pr-1">
+                    {["", ...categories].map((value) => (
+                        <Tag.CheckableTag key={value || "all"} checked={category === value} className={cn("prompt-filter-tag", category === value && "is-active")} onChange={() => onCategoryChange(value)}>
+                            {value || "全部"}
+                        </Tag.CheckableTag>
+                    ))}
+                </div>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-[56px_minmax(0,1fr)] sm:items-center">
+                <div className="text-xs font-medium text-stone-500 dark:text-stone-400">标签</div>
+                <div className="thin-scrollbar flex max-h-[112px] flex-wrap gap-2 overflow-y-auto pr-1">
+                    <Tag.CheckableTag checked={selectedTags.length === 0} className={cn("prompt-filter-tag", selectedTags.length === 0 && "is-active")} onChange={() => onTagsChange([])}>
+                        全部
+                    </Tag.CheckableTag>
+                    {tags.map((tag) => (
+                        <Tag.CheckableTag
+                            key={tag}
+                            checked={selectedTags.includes(tag)}
+                            className={cn("prompt-filter-tag", selectedTags.includes(tag) && "is-active")}
+                            onChange={() => onTagsChange(selectedTags.includes(tag) ? selectedTags.filter((value) => value !== tag) : [...selectedTags, tag])}
+                        >
+                            {tag}
+                        </Tag.CheckableTag>
+                    ))}
+                </div>
+            </div>
+        </div>
+    );
+}
+
 function LibraryTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => void }) {
     const { message } = App.useApp();
     const [keyword, setKeyword] = useState("");
     const [kindFilter, setKindFilter] = useState("");
+    const [category, setCategory] = useState("");
+    const [selectedTags, setSelectedTags] = useState<string[]>([]);
     const [page, setPage] = useState(1);
     const [inserting, setInserting] = useState<string | null>(null);
 
     const query = useQuery({
-        queryKey: ["asset-picker-library", keyword, kindFilter, page],
-        queryFn: () => fetchAssetLibrary({ keyword, type: kindFilter, page, pageSize: PAGE_SIZE }),
+        queryKey: ["asset-picker-library", keyword, kindFilter, category, selectedTags, page],
+        queryFn: () => fetchAssetLibrary({ keyword, type: kindFilter, category, tag: selectedTags, page, pageSize: PAGE_SIZE }),
         retry: false,
     });
 
     const items = query.data?.items || [];
     const total = query.data?.total || 0;
+    const categories = query.data?.categories || [];
+    const tags = query.data?.tags || [];
 
     const handleInsert = async (asset: AssetLibraryItem) => {
         try {
@@ -105,7 +158,7 @@ function LibraryTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => v
                         setKeyword(e.target.value);
                     }}
                 />
-                <div className="flex gap-1.5">
+                <div className="flex min-h-6 items-center gap-1.5">
                     {[
                         { label: "全部", value: "" },
                         { label: "文本", value: "text" },
@@ -127,6 +180,7 @@ function LibraryTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => v
                     ))}
                 </div>
             </div>
+            <AssetFilters categories={categories} tags={tags} category={category} selectedTags={selectedTags} onCategoryChange={(value) => { setPage(1); setCategory(value); }} onTagsChange={(values) => { setPage(1); setSelectedTags(values); }} />
 
             {query.isLoading ? (
                 <div className="flex justify-center py-16">
@@ -191,6 +245,8 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
     const addAsset = useAssetStore((state) => state.addAsset);
     const [keyword, setKeyword] = useState("");
     const [kindFilter, setKindFilter] = useState("all");
+    const [category, setCategory] = useState("");
+    const [selectedTags, setSelectedTags] = useState<string[]>([]);
     const [page, setPage] = useState(1);
     const [createOpen, setCreateOpen] = useState(false);
     const [createKind, setCreateKind] = useState<"text" | "image" | "video" | "audio">("image");
@@ -201,13 +257,18 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
+    const categories = useMemo(() => Array.from(new Set(assets.flatMap((asset) => (asset.category ? [asset.category] : [])))), [assets]);
+    const tags = useMemo(() => Array.from(new Set(assets.flatMap((asset) => asset.tags || []))).filter(Boolean), [assets]);
+
     const filtered = useMemo(() => {
         const query = keyword.trim().toLowerCase();
         return assets
             .filter((a) => a.kind === "text" || a.kind === "image" || a.kind === "video" || a.kind === "audio")
             .filter((a) => kindFilter === "all" || a.kind === kindFilter)
+            .filter((a) => !category || a.category === category)
+            .filter((a) => !selectedTags.length || selectedTags.some((tag) => (a.tags || []).includes(tag)))
             .filter((a) => !query || [a.title, ...(a.tags || [])].join(" ").toLowerCase().includes(query));
-    }, [assets, keyword, kindFilter]);
+    }, [assets, keyword, kindFilter, category, selectedTags]);
 
     const visible = useMemo(() => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [filtered, page]);
 
@@ -342,6 +403,7 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
                     新增素材
                 </Button>
             </div>
+            <AssetFilters categories={categories} tags={tags} category={category} selectedTags={selectedTags} onCategoryChange={(value) => { setPage(1); setCategory(value); }} onTagsChange={(values) => { setPage(1); setSelectedTags(values); }} />
 
             {visible.length ? (
                 <div className="grid grid-cols-4 gap-3">

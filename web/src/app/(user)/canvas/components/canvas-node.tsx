@@ -513,7 +513,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                 </>
             ) : null}
 
-            {!referenceSelectionState && showPanel && !isGroup && renderPanel ? <div className={"absolute left-1/2 top-full z-[70] max-w-[calc(100vw-24px)] -translate-x-1/2 pt-4 " + (isCanvasImageNodeType(data.type) || data.type === CanvasNodeType.Video || data.type === CanvasNodeType.Audio ? "w-[622px]" : "w-[500px]")}>{renderPanel(data)}</div> : null}
+            {!referenceSelectionState && showPanel && !isGroup && renderPanel ? <div className={"absolute left-1/2 top-full z-[70] max-w-[calc(100vw-24px)] -translate-x-1/2 pt-4 " + (isCanvasImageNodeType(data.type) || data.type === CanvasNodeType.Video || data.type === CanvasNodeType.Audio ? "w-[682px]" : "w-[500px]")}>{renderPanel(data)}</div> : null}
         </div>
     );
 });

@@ -105,7 +105,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                 references={mentionReferences}
                 onChange={updatePrompt}
                 onSubmit={submit}
-                className="thin-scrollbar h-40 w-full resize-none rounded-xl px-3 py-2 text-sm leading-5 outline-none"
+                className="thin-scrollbar h-32 w-full resize-none rounded-xl px-3 py-2 text-sm leading-5 outline-none"
                 style={{ background: "transparent", color: theme.node.text }}
                 placeholder={isPanorama ? "描述想生成的全景，或上传/连接图片作为参考" : promptPlaceholder(mode, hasImageContent, hasTextContent)}
             />
@@ -142,25 +142,27 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                     ) : (
                         <ModelPicker config={config} value={config.model} channelId={config.textChannelId} onChange={(model, channelId) => onConfigChange(node.id, { model, channelId })} capability="text" onMissingConfig={() => openConfigDialog(true)} />
                     )}
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
                     {mode === "video" || (mode === "image" && !isPanorama) ? (
                         <CanvasCameraControl value={node.metadata?.cameraControl} onChange={(cameraControl) => onConfigChange(node.id, { cameraControl })} buttonClassName="!h-10 !min-w-[92px] !justify-start !rounded-full !px-3" />
                     ) : null}
-                </div>
-                <Button
-                    type="primary"
-                    className="!h-10 !min-w-16 shrink-0 !rounded-full !px-3"
-                    disabled={isRunning || !canSubmit}
-                    onClick={submit}
-                    aria-label="生成"
-                >
-                    <span className="flex items-center gap-1.5">
-                        <span className="inline-flex items-center gap-1 text-xs font-medium tabular-nums">
-                            <CreditSymbol />
-                            {formatCreditQuote(quote, mode === "video" && !workflowRef ? 2 : undefined)}
+                    <Button
+                        type="primary"
+                        className="!h-10 !min-w-16 shrink-0 !rounded-full !px-3"
+                        disabled={isRunning || !canSubmit}
+                        onClick={submit}
+                        aria-label="生成"
+                    >
+                        <span className="flex items-center gap-1.5">
+                            <span className="inline-flex items-center gap-1 text-xs font-medium tabular-nums">
+                                <CreditSymbol />
+                                {formatCreditQuote(quote, mode === "video" && !workflowRef ? 2 : undefined)}
+                            </span>
+                            {isRunning ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
                         </span>
-                        {isRunning ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
-                    </span>
-                </Button>
+                    </Button>
+                </div>
             </div>
             <Modal title="编辑提示词" open={expanded} centered width={760} footer={null} onCancel={() => setExpanded(false)} destroyOnHidden>
                 <div data-canvas-no-zoom className="pt-2" onWheelCapture={(event) => event.stopPropagation()}>
