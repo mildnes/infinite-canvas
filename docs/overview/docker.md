@@ -41,7 +41,7 @@ cp .env.example .env
 docker compose -f docker-compose.local.yml up -d --build
 ```
 
-生产 `docker-compose.yml` 只拉取 `IMAGE_REF` 指定的 Gitea 镜像，不执行本地构建。镜像发布工作流位于 Gitea 仓库的 Actions 配置，只响应 `feat/grok2api-protocol` 分支；Go 测试、前端逻辑测试和真实 Next.js 生产构建全部成功后才推送 `linux/amd64` 镜像。工作流使用提交 SHA 标签、记录 digest，并通过 registry BuildKit 缓存复用构建层。
+生产 `docker-compose.yml` 只拉取 `IMAGE_REF` 指定的 Gitea 镜像，不执行本地构建。镜像发布工作流位于 Gitea 仓库的 Actions 配置，只响应 `feat/grok2api-protocol` 分支；Go 测试、前端逻辑测试和真实 Next.js 生产构建全部成功后才推送 `linux/amd64` 镜像。工作流使用提交 SHA 标签、记录 digest，并通过 registry BuildKit 缓存复用构建层。同一仓库的构建共用一个并发组，新的提交会取消仍在运行的旧构建；关键步骤设置步骤级超时，避免异常任务长期占用 Runner。
 
 生产更新由 Gitea 仓库的部署工作流手动触发。触发时填入发布工作流产出的完整 `image_ref`，并输入 `DEPLOY` 明确批准；部署 Runner 需要 `self-hosted`、`linux`、`x64` 标签，并设置 `DEPLOY_DIR` 变量指向包含生产 `.env` 和 `data/` 的目录。部署前会记录当前容器镜像到 `.deploy/previous-image-ref`，不会清理上一版镜像，便于回滚。
 
