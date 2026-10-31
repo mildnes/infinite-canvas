@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/tigerowo/infinite-canvas/model"
 	"gorm.io/gorm"
@@ -35,6 +36,7 @@ func ListAssetFilters(q model.Query) ([]string, []string, error) {
 	q.Normalize()
 	q.Tags = nil
 	q.Category = ""
+	q.TagMode = ""
 	tx := applyAssetFilters(db.Model(&model.Asset{}), q)
 
 	var items []model.Asset
@@ -91,7 +93,7 @@ func applyAssetFilters(tx *gorm.DB, q model.Query) *gorm.DB {
 	if isActiveAssetOption(q.Category) {
 		tx = tx.Where("category = ?", q.Category)
 	}
-	return applyAssetTagsFilter(tx, q.Tags)
+	return applyAssetTagsFilter(tx, q.Tags, q.TagMode)
 }
 
 // findAsset 根据 ID 查询素材。
@@ -105,8 +107,15 @@ func findAsset(db *gorm.DB, id string) (model.Asset, bool, error) {
 }
 
 // applyAssetTagsFilter 应用 JSON 标签条件。
-func applyAssetTagsFilter(tx *gorm.DB, tags []string) *gorm.DB {
+func applyAssetTagsFilter(tx *gorm.DB, tags []string, mode string) *gorm.DB {
+	tags = normalizeAssetTags(tags)
 	if len(tags) == 0 {
+		return tx
+	}
+	if model.NormalizeAssetTagMode(mode) == model.AssetTagModeAll {
+		for _, tag := range tags {
+			tx = tx.Where(assetJSONTagsContains(tx), tag)
+		}
 		return tx
 	}
 	condition := tx.Session(&gorm.Session{NewDB: true})
@@ -114,6 +123,16 @@ func applyAssetTagsFilter(tx *gorm.DB, tags []string) *gorm.DB {
 		condition = condition.Or(assetJSONTagsContains(tx), tag)
 	}
 	return tx.Where(condition)
+}
+
+func normalizeAssetTags(tags []string) []string {
+	result := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		if tag = strings.TrimSpace(tag); tag != "" {
+			result = append(result, tag)
+		}
+	}
+	return result
 }
 
 func assetTagsFromItems(items []model.Asset) []string {

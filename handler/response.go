@@ -56,6 +56,7 @@ func parseQuery(r *http.Request) model.Query {
 		Tags:     q["tag"],
 		Category: q.Get("category"),
 		Type:     q.Get("type"),
+		TagMode:  model.NormalizeAssetTagMode(q.Get("tagMode")),
 		Page:     page,
 		PageSize: pageSize,
 	}
