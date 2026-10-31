@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 # 编译独立 ComfyUI Bridge 下载产物。
 FROM golang:1.25-alpine AS bridge-build
 
@@ -5,7 +7,9 @@ WORKDIR /app/canvas-agent/native/comfy-bridge
 ARG GOPROXY=https://proxy.golang.org,direct
 ENV GOPROXY=${GOPROXY}
 COPY canvas-agent/native/comfy-bridge ./
-RUN mkdir -p /bridge && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /bridge/InfiniteCanvas-ComfyBridge.exe . \
+RUN --mount=type=cache,target=/root/.cache/go-build,id=bridge-go-build \
+    --mount=type=cache,target=/go/pkg/mod,id=go-mod \
+    mkdir -p /bridge && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /bridge/InfiniteCanvas-ComfyBridge.exe . \
     && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o /bridge/InfiniteCanvas-ComfyBridge-linux-amd64 . \
     && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o /bridge/InfiniteCanvas-ComfyBridge-linux-arm64 .
 
@@ -14,7 +18,8 @@ FROM oven/bun:1.3.14 AS web-build
 
 WORKDIR /app/web
 COPY web/package.json web/bun.lock ./
-RUN --mount=type=cache,target=/root/.bun/install/cache bun install --frozen-lockfile --cache-dir=/root/.bun/install/cache
+RUN --mount=type=cache,target=/root/.bun/install/cache,id=bun-install \
+    bun install --frozen-lockfile --cache-dir=/root/.bun/install/cache
 COPY VERSION /app/VERSION
 COPY CHANGELOG.md /app/CHANGELOG.md
 COPY web ./
@@ -22,7 +27,8 @@ COPY shared /app/shared
 COPY canvas-agent/scripts /app/canvas-agent/scripts
 COPY --from=bridge-build /bridge/ /app/web/public/
 ENV CANVAS_PREBUILT_BRIDGE=1
-RUN bun run build
+RUN --mount=type=cache,target=/app/web/.next/cache,id=next-cache \
+    bun run build
 
 # 构建 Go 后端入口。
 FROM golang:1.25-alpine AS api-build
@@ -41,12 +47,15 @@ COPY router ./router
 COPY service ./service
 COPY shared ./shared
 COPY main.go ./
-RUN go build -o /server . && go build -o /media-cloud ./cmd/media-cloud && go build -o /media-verify ./cmd/media-verify && go build -o /media-previews ./cmd/media-previews && go build -o /media-gc ./cmd/media-gc && go build -o /image-log-summaries ./cmd/image-log-summaries && go build -o /canvas-media-repair ./cmd/canvas-media-repair
+RUN --mount=type=cache,target=/root/.cache/go-build,id=api-go-build \
+    --mount=type=cache,target=/go/pkg/mod,id=go-mod \
+    go build -o /server . && go build -o /media-cloud ./cmd/media-cloud && go build -o /media-verify ./cmd/media-verify && go build -o /media-previews ./cmd/media-previews && go build -o /media-gc ./cmd/media-gc && go build -o /image-log-summaries ./cmd/image-log-summaries && go build -o /canvas-media-repair ./cmd/canvas-media-repair
 
 # 运行镜像：Next.js 对外监听 3000，Go 只在容器内部监听 8080。
 FROM node:22-bookworm-slim
 
 WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY VERSION /app/VERSION
 COPY CHANGELOG.md /app/CHANGELOG.md
 COPY --from=api-build /server /app/server
@@ -65,7 +74,6 @@ ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 ENV PROMPT_DATA_DIR=/app/data/prompts
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /app/data/prompts
 
 EXPOSE 3000
