@@ -1,6 +1,12 @@
 package service
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/tigerowo/infinite-canvas/model"
@@ -91,13 +97,75 @@ func TestCleanStoragePath(t *testing.T) {
 }
 
 func TestNewWebDAVClientValidatesEndpoint(t *testing.T) {
-	for _, endpoint := range []string{"", "ftp://dav.example.com", "https://user:pass@dav.example.com", "https://dav.example.com/#fragment"} {
+	for _, endpoint := range []string{"", "ftp://dav.example.com", "https://user:pass@dav.example.com", "https://dav.example.com/#fragment", "https://dav.example.com/webdav?token=secret"} {
 		if _, err := newWebDAVClient(model.StorageProvider{Endpoint: endpoint}); err == nil {
 			t.Fatalf("newWebDAVClient(%q) should fail", endpoint)
 		}
 	}
 	if _, err := newWebDAVClient(model.StorageProvider{Endpoint: "https://dav.example.com/webdav"}); err != nil {
 		t.Fatalf("valid WebDAV endpoint should be accepted: %v", err)
+	}
+}
+
+func TestWebDAVClientPreservesEscapedSpecialCharacterRootPath(t *testing.T) {
+	var mutex sync.Mutex
+	var requests []*http.Request
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mutex.Lock()
+		requests = append(requests, r.Clone(r.Context()))
+		paths = append(paths, r.URL.EscapedPath())
+		mutex.Unlock()
+		switch r.Method {
+		case "MKCOL":
+			w.WriteHeader(http.StatusCreated)
+		case "PUT":
+			w.WriteHeader(http.StatusCreated)
+		case "PROPFIND":
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusMultiStatus)
+			_, _ = io.WriteString(w, `<?xml version="1.0" encoding="utf-8"?><d:multistatus xmlns:d="DAV:"></d:multistatus>`)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	provider := model.StorageProvider{
+		Type:                model.StorageProviderTypeWebDAV,
+		Endpoint:            server.URL + "/dav/%E4%B8%AD%E6%96%87%20space%20(1)%25",
+		Username:            "user",
+		Password:            "password",
+		PathPrefix:          "canvas",
+		AllowPrivateNetwork: true,
+	}
+	client, err := newWebDAVClient(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.MkdirAll("canvas/folder", 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := client.Write("canvas/folder/file.txt", []byte("content"), 0o644); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if _, err := client.ReadStream("canvas/folder/file.txt"); err != nil {
+		t.Fatalf("ReadStream: %v", err)
+	}
+
+	mutex.Lock()
+	defer mutex.Unlock()
+	if len(requests) == 0 {
+		t.Fatal("expected WebDAV requests")
+	}
+	expectedRoot := "/dav/" + url.PathEscape("中文 space (1)%")
+	for index, request := range requests {
+		if request.URL.RawQuery != "" {
+			t.Fatalf("request %d unexpectedly included query %q", index, request.URL.RawQuery)
+		}
+		if !strings.HasPrefix(paths[index], expectedRoot+"/") {
+			t.Fatalf("request %d path = %q, want prefix %q (special characters encoded exactly once)", index, paths[index], expectedRoot+"/")
+		}
 	}
 }
 
