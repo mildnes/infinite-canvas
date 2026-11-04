@@ -315,9 +315,11 @@ export type AdminStorageProvider = {
     id: string;
     name: string;
     type: "s3" | "webdav";
+    s3Provider?: "s3" | "cos" | "oss" | "generic";
     endpoint: string;
     region: string;
     bucket: string;
+    s3AddressingStyle?: "path" | "virtual";
     accessKeyId: string;
     secretAccessKey: string;
     publicBaseUrl: string;

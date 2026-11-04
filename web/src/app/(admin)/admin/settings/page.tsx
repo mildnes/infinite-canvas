@@ -68,7 +68,7 @@ const modelCapabilityOptions: { label: string; value: ModelCapability }[] = [
     { label: "文本", value: "text" },
     { label: "音频", value: "audio" },
 ];
-const emptyS3StorageProvider: AdminStorageProvider = { id: "", name: "", type: "s3", endpoint: "", region: "auto", bucket: "", accessKeyId: "", secretAccessKey: "", publicBaseUrl: "", pathPrefix: "canvas", username: "", password: "", weight: 1, enabled: true, ownerUserId: "", capacityBytes: 0, capacityCheckedAt: "", capacityExceeded: false };
+const emptyS3StorageProvider: AdminStorageProvider = { id: "", name: "", type: "s3", s3Provider: "s3", endpoint: "", region: "auto", bucket: "", s3AddressingStyle: "path", accessKeyId: "", secretAccessKey: "", publicBaseUrl: "", pathPrefix: "canvas", username: "", password: "", weight: 1, enabled: true, ownerUserId: "", capacityBytes: 0, capacityCheckedAt: "", capacityExceeded: false };
 const emptyWebDAVStorageProvider: AdminStorageProvider = { ...emptyS3StorageProvider, name: "", type: "webdav", region: "", allowPrivateNetwork: false };
 const emptyMCPServer: AdminMCPServer = { id: "", name: "", endpoint: "", apiKey: "", transport: "streamable_http", command: "", args: [], env: {}, workingDirectory: "", description: "", tools: [], enabled: true, allowUsers: true };
 
@@ -971,14 +971,36 @@ export default function AdminSettingsPage() {
                                                                 </Col>
                                                                 {!isWebDAV && (
                                                                     <>
-                                                                        <Col xs={24} md={4}>
+                                                                        <Col xs={24} md={3}>
+                                                                            <Form.Item name={[field.name, "s3Provider"]} label="服务商">
+                                                                                <Select
+                                                                                    options={[
+                                                                                        { value: "s3", label: "AWS S3" },
+                                                                                        { value: "cos", label: "腾讯云 COS" },
+                                                                                        { value: "oss", label: "阿里云 OSS" },
+                                                                                        { value: "generic", label: "通用兼容" },
+                                                                                    ]}
+                                                                                />
+                                                                            </Form.Item>
+                                                                        </Col>
+                                                                        <Col xs={24} md={3}>
                                                                             <Form.Item name={[field.name, "region"]} label="Region">
                                                                                 <Input placeholder="auto" />
                                                                             </Form.Item>
                                                                         </Col>
-                                                                        <Col xs={24} md={4}>
+                                                                        <Col xs={24} md={3}>
                                                                             <Form.Item name={[field.name, "bucket"]} label="Bucket">
                                                                                 <Input />
+                                                                            </Form.Item>
+                                                                        </Col>
+                                                                        <Col xs={24} md={4}>
+                                                                            <Form.Item name={[field.name, "s3AddressingStyle"]} label="寻址方式">
+                                                                                <Select
+                                                                                    options={[
+                                                                                        { value: "path", label: "Bucket 路径" },
+                                                                                        { value: "virtual", label: "Bucket 子域名" },
+                                                                                    ]}
+                                                                                />
                                                                             </Form.Item>
                                                                         </Col>
                                                                     </>
@@ -1651,6 +1673,8 @@ function normalizeStorageProvider(item: Partial<AdminStorageProvider> = {}): Adm
         ...item,
         id: item.id || "",
         type,
+        s3Provider: type === "s3" ? item.s3Provider || "s3" : undefined,
+        s3AddressingStyle: type === "s3" ? item.s3AddressingStyle || "path" : undefined,
         region: type === "s3" ? item.region || "auto" : "",
         weight: Math.max(1, Number(item.weight) || 1),
         enabled: item.enabled !== false,

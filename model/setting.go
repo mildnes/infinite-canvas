@@ -308,9 +308,11 @@ type StorageProvider struct {
 	ID                  string `json:"id"`
 	Name                string `json:"name"`
 	Type                string `json:"type"`
+	S3Provider          string `json:"s3Provider,omitempty"`
 	Endpoint            string `json:"endpoint"`
 	Region              string `json:"region"`
 	Bucket              string `json:"bucket"`
+	S3AddressingStyle   string `json:"s3AddressingStyle,omitempty"`
 	AccessKeyID         string `json:"accessKeyId"`
 	SecretAccessKey     string `json:"secretAccessKey"`
 	PublicBaseURL       string `json:"publicBaseUrl"`

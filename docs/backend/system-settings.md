@@ -223,6 +223,19 @@ APIMart 透明背景能力以其实际模型接口为准：[GPT Image 1/1.5 Offi
 
 > 这个顺序只影响**显示**；实际路由仍由请求里的渠道头（`X-Model-Channel-ID`）决定，未指定渠道头时按 `weight` 加权随机。
 
+### S3 服务商与寻址
+
+S3 provider 的 `s3Provider` 可取 `s3`、`cos`、`oss` 或 `generic`，仅用于标识配置来源；`s3AddressingStyle` 可取 `path` 或 `virtual`。两者都不是新 provider 类型，AWS S3 v4 签名、上传、读取、删除与容量查询仍走同一条 S3 代码路径。
+
+| 字段 | 默认值 | 请求形态 |
+| --- | --- | --- |
+| `s3AddressingStyle=path` | 缺失字段时的默认值 | `<endpoint>/<bucket>/<key>` |
+| `s3AddressingStyle=virtual` | 无 | Bucket 作为 endpoint 的 Host 前缀：`<bucket>.<endpoint-host>/<key>` |
+
+腾讯云 COS 与阿里云 OSS 通常填写不带 Bucket 的区域 Endpoint，例如 `https://cos.ap-shanghai.myqcloud.com`、`https://oss-cn-hangzhou.aliyuncs.com`，再选择“Bucket 子域名”；寻址方式不会擅自改写用户填写的 Endpoint。通用兼容服务和自建服务可继续使用路径模式。旧配置缺失两个字段时按 `s3` + `path` 处理，保持原有请求形态。管理端“系统设置 → 私有设置 → 存储”可在 S3 配置中保存并重新打开回显这两项；WebDAV 表单不会保存 S3 专属字段。
+
+修改寻址方式可能改变对象访问 Host。已有对象按 `StorageObject.ProviderID`、Bucket 与原请求路径继续解析；切换寻址方式前仍应先验证新配置能读取旧对象，未完成验证不要直接替换生产存储。
+
 ### S3 上传 payload 签名
 
 S3 PUT 默认将文件真实 SHA-256 同时写入 `X-Amz-Content-Sha256` 和 SigV4 canonical request。普通上传复用写入 `StorageObject.SHA256` 的 checksum；生成媒体补传复用本地副本完整校验的 checksum，不额外读取或重算。对象 key、元数据结构及上传后云端回读校验保持原样。

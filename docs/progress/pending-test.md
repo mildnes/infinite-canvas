@@ -5,6 +5,16 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
+## v0.8.4 剩余项 · 第 3 批（#1+#2）S3 COS/OSS 与寻址
+
+- [范围] 基于 `20dbfbe4e873947424ed5b92033c24784c4b9e21`，新增 provider 的 `s3Provider`、`s3AddressingStyle` 字段和 S3 请求 Host/路径切换；普通上传、gen media 补传、读写删、容量查询共用现有 S3 请求函数。没有新增 COS/OSS 专用签名实现或依赖，也没有修改第 1、2 批提交。
+- [兼容默认] `s3Provider` 缺失回退 `s3`，`s3AddressingStyle` 缺失回退 `path`，所以旧 S3 配置仍请求 `<endpoint>/<bucket>/<key>`；`virtual` 才把 Bucket 放到 Host。标题、字段、Endpoint 和对象 key 不改写。WebDAV 会清空两个 S3 专属字段。
+- [先红后绿] 用 Go overlay 加载基线 `model/setting.go`、`service/user_data.go`、`service/settings.go`、`service/storage.go` 运行同一组最终测试。COS/OSS virtual 两项在旧实现实际请求 `/bucket/key` 而非 Bucket 子域名，旧默认值也没有两个新字段，均为运行期断言失败；path 两项与既有编码/查询守卫原本通过。当前 2 个测试、6 个子场景全部通过，额外用独立 SigV4 计算核对 Host、路径与 Header 一致。
+- [管理端] 新增服务商与寻址方式下拉，保存对象沿用 `AdminStorageProvider` 完整 provider，重新加载时保留或补默认值。Node + tsx 新测试 2/2 通过，既有 WebDAV 私有网络与前端存储定向回归共 14/14 通过。
+- [验证] `go test ./... -count=1` 通过；`go test -race ./service -run 'TestBatch2S3PayloadSigning|TestBatch3|WebDAV|StorageSecurity|GeneratedMedia|MediaVerify|MediaSync' -count=1` 通过；`npx tsc --noEmit --incremental false` 退出 0；改动 Go 文件的 `gofmt -l` 和 `git diff --check` 无输出。
+- [ ] Hermes 验收：用真实 COS/OSS 的临时 Bucket 分别验证 path/virtual 上传、读取、删除和容量查询，确认签名、对象路径及 CORS/公网 URL；用一份旧 S3 配置确认默认 path 行为不变，再确认管理端保存后重新打开两项可回显。未操作生产存储、数据库或部署。
+- [边界] 这是能力扩展，不代表生产已接入 COS/OSS。跨云历史对象、CDN、CORS、自定义域名不属于本批；本批不改变 `S3_UNSIGNED_PAYLOAD` 的进程级开关语义。真实 provider 的签名兼容性必须以 Hermes 验收为准。
+
 ## v0.8.4 剩余项 · 第 2 批（#11）S3 上传 SHA-256 签名
 
 - [范围] 基于 `f477cfcdf1c0456d1e8a02cd8998f67e8168d339`，普通 S3 上传复用现有 checksum；`uploadLocalMedia` 也传递已有完整校验返回的 checksum，覆盖生成媒体补传。两条 PUT 链路的 `X-Amz-Content-Sha256` 与 canonical request 使用同一真实 hash，不额外重算。对象路径、元数据结构、回读验证和错误处理保持；没有修改第 1 批仓库文件。

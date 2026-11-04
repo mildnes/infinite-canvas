@@ -1506,6 +1506,18 @@ func normalizeStorageProvider(provider model.StorageProvider) model.StorageProvi
 	provider.Endpoint = strings.TrimRight(strings.TrimSpace(provider.Endpoint), "/")
 	provider.Bucket = strings.TrimSpace(provider.Bucket)
 	provider.AccessKeyID = strings.TrimSpace(provider.AccessKeyID)
+	provider.S3Provider = strings.ToLower(strings.TrimSpace(provider.S3Provider))
+	provider.S3AddressingStyle = strings.ToLower(strings.TrimSpace(provider.S3AddressingStyle))
+	if provider.Type == model.StorageProviderTypeS3 {
+		if provider.S3Provider == "" {
+			provider.S3Provider = "s3"
+		}
+		if provider.S3AddressingStyle == "" {
+			provider.S3AddressingStyle = "path"
+		}
+	} else {
+		provider.S3Provider, provider.S3AddressingStyle = "", ""
+	}
 	if provider.Type == model.StorageProviderTypeWebDAV {
 		provider.PathPrefix = strings.Trim(strings.TrimSpace(provider.PathPrefix), "/")
 		if provider.PathPrefix == "" {

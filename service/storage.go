@@ -1021,10 +1021,16 @@ func newS3RequestWithQuery(method string, provider model.StorageProvider, object
 		return nil, err
 	}
 	escapedKey := strings.TrimLeft(objectKey, "/")
-	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/" + provider.Bucket + "/" + escapedKey
+	if provider.S3AddressingStyle == "virtual" {
+		endpoint.Host = provider.Bucket + "." + endpoint.Host
+		endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/" + escapedKey
+	} else {
+		endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/" + provider.Bucket + "/" + escapedKey
+	}
 	if query != nil {
 		endpoint.RawQuery = query.Encode()
 	}
+	endpoint.RawPath = strings.ReplaceAll(strings.ReplaceAll(url.QueryEscape(endpoint.Path), "+", "%20"), "%2F", "/")
 	request, err := http.NewRequest(method, endpoint.String(), body)
 	if err != nil {
 		return nil, err
@@ -1054,7 +1060,7 @@ func signS3Request(request *http.Request, provider model.StorageProvider, object
 	request.Header.Set("Host", request.URL.Host)
 	request.Header.Set("X-Amz-Date", amzDate)
 	request.Header.Set("X-Amz-Content-Sha256", payloadHash)
-	canonicalURI := "/" + provider.Bucket + "/" + strings.ReplaceAll(url.PathEscape(objectKey), "%2F", "/")
+	canonicalURI := request.URL.EscapedPath()
 	canonicalHeaders := "host:" + request.URL.Host + "\n" + "x-amz-content-sha256:" + payloadHash + "\n" + "x-amz-date:" + amzDate + "\n"
 	signedHeaders := "host;x-amz-content-sha256;x-amz-date"
 	canonicalRequest := request.Method + "\n" + canonicalURI + "\n" + request.URL.RawQuery + "\n" + canonicalHeaders + "\n" + signedHeaders + "\n" + payloadHash
@@ -1103,20 +1109,22 @@ func normalizeUserStorageProviderForOwner(input StorageObjectProviderInput, owne
 		enabled = *input.Enabled
 	}
 	return normalizeStorageProvider(model.StorageProvider{
-		Name:            input.Name,
-		Type:            input.Type,
-		Endpoint:        input.Endpoint,
-		Region:          input.Region,
-		Bucket:          input.Bucket,
-		AccessKeyID:     input.AccessKeyID,
-		SecretAccessKey: input.SecretAccessKey,
-		PublicBaseURL:   input.PublicBaseURL,
-		PathPrefix:      input.PathPrefix,
-		Username:        input.Username,
-		Password:        input.Password,
-		Weight:          1,
-		Enabled:         enabled,
-		OwnerUserID:     owner,
+		Name:              input.Name,
+		Type:              input.Type,
+		S3Provider:        input.S3Provider,
+		Endpoint:          input.Endpoint,
+		Region:            input.Region,
+		Bucket:            input.Bucket,
+		S3AddressingStyle: input.S3AddressingStyle,
+		AccessKeyID:       input.AccessKeyID,
+		SecretAccessKey:   input.SecretAccessKey,
+		PublicBaseURL:     input.PublicBaseURL,
+		PathPrefix:        input.PathPrefix,
+		Username:          input.Username,
+		Password:          input.Password,
+		Weight:            1,
+		Enabled:           enabled,
+		OwnerUserID:       owner,
 	})
 }
 

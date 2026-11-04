@@ -21,18 +21,20 @@ type UserConfigPayload struct {
 }
 
 type StorageObjectProviderInput struct {
-	Enabled         *bool  `json:"enabled,omitempty"`
-	Name            string `json:"name"`
-	Type            string `json:"type"`
-	Endpoint        string `json:"endpoint"`
-	Region          string `json:"region"`
-	Bucket          string `json:"bucket"`
-	AccessKeyID     string `json:"accessKeyId"`
-	SecretAccessKey string `json:"secretAccessKey"`
-	PublicBaseURL   string `json:"publicBaseUrl"`
-	PathPrefix      string `json:"pathPrefix"`
-	Username        string `json:"username"`
-	Password        string `json:"password"`
+	Enabled           *bool  `json:"enabled,omitempty"`
+	Name              string `json:"name"`
+	Type              string `json:"type"`
+	S3Provider        string `json:"s3Provider,omitempty"`
+	Endpoint          string `json:"endpoint"`
+	Region            string `json:"region"`
+	Bucket            string `json:"bucket"`
+	S3AddressingStyle string `json:"s3AddressingStyle,omitempty"`
+	AccessKeyID       string `json:"accessKeyId"`
+	SecretAccessKey   string `json:"secretAccessKey"`
+	PublicBaseURL     string `json:"publicBaseUrl"`
+	PathPrefix        string `json:"pathPrefix"`
+	Username          string `json:"username"`
+	Password          string `json:"password"`
 }
 
 type UserStorageProviders struct {
