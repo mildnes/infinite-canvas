@@ -2492,7 +2492,7 @@ function ResultImageCard({
                     <Button size="small" title="同步到云端存储" icon={<CloudUpload className="size-3.5" />} loading={syncing} disabled={image.storageKey?.startsWith("server:")} onClick={() => onSync(image)} />
                     <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => void onSaveAsset(image, index)} />
                     <Button size="small" icon={<PenLine className="size-3.5" />} onClick={() => void onEdit(image, index)} />
-                    <Button size="small" title="局部重绘" icon={<Brush className="size-3.5" />} onClick={() => onMaskEdit(image)} />
+                    {image.dataUrl ? <Button size="small" title="局部重绘" icon={<Brush className="size-3.5" />} onClick={() => onMaskEdit(image)} /> : null}
                     <Button size="small" icon={<Download className="size-3.5" />} onClick={() => onDownload(image, index)} />
                 </div>
             </div>
