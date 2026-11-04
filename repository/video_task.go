@@ -33,7 +33,8 @@ func SavePendingVideoTaskPoll(task model.VideoTask) (bool, error) {
 	}
 	result := db.Model(&model.VideoTask{}).
 		Where("id = ? AND status IN ?", task.ID, []string{"queued", "in_progress", "processing", "running"}).
-		Select("*").Updates(&task)
+		Select("*").Omit("RequestBody", "ResponseBody", "WorkflowRef").
+		Updates(&task)
 	return result.RowsAffected > 0, result.Error
 }
 
@@ -105,7 +106,8 @@ func ListDueVideoTasks(limit int) ([]model.VideoTask, error) {
 		limit = 100
 	}
 	var tasks []model.VideoTask
-	err = db.Where("status IN ?", []string{"queued", "in_progress", "processing", "running"}).Where("(workflow_ref = '' OR workflow_ref IS NULL)").Where("upstream_task_id <> '' OR upstream_video_id <> ''").
+	err = db.Omit("RequestBody", "ResponseBody", "WorkflowRef").
+		Where("status IN ?", []string{"queued", "in_progress", "processing", "running"}).Where("(workflow_ref = '' OR workflow_ref IS NULL)").Where("upstream_task_id <> '' OR upstream_video_id <> ''").
 		Order("created_at ASC").
 		Limit(limit).
 		Find(&tasks).Error

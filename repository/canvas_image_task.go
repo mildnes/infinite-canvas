@@ -36,9 +36,11 @@ func UpdateCanvasImageTask(task model.CanvasImageTask) (model.CanvasImageTask, e
 
 	changed := false
 	err = db.Transaction(func(tx *gorm.DB) error {
+		// RequestBody gains output notices after generation; ResponseBody also carries workflow handoffs.
 		result := tx.Model(&model.CanvasImageTask{}).
 			Where("user_id = ? AND id = ? AND status IN ?", task.UserID, task.ID, activeGenerationTaskStatuses).
-			Select("*").Updates(&task)
+			Select("status", "progress", "request_body", "response_body", "error", "error_detail", "image_url", "image_urls", "original_url", "original_urls", "image_storage", "storage_key", "width", "height", "mime_type", "bytes", "updated_at", "started_at", "completed_at").
+			Updates(&task)
 		if result.Error != nil {
 			return result.Error
 		}

@@ -34,7 +34,7 @@ func UpdateCanvasAudioTask(task model.CanvasAudioTask) (model.CanvasAudioTask, e
 
 	result := db.Model(&model.CanvasAudioTask{}).
 		Where("user_id = ? AND id = ? AND status IN ?", task.UserID, task.ID, activeGenerationTaskStatuses).
-		Select("*").
+		Select("status", "progress", "response_body", "error", "error_detail", "audio_url", "storage_key", "mime_type", "bytes", "updated_at", "started_at", "completed_at").
 		Updates(&task)
 	if result.Error != nil || result.RowsAffected > 0 {
 		return task, result.Error

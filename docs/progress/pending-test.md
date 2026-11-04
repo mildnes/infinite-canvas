@@ -5,6 +5,19 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
+## v0.8.4 剩余项 · 第 1 批（#17）生成任务轮询读写
+
+- [范围] 基于 `874d0cc17104c1ee21089f9bb272d886f5b8a819`，仅优化三个任务仓库的运行阶段 SQL；创建、单任务／用户列表完整读取、前端响应结构、数据库 schema 和 S3 均未改动。第 2 批签名与第 3 批寻址尚未开始。
+- [视频] `ListDueVideoTasks` 与 `SavePendingVideoTaskPoll` 成对省略 `RequestBody`、`ResponseBody`、`WorkflowRef`。其他列保留，包含上游 ID、开始时间、`LastResponse`、存储元数据和退款所需字段；没有新响应的临时网络错误不会清空上次响应。`Select("*")` 保留零值清空能力，但三列不会出现在 UPDATE 写集里。
+- [图片／音频] 共享 Update 改为显式运行字段白名单，不回写来源、提示词、渠道、计费等创建字段。图片 `request_body` 必须保留生成末尾的格式告警更新；两类任务 `response_body` 必须保留工作流上游 ID 交接。完成可以清空旧错误与图片响应体，多图 JSON 列、归档与完成 CAS 仍在原事务内。
+- [规格澄清] 普通视频查询原本限定 `workflow_ref` 为空或 NULL，非空引用由独立 `ListDueRunningHubWorkflowTasks` 查询处理；本批不改变该分流。测试同时验证 SELECT 省列、WHERE 仍引用该列、空／NULL 正常命中、符合条件的非空工作流仍被独立轮询命中，以及完整 API 读取继续返回原引用。没有将“非空引用进入普通轮询”当作验收目标。
+- [上游对照] 已读取 [目标提交的服务文件](https://raw.githubusercontent.com/tigerowo/infinite-canvas/786b3b2/service/video_task.go) 并与 [v0.8.3](https://raw.githubusercontent.com/tigerowo/infinite-canvas/v0.8.3/service/video_task.go) 对照；所述服务层 `-6` 行正是删除按 source 选择 Save／Update 的分支（明确不做的 #5）。本地没有该分支，所以 `service/video_task.go` 不改，媒体持久化／同步、状态、失败与退款均保留。
+- [先红后绿] 用 Go overlay 加载基线三个仓库原文件，运行同一组最终测试，结果 4 红、4 项既有守卫绿：旧查询返回 `requestBytes=5242880` 且 SQL 为 `SELECT *`；旧更新将该字段覆盖为 0 字节，并回写响应／引用；图片、音频旧更新还覆盖了输入与工作流元数据。当前实现 8/8 通过。创建全字段、上游 ID／时间绑定、工作流分流、服务层状态推进是原本应绿的守卫，不冒充新缺陷。
+- [实际验证] `go test ./... -count=1` 通过；`go test -race ./repository ./service ./handler -run 'TestBatch1|TestCanvasImage(Result|Archive|Retention)|TestCanvasImageTaskOriginalURLCompaction|TestCanvasStop|TestCanvasTaskBillingSingleAuthority|TestVideoTask|TestFailedVideo|TestSaveCanvasTasks' -count=1` 通过。测试使用临时 SQLite，验证 5 MB 请求经进度、临时错误、完成和迟到结果后仍完整；公开图片 GET／列表／批量输出告警保持。未接触生产数据库或付费上游。
+- [测试入口] `repository/task_poll_fields_test.go`、`service/task_poll_projection_test.go`；定向命令：`go test ./repository ./service -run '^TestBatch1' -count=1 -v`。改动 Go 文件 `gofmt -l` 与范围空白检查通过。已检查 todo，无本批未完成条目需迁移；本批无前端代码变更，未运行前端全量、tsc 或 Next 构建。
+- [ ] Hermes 验收：反向运行四项新行为验证；完整 Go（清 testcache＋`-count=1`）、前端全量、tsc、build；确认普通视频轮询、工作流三类任务交接、停止退款、透明 PNG 告警、多图归档与任务保留清理后恢复正常。本批交付后再进入第 2 批。
+- [边界] 仅后台 due 查询省略上述三列，不承诺所有状态／权限检查都变成轻量查询，不调整完整 GET／列表的已有契约。不触碰 #5、#10、AGENTS、go.mod、schema、版本号或部署。
+
 ## 画布任务 base64 防回流（阶段 1 / 上游 #7）
 
 - [A·写入] 画布图片任务在上传完成后把 `originalUrl` 与 `originalUrls` 中的 `data:` 值归一为对应 `server:<objectId>`；http(s) 与已有稳定引用原样保留，上传失败字段置空并记录不含正文的 WARN，不因原图归一化失败改变任务创建／终态／退款语义。32MB 响应读取上限保留。
