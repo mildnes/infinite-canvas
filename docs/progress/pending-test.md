@@ -5,9 +5,30 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
+## v0.8.4 剩余项 · 第 2 批（#11）S3 上传 SHA-256 签名
+
+- [范围] 基于 `f477cfcdf1c0456d1e8a02cd8998f67e8168d339`，普通 S3 上传复用现有 checksum；`uploadLocalMedia` 也传递已有完整校验返回的 checksum，覆盖生成媒体补传。两条 PUT 链路的 `X-Amz-Content-Sha256` 与 canonical request 使用同一真实 hash，不额外重算。对象路径、元数据结构、回读验证和错误处理保持；没有修改第 1 批仓库文件。
+- [兼容开关] 后端环境变量 `S3_UNSIGNED_PAYLOAD`，默认 `false`。仅显式设为 `true` 才让该进程全部 S3 PUT 使用 `UNSIGNED-PAYLOAD`，失败不会自动降级。可配置在本地或 Compose 使用的 `.env`，容器需要重新创建以读取环境；不是前端或 provider API 新字段。GET／DELETE／HEAD 仍为 unsigned，WebDAV 不读取开关。完整说明见 [系统设置](../backend/system-settings.md#s3-上传-payload-签名)。
+- [先红后绿] `service/s3_payload_hash_test.go` 使用独立 HTTP S3 mock、独立 SigV4 校验器和临时 SQLite，未复用生产签名函数来制造“自证”。用 Go overlay 加载基线 `storage.go`、`media_integrity.go` 运行最终同一组测试，10 个场景为 7 红、3 个既有守卫绿；当前 10/10 通过。篡改发生在签名完成之后，且 mock 不接收失败对象。
+
+| 验收项 | 基线实际结果 | 当前结果 |
+| --- | --- | --- |
+| PUT 文件 hash | `actual="UNSIGNED-PAYLOAD"`，预期 `7fbe3086…acb456`，红 | Header 等于 PNG 字节 SHA-256，绿 |
+| canonical request | 与独立校验器按真实 hash 算出的 Authorization 不符，红 | 与独立校验器一致，绿 |
+| 正文篡改 | `actual error=<nil>`，篡改对象被 mock 接受，红 | 明确返回 `403 Forbidden / SignatureDoesNotMatch: payload SHA-256 mismatch`，未写入对象，绿 |
+| 显式兼容开关 | `false` 仍 unsigned；只能接受 unsigned 的 mock 未拒绝默认模式，红 | 默认签名遇不兼容服务明确失败，`true` 后成功，改回 `false` 恢复签名，绿 |
+| GET／DELETE／HEAD | 两种开关取值下均 unsigned，原本应绿 | 保持通过 |
+| 元数据一致 | 元数据是真实 SHA-256，但 PUT 是 unsigned，红；文件补传同样红 | 普通上传与文件补传均正确；兼容模式元数据仍是真实 SHA-256，绿 |
+| WebDAV | 原有 15 个顶层测试通过，原本应绿 | 同一组全部通过 |
+
+- [额外守卫] 修改声明的 hash 但不重签时 403；上游 503 保持显式失败且仅发 1 次 PUT。两项原本应绿，未冒充修复前缺陷。
+- [实际验证] `go test ./service -run '^TestBatch2S3PayloadSigning$|WebDAV' -count=1 -v`、`go test ./... -count=1`、`go test -race ./service -run 'TestBatch2S3PayloadSigning|WebDAV|StorageSecurity|GeneratedMedia|MediaVerify|MediaSync' -count=1` 均通过；只检查改动 Go 文件的 `gofmt -l` 和提交范围空白检查。已检查 todo，无对应未完成条目需迁移。本批没有前端改动，未执行前端全量、tsc 或 Next 构建。
+- [ ] Hermes 验收：真实 S3／兼容服务的普通上传和生成媒体补传、服务端拒绝签名 payload 后显式开关的恢复，以及现有 WebDAV 上传／读取；没有操作生产配置、数据库或付费上游。
+- [边界] 本批不做 COS／OSS 或寻址方式；不动 #5、#10、#9、#12、#13、#16、AGENTS、go.mod、数据库 schema、前端 API、版本号或部署。S3 服务是否真正校验声明的 hash 取决于该服务的实现，mock 验证不替代真实 provider 验收。
+
 ## v0.8.4 剩余项 · 第 1 批（#17）生成任务轮询读写
 
-- [范围] 基于 `874d0cc17104c1ee21089f9bb272d886f5b8a819`，仅优化三个任务仓库的运行阶段 SQL；创建、单任务／用户列表完整读取、前端响应结构、数据库 schema 和 S3 均未改动。第 2 批签名与第 3 批寻址尚未开始。
+- [范围] 基于 `874d0cc17104c1ee21089f9bb272d886f5b8a819`，仅优化三个任务仓库的运行阶段 SQL；创建、单任务／用户列表完整读取、前端响应结构、数据库 schema 和 S3 均未改动。本条记录第 1 批；第 2 批签名另列，第 3 批寻址尚未开始。
 - [视频] `ListDueVideoTasks` 与 `SavePendingVideoTaskPoll` 成对省略 `RequestBody`、`ResponseBody`、`WorkflowRef`。其他列保留，包含上游 ID、开始时间、`LastResponse`、存储元数据和退款所需字段；没有新响应的临时网络错误不会清空上次响应。`Select("*")` 保留零值清空能力，但三列不会出现在 UPDATE 写集里。
 - [图片／音频] 共享 Update 改为显式运行字段白名单，不回写来源、提示词、渠道、计费等创建字段。图片 `request_body` 必须保留生成末尾的格式告警更新；两类任务 `response_body` 必须保留工作流上游 ID 交接。完成可以清空旧错误与图片响应体，多图 JSON 列、归档与完成 CAS 仍在原事务内。
 - [规格澄清] 普通视频查询原本限定 `workflow_ref` 为空或 NULL，非空引用由独立 `ListDueRunningHubWorkflowTasks` 查询处理；本批不改变该分流。测试同时验证 SELECT 省列、WHERE 仍引用该列、空／NULL 正常命中、符合条件的非空工作流仍被独立轮询命中，以及完整 API 读取继续返回原引用。没有将“非空引用进入普通轮询”当作验收目标。

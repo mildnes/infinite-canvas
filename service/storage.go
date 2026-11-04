@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -274,7 +275,7 @@ func uploadStorageObject(ctx context.Context, filename string, contentType strin
 	}
 	nowTime := time.Now()
 	objectKey := strings.Trim(strings.Trim(provider.PathPrefix, "/")+"/"+userID+"/"+nowTime.Format("2006/01/02")+"/"+objectID+ext, "/")
-	if err := putStorageObject(provider, objectKey, contentType, data); err != nil {
+	if err := putStorageObject(provider, objectKey, contentType, data, checksum); err != nil {
 		return UploadedStorageObject{}, storageUploadError(provider, err)
 	}
 	publicURL := objectURL(provider, objectKey)
@@ -871,10 +872,10 @@ func storageUploadError(provider model.StorageProvider, err error) error {
 	}
 }
 
-func putStorageObject(provider model.StorageProvider, objectKey string, contentType string, data []byte) error {
+func putStorageObject(provider model.StorageProvider, objectKey string, contentType string, data []byte, payloadHashes ...string) error {
 	switch provider.Type {
 	case model.StorageProviderTypeS3:
-		return putS3Object(provider, objectKey, contentType, data)
+		return putS3Object(provider, objectKey, contentType, data, payloadHashes...)
 	case model.StorageProviderTypeWebDAV:
 		return putWebDAVObject(provider, objectKey, data)
 	default:
@@ -905,8 +906,11 @@ func measureStorageProvider(provider model.StorageProvider) (int64, error) {
 }
 
 // putS3Object 上传对象到 S3 兼容存储。
-func putS3Object(provider model.StorageProvider, objectKey string, contentType string, data []byte) error {
-	request, err := newS3Request(http.MethodPut, provider, objectKey, bytes.NewReader(data), int64(len(data)))
+func putS3Object(provider model.StorageProvider, objectKey string, contentType string, data []byte, payloadHashes ...string) error {
+	if len(payloadHashes) == 0 {
+		payloadHashes = []string{sha256Hex(data)}
+	}
+	request, err := newS3Request(http.MethodPut, provider, objectKey, bytes.NewReader(data), int64(len(data)), payloadHashes...)
 	if err != nil {
 		return err
 	}
@@ -1007,11 +1011,11 @@ func measureS3Provider(provider model.StorageProvider) (int64, error) {
 	}
 }
 
-func newS3Request(method string, provider model.StorageProvider, objectKey string, body io.Reader, contentLength int64) (*http.Request, error) {
-	return newS3RequestWithQuery(method, provider, objectKey, nil, body, contentLength)
+func newS3Request(method string, provider model.StorageProvider, objectKey string, body io.Reader, contentLength int64, payloadHashes ...string) (*http.Request, error) {
+	return newS3RequestWithQuery(method, provider, objectKey, nil, body, contentLength, payloadHashes...)
 }
 
-func newS3RequestWithQuery(method string, provider model.StorageProvider, objectKey string, query url.Values, body io.Reader, contentLength int64) (*http.Request, error) {
+func newS3RequestWithQuery(method string, provider model.StorageProvider, objectKey string, query url.Values, body io.Reader, contentLength int64, payloadHashes ...string) (*http.Request, error) {
 	endpoint, err := url.Parse(strings.TrimRight(provider.Endpoint, "/"))
 	if err != nil {
 		return nil, err
@@ -1028,15 +1032,21 @@ func newS3RequestWithQuery(method string, provider model.StorageProvider, object
 	if contentLength > 0 {
 		request.ContentLength = contentLength
 	}
-	signS3Request(request, provider, escapedKey)
+	signS3Request(request, provider, escapedKey, payloadHashes...)
 	return request, nil
 }
 
-func signS3Request(request *http.Request, provider model.StorageProvider, objectKey string) {
+func signS3Request(request *http.Request, provider model.StorageProvider, objectKey string, payloadHashes ...string) {
 	nowTime := time.Now().UTC()
 	amzDate := nowTime.Format("20060102T150405Z")
 	dateStamp := nowTime.Format("20060102")
 	payloadHash := "UNSIGNED-PAYLOAD"
+	if request.Method == http.MethodPut && len(payloadHashes) > 0 {
+		unsigned, _ := strconv.ParseBool(strings.TrimSpace(os.Getenv("S3_UNSIGNED_PAYLOAD")))
+		if !unsigned {
+			payloadHash = payloadHashes[0]
+		}
+	}
 	region := provider.Region
 	if region == "" {
 		region = "auto"

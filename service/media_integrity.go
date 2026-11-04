@@ -232,7 +232,8 @@ func uploadLocalMedia(ctx context.Context, source, target model.StorageObject, p
 		return err
 	}
 	defer file.Close()
-	if _, _, err = copyVerifiedMedia(source, io.Discard, file); err != nil {
+	_, checksum, err := copyVerifiedMedia(source, io.Discard, file)
+	if err != nil {
 		return err
 	}
 	if _, err = file.Seek(0, io.SeekStart); err != nil {
@@ -258,7 +259,7 @@ func uploadLocalMedia(ctx context.Context, source, target model.StorageObject, p
 		return err
 	}
 	provider.Bucket = target.Bucket
-	request, err := newS3Request(http.MethodPut, provider, target.ObjectKey, file, source.Bytes)
+	request, err := newS3Request(http.MethodPut, provider, target.ObjectKey, file, source.Bytes, checksum)
 	if err != nil {
 		return mediaIssue("blocked", "S3 请求配置无效")
 	}

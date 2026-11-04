@@ -223,6 +223,14 @@ APIMart 透明背景能力以其实际模型接口为准：[GPT Image 1/1.5 Offi
 
 > 这个顺序只影响**显示**；实际路由仍由请求里的渠道头（`X-Model-Channel-ID`）决定，未指定渠道头时按 `weight` 加权随机。
 
+### S3 上传 payload 签名
+
+S3 PUT 默认将文件真实 SHA-256 同时写入 `X-Amz-Content-Sha256` 和 SigV4 canonical request。普通上传复用写入 `StorageObject.SHA256` 的 checksum；生成媒体补传复用本地副本完整校验的 checksum，不额外读取或重算。对象 key、元数据结构及上传后云端回读校验保持原样。
+
+若 S3 兼容服务明确不接受 signed payload，在后端进程环境中设置 `S3_UNSIGNED_PAYLOAD=true`，重新启动进程后生效。本地运行可放在 `.env`；仓库 Docker Compose 已通过 `env_file: .env` 将它传给容器，变更后需重新创建应用容器。该开关默认 `false`，是进程级配置，会影响该进程的全部 S3 PUT，不是管理端 provider 字段；删除配置或设为 `false` 可恢复真实 hash 签名。
+
+兼容模式仍保留对象真实 SHA-256 元数据及既有云端回读校验，但 S3 请求本身使用 `UNSIGNED-PAYLOAD`，不再要求服务端按声明的 hash 校验正文。上传失败直接返回错误，不会自动重试成 unsigned。GET、DELETE、HEAD 等无正文请求继续使用 `UNSIGNED-PAYLOAD`，WebDAV 不读取此开关。
+
 ### 已生成媒体的云端补传与本地副本
 
 登录账号的渠道生成结果无论 `storage.autoSyncAllAssets` 是否开启，都会先写入 `generated-media/` 并获得稳定 `server:<id>`。开启自动同步后，上传失败会记录原因和下次重试时间，固定目标并通过租约防止重复执行；重启后接管过期任务。只有完整云端回读通过字节数和 SHA-256 校验才确认同步成功，失败保留本地副本和短链接。切换开关不会自动补传全部历史对象。
