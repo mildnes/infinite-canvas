@@ -1,16 +1,7 @@
 package service
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
-	"net/http"
-	"net/url"
-	"strings"
-
-	"github.com/tigerowo/infinite-canvas/repository"
 )
 
 // Only rewrite an inline copy after both bytes and readability match an
@@ -30,36 +21,8 @@ func compactImageLogOriginalURLs(userID string, raw json.RawMessage) json.RawMes
 		if cached, ok := resolved[source]; ok {
 			return cached
 		}
-		resolved[source] = source
-		comma := strings.IndexByte(source, ',')
-		if !strings.HasPrefix(source, "data:") || comma < 0 || !strings.HasSuffix(strings.ToLower(source[:comma]), ";base64") {
-			return source
-		}
-		content, err := base64.StdEncoding.DecodeString(source[comma+1:])
-		if err != nil || len(content) == 0 {
-			return source
-		}
-		hash := sha256.Sum256(content)
-		objects, err := repository.ListStorageObjectsByFingerprintAnyOwner(hex.EncodeToString(hash[:]), int64(len(content)))
-		if err != nil {
-			return source
-		}
-		for _, object := range objects {
-			if verifyCanvasOriginalURLContent(object, bytes.NewReader(content)) != nil || verifyCanvasOriginalURLOwner(userID, object, source) != nil {
-				continue
-			}
-			download, err := DownloadStorageObject(object.ID, "")
-			if err != nil || download.Stream == nil {
-				continue
-			}
-			verified := download.StatusCode == http.StatusOK && verifyCanvasOriginalURLContent(object, download.Stream) == nil
-			_ = download.Stream.Close()
-			if verified {
-				resolved[source] = "/api/files/" + url.PathEscape(object.ID) + "/content"
-				return resolved[source]
-			}
-		}
-		return source
+		resolved[source] = CompactInlineMediaURL(userID, source)
+		return resolved[source]
 	}
 	var original string
 	if json.Unmarshal(task["originalUrl"], &original) == nil {

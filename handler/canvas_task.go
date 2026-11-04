@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
@@ -346,25 +347,26 @@ func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []
 		saveFailedCanvasImageTask(task, err.Error(), err.Error())
 		return
 	}
+	responseDetail := fmt.Sprintf("响应大小：%d bytes；Content-Type：%s", len(payload), responseContentType)
 	if status >= http.StatusBadRequest {
 		message := readUpstreamAIErrorMessage(payload, status)
-		saveFailedCanvasImageTask(task, message, string(payload))
+		saveFailedCanvasImageTask(task, message, responseDetail)
 		return
 	}
 	if ctx.Err() != nil {
 		return
 	}
 	if message := readWrappedTaskError(payload); message != "" {
-		saveFailedCanvasImageTask(task, message, string(payload))
+		saveFailedCanvasImageTask(task, message, responseDetail)
 		return
 	}
 	// Provider result-shape rules use the upstream name; task/audit names stay local.
-	collectAll := allAIProtocolImageResults(protocolModel)
-	imageURLs, mimeType, bytes, err := imageURLsFromAIResponse(payload, responseContentType, collectAll, task.Endpoint == "/chat/completions")
+	imageURLs, mimeType, bytes, err := imageURLsFromAIResponse(payload, responseContentType, allAIProtocolImageResults(protocolModel), task.Endpoint == "/chat/completions")
 	if err != nil {
-		saveFailedCanvasImageTask(task, err.Error(), string(payload))
+		saveFailedCanvasImageTask(task, err.Error(), responseDetail)
 		return
 	}
+	collectAll := len(imageURLs) > 1
 	imageStorage := make([]*model.CanvasImageStorage, len(imageURLs))
 	releaseResult, active := service.CanvasTaskResultGuard(ctx, "image", user.ID, task.ID)
 	if !active {
@@ -373,8 +375,6 @@ func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []
 	defer releaseResult()
 	created := make([]string, 0, len(imageURLs))
 	originalURLs := append([]string(nil), imageURLs...)
-	task.OriginalURL = originalURLs[0]
-	task.OriginalURLs = originalURLs
 	for index, sourceURL := range originalURLs {
 		if ctx.Err() != nil {
 			return
@@ -404,6 +404,22 @@ func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []
 			task.StorageKey = stored.StorageKey
 		}
 	}
+	for index, sourceURL := range originalURLs {
+		storageKey := ""
+		if imageStorage[index] != nil {
+			storageKey = imageStorage[index].StorageKey
+		}
+		normalized, normalizeErr := service.NormalizeInlineMediaURL(user.ID, sourceURL, storageKey)
+		originalURLs[index] = normalized
+		if normalizeErr != nil {
+			if storageKey == "" && err != nil {
+				normalizeErr = err
+			}
+			log.Printf("WARN canvas image original URL normalization failed: task=%s image=%d bytes=%d err=%v", task.ID, index, len(sourceURL), normalizeErr)
+		}
+	}
+	task.OriginalURL = originalURLs[0]
+	task.OriginalURLs = originalURLs
 	if err != nil {
 		if ctx.Err() != nil {
 			return
