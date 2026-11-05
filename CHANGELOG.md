@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.8.4 - 2026-11-05
+
 - [新增] 第 3 批（上游 #1+#2）：S3 provider 支持腾讯云 COS、阿里云 OSS 与通用兼容类型，并可显式选择 Bucket 路径或子域名寻址；旧配置缺失新字段时继续使用 AWS S3 + Bucket 路径，WebDAV 不受影响。
 
 - [修复] 第 2 批（上游 #11）：S3 普通上传与生成媒体补传复用文件 SHA-256 签名，默认启用 payload 完整性声明；保留显式 `S3_UNSIGNED_PAYLOAD` 兼容开关，无正文请求与 WebDAV 行为不变。
