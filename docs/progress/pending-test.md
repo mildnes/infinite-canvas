@@ -5,6 +5,27 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
+## 27e14b1 回归修复：非图片 ASCII 文本不得假报生图成功
+
+- [范围] 基于 `27e14b1ee0ce411a48701e53250d82fe79cefc1e`，仅在 `imageURLsFromAIResponse` 的非 URL 分支，解码成功且非空之后增加 `image/` MIME 检查；非图片继续寻找下一候选，全部无有效图片仍报“图片接口没有返回图片”。没有调整 URL 分支、`looksLikeBase64`、`imageCandidateBytes` 的 data URL 行为、`text` 遍历、内联提取、递归深度或原有测试断言。
+- [先红后绿] 新增 `handler/image_candidate_text_regression_test.go`，直接调用真实解析函数。修改生产代码前运行，11 项中 3 红、8 个原本正确的守卫绿：`test`、`done` 被解码为 3 字节，`aGVsbG8=` 被解码为 5 字节，本机 MIME 均为 `text/plain; charset=utf-8`，却返回 `images=1 error=<nil>`；预期应为 `images=0` 并报无图错误。修复后 11/11 通过。
+
+| 验收 | 27e14b1 实际结果 | 修复后 |
+| --- | --- | --- |
+| 1. `{"text":"test"}` | 红：1 张、3 字节、无错误 | 0 张，明确报“图片接口没有返回图片” |
+| 2. `{"text":"done"}` | 红：1 张、3 字节、无错误 | 0 张，同一无图错误 |
+| 3. `{"text":"aGVsbG8="}` | 红：1 张、5 字节、无错误 | 0 张，同一无图错误 |
+| 4. `{"text":"OK"}` | 旧代码本来就绿 | 保持无图错误 |
+| 5. Gemini parts 文本内 markdown JPEG | 旧代码本来就绿 | 仍返回原 JPEG data URL |
+| 6. 标准 Gemini inlineData | 旧代码本来就绿 | 仍成功 |
+| 7. OpenAI b64_json | 旧代码本来就绿 | 仍成功 |
+| 8. HTTP(S) URL 结果 | 旧代码本来就绿，MIME 为空 | 保持 URL 引用成功，不进入新增 MIME 检查 |
+| 9. 无 data 前缀的真实 2×2 JPEG Base64 | 旧代码本来就绿 | 仍成功，MIME 为 `image/jpeg` |
+
+- [额外探针] `success`、`abc123` 原本就报错，修后保持。与 Hermes 相同的 6 个 ASCII 探针在本机均报无图错误。JPEG 夹具复用 `jpeg.Encode` 的真实 2×2 图片。
+- [实际验证] `go test ./handler -run '^TestImageCandidate(Inline|TextRegression)' -count=1 -v` 的 27 个叶子场景全绿，原内联解析测试文件无修改；`go test ./... -count=1`、`go test -race ./handler -count=1` 均通过。`gofmt -l` 仅检查本批两个 Go 文件；提交后按 `27e14b1..HEAD` 做范围空白检查。已检查 todo，无对应未完成条目需迁移。本批未改前端、schema、API、AGENTS 或 Go 依赖。
+- [ ] Hermes 复验：使用同一组 6 个 ASCII 探针和原有内联图片探针确认无图必失败、真实图片与 URL 仍成功，再安排部署。Codex 未调用真实生图上游、未操作生产数据库、未部署，也未恢复历史失败或假成功任务。
+
 ## Gemini 兼容渠道的文本内联图片解析
 
 - [范围] 解析基线为 `eba98675e07fa230454bbbd27410996bbe11699d`；当前开发 HEAD `fa13bc8` 仅多出版本发布提交，图片解析代码相同，本次保留该版本提交。仅调整 `handler/canvas_task.go` 并新增 `handler/image_candidate_inline_test.go`，未修改前端、数据库、API 响应结构、`looksLikeBase64` 或渠道配置。

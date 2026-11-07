@@ -772,6 +772,9 @@ func imageURLsFromAIResponse(payload []byte, contentType string, collectAll bool
 			if err != nil || len(data) == 0 {
 				continue
 			}
+			if !strings.HasPrefix(detectedMimeType, "image/") {
+				continue
+			}
 			mimeType = detectedMimeType
 			bytes = int64(len(data))
 			if !strings.HasPrefix(candidate, "data:image/") {
