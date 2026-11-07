@@ -20,6 +20,7 @@ import (
 	"net/http/httptest"
 	"net/textproto"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -819,6 +820,7 @@ func imageCandidatesFromAIResponse(payload []byte, contentType string, includeCh
 		return nil, err
 	}
 	var candidates []string
+	inlineSeen := map[string]bool{}
 	for index := len(events) - 1; index >= 0; index-- {
 		event := events[index]
 		encoded, _ := json.Marshal(event.data)
@@ -828,7 +830,7 @@ func imageCandidatesFromAIResponse(payload []byte, contentType string, includeCh
 		if strings.EqualFold(event.name, "error") {
 			return nil, errors.New("图片流式接口返回错误")
 		}
-		candidates = append(candidates, collectImageCandidates(event.data, 0, includeChatImages)...)
+		candidates = append(candidates, collectImageCandidatesWithInlineLimit(event.data, 0, includeChatImages, inlineSeen)...)
 	}
 	return candidates, nil
 }
@@ -872,6 +874,10 @@ func parseServerSentJSONEvents(payload []byte) ([]serverSentJSONEvent, error) {
 }
 
 func collectImageCandidates(value any, depth int, includeChatImages bool) []string {
+	return collectImageCandidatesWithInlineLimit(value, depth, includeChatImages, map[string]bool{})
+}
+
+func collectImageCandidatesWithInlineLimit(value any, depth int, includeChatImages bool, inlineSeen map[string]bool) []string {
 	if depth > 7 || value == nil {
 		return nil
 	}
@@ -881,24 +887,61 @@ func collectImageCandidates(value any, depth int, includeChatImages bool) []stri
 		if strings.HasPrefix(text, "http://") || strings.HasPrefix(text, "https://") || strings.HasPrefix(text, "data:image/") || looksLikeBase64(text) {
 			return []string{text}
 		}
+		var result []string
+		for _, extracted := range extractInlineImageDataURLs(text) {
+			if len(inlineSeen) >= inlineImageDataURLMaxCount {
+				break
+			}
+			if !inlineSeen[extracted] {
+				inlineSeen[extracted] = true
+				result = append(result, extracted)
+			}
+		}
+		return result
 	case []any:
 		var result []string
 		for _, item := range typed {
-			result = append(result, collectImageCandidates(item, depth+1, includeChatImages)...)
+			result = append(result, collectImageCandidatesWithInlineLimit(item, depth+1, includeChatImages, inlineSeen)...)
 		}
 		return result
 	case map[string]any:
-		keys := []string{"url", "b64_json", "partial_image_b64", "image_url", "image", "image_data", "base64", "inlineData", "parts", "content", "candidates", "result", "response", "data", "output"}
+		keys := []string{"url", "b64_json", "partial_image_b64", "image_url", "image", "image_data", "base64", "inlineData", "parts", "content", "candidates", "result", "response", "data", "output", "text"}
 		if includeChatImages {
 			keys = append(keys, "choices", "message", "images")
 		}
 		var result []string
 		for _, key := range keys {
-			result = append(result, collectImageCandidates(typed[key], depth+1, includeChatImages)...)
+			result = append(result, collectImageCandidatesWithInlineLimit(typed[key], depth+1, includeChatImages, inlineSeen)...)
 		}
 		return result
 	}
 	return nil
+}
+
+var inlineImageDataURLPattern = regexp.MustCompile(`data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+`)
+
+const inlineImageDataURLMaxCount = 8
+
+func extractInlineImageDataURLs(text string) []string {
+	if !strings.Contains(text, "data:image/") {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	result := make([]string, 0, inlineImageDataURLMaxCount)
+	for len(result) < inlineImageDataURLMaxCount {
+		indices := inlineImageDataURLPattern.FindStringIndex(text)
+		if indices == nil {
+			break
+		}
+		match := text[indices[0]:indices[1]]
+		text = text[indices[1]:]
+		if _, exists := seen[match]; exists {
+			continue
+		}
+		seen[match] = struct{}{}
+		result = append(result, match)
+	}
+	return result
 }
 
 func imageCandidateBytes(value string) ([]byte, string, error) {

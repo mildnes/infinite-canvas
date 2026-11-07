@@ -5,6 +5,27 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
+## Gemini 兼容渠道的文本内联图片解析
+
+- [范围] 解析基线为 `eba98675e07fa230454bbbd27410996bbe11699d`；当前开发 HEAD `fa13bc8` 仅多出版本发布提交，图片解析代码相同，本次保留该版本提交。仅调整 `handler/canvas_task.go` 并新增 `handler/image_candidate_inline_test.go`，未修改前端、数据库、API 响应结构、`looksLikeBase64` 或渠道配置。
+- [行为] 原有候选遍历补充 `text` 字段，string 分支识别 markdown 图片和描述中的 `data:image/<type>;base64,...`；无 `data:image/` 时快速返回。正则使用线性字符类并逐段扫描，最多提取 8 个不同文本内联结果，跨 parts／流式事件共享额度；标准 URL、Gemini inlineData 和 OpenAI b64_json 继续走原路径，标准多图不受该新增限额限制。
+- [深度与选择] 保持深度上限 7，不增加更深的兜底遍历。`collectAll=false` 仍取首个有效结果，`true` 保留多图；纯文本和不可解码的内联 Base64 仍返回“图片接口没有返回图片”。测试用实际编码且可解码的 JPEG，不通过拼接非法 Base64 构造样本。
+- [先红后绿] Go overlay 使用指定基线的原始 `handler/canvas_task.go`，运行最终同一组 16 个子场景：旧实现 11 红、5 个既有守卫绿，新实现 16/16 通过。8 条指定验收的结果如下。
+
+| 验收 | 旧实现 | 当前实现 |
+| --- | --- | --- |
+| 1. markdown JPEG | `actual images=0`，报“图片接口没有返回图片”，预期 1 | 1 张，原 data URL 不变 |
+| 2. 描述中裸 data URL | `actual images=0`，预期 1 | 1 张 |
+| 3. 两张 markdown 图 | `actual images=0`，预期 2 | 2 张，顺序及原 data URL 一致 |
+| 4. 两个 parts 重复图 | `actual images=0`，预期 1 | 去重后 1 张 |
+| 5. 11 张文本内联图 | `actual images=0`，预期 8 | 前 8 张；另覆盖跨 parts 合计限额 |
+| 6. 标准 Gemini inlineData | 旧代码本来就绿 | 保持 JPEG 解码成功 |
+| 7. OpenAI b64_json | 旧代码本来就绿 | 保持 JPEG 解码成功 |
+| 8. 纯文本无图 | 旧代码本来就绿，明确报“图片接口没有返回图片” | 同一错误文案，保持失败 |
+
+- [实际验证] `go test ./handler -run '^TestImageCandidateInline' -count=1 -v`、`go test ./... -count=1`、`go test -race ./handler` 均通过。仅本批两个 Go 文件执行 `gofmt -l`，无输出；提交后执行相对于本批父提交的范围空白检查。已检查 todo，无对应未完成条目需迁移。本批不运行前端测试或构建。
+- [ ] Hermes 验收：部署修复后以 LD香蕉 的 `gemini-nano-banana-2.1` 生成图片，确认 markdown 文本内联结果成功解析并走原有存储／任务完成链路；标准 Gemini、OpenAI 与纯文本失败路径回归。Codex 未调用真实上游、未操作生产数据库，也未修复或重跑历史失败任务。
+
 ## v0.8.4 剩余项 · 第 3 批（#1+#2）S3 COS/OSS 与寻址
 
 - [范围] 基于 `20dbfbe4e873947424ed5b92033c24784c4b9e21`，新增 provider 的 `s3Provider`、`s3AddressingStyle` 字段和 S3 请求 Host/路径切换；普通上传、gen media 补传、读写删、容量查询共用现有 S3 请求函数。没有新增 COS/OSS 专用签名实现或依赖，也没有修改第 1、2 批提交。
