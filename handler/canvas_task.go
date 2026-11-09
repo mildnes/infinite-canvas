@@ -440,6 +440,9 @@ func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []
 	task.Progress = 100
 	task.CompletedAt = taskTime()
 	task.ResponseBody = ""
+	if task.Endpoint == "/images/generations" {
+		task.RequestBody = appendImageRevisedPromptMetadata(task.RequestBody, payload)
+	}
 	task.ImageURL = imageURLs[0]
 	if collectAll {
 		task.ImageURLs = imageURLs

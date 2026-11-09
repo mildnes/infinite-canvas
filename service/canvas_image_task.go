@@ -141,8 +141,14 @@ func CanvasImageTaskResponse(task model.CanvasImageTask) map[string]any {
 		"createdAt":      task.CreatedAt,
 		"updatedAt":      task.UpdatedAt,
 	}
+	if strings.TrimSpace(task.RevisedPrompt) != "" {
+		result["revisedPrompt"] = task.RevisedPrompt
+	}
 	var requestMetadata map[string]any
 	if json.Unmarshal([]byte(task.RequestBody), &requestMetadata) == nil {
+		if revisedPrompt, ok := requestMetadata["_image_revised_prompt"].(string); ok && strings.TrimSpace(revisedPrompt) != "" {
+			result["revisedPrompt"] = revisedPrompt
+		}
 		if format, ok := requestMetadata["_image_output_format"].(string); ok {
 			result["imageOutputFormat"] = format
 		}

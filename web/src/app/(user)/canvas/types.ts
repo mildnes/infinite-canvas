@@ -40,6 +40,7 @@ export type CanvasNodeMetadata = {
     groupId?: string;
     composerContent?: string;
     prompt?: string;
+    revisedPrompt?: string;
     excludeUpstreamText?: boolean;
     status?: CanvasNodeStatus;
     stopState?: "stopping" | "failed";

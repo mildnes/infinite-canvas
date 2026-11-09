@@ -5,6 +5,16 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
+## 图片节点显示模型改写提示词
+
+- [行为] `/images/generations` 的 `data[].revised_prompt` 经前端解析和生成媒体持久化保留为 `revisedPrompt`；画布异步任务将首张结果的改写文本保存到现有请求摘要 JSON 中，读取任务时返回 `revisedPrompt`，未增加数据库列。完成结果回写独立的节点 `metadata.revisedPrompt`，不覆盖 `metadata.prompt`。
+- [界面] 图片／全景节点“节点信息”中的“模型实际使用的提示词”为默认折叠的次要区块；空值、非字符串或与用户提示词相同时不产生区块。保存画板后重开保留该字段；修复任务结果恢复时不会用缺失字段覆盖已保存的改写文本。
+- [先红后绿] 使用主仓库内 `git checkout a28f32d -- <被测前端文件>` 临时恢复旧实现，同一套前端测试出现三个真实业务差异：生成结果字段为 `undefined`、节点未保留字段、节点详情没有模型提示词区块；缺失、空值、非字符串和同值不展示的守卫原本通过。恢复修复后 Node + tsx 12/12 通过，覆盖真实响应解析、同步后字段保留、真实节点更新函数、分键持久化重开和实际详情 JSX 渲染。
+- [后端] `TestCanvasRevisedPromptSurvivesTaskPersistence` 使用临时 SQLite 与本地假上游运行真实任务：旧实现 different/same 两项缺字段而失败，missing/wrong_type 两项原本通过；修复后全部通过。没有修改图片字节、原图地址、任务扣费、输出格式或图片存储链路。
+- [结果索引] 任务保留清理后，改写文本仍从既有 `result_json` 白名单快照恢复；模型字段使用 `gorm:"-"`，测试确认不存在 `revised_prompt` 数据库列。输入请求、二进制与完整响应不进入长期结果索引。
+- [验证] 定向前端 12/12、后端任务集成用例、`npx tsc --noEmit --incremental false` 通过；全量与范围检查见本轮最终报告。已检查 todo，无对应待办需迁移。
+- [ ] Hermes 验收：LD-低价GPT 返回模型改写后，图片节点信息折叠显示且原提示词仍可编辑；gpt2.6 缺失字段时无空标题；保存并重新打开画板保留改写内容。未调用真实收费上游、未操作生产数据库。
+
 ## 27e14b1 回归修复：非图片 ASCII 文本不得假报生图成功
 
 - [范围] 基于 `27e14b1ee0ce411a48701e53250d82fe79cefc1e`，仅在 `imageURLsFromAIResponse` 的非 URL 分支，解码成功且非空之后增加 `image/` MIME 检查；非图片继续寻找下一候选，全部无有效图片仍报“图片接口没有返回图片”。没有调整 URL 分支、`looksLikeBase64`、`imageCandidateBytes` 的 data URL 行为、`text` 遍历、内联提取、递归深度或原有测试断言。

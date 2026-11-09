@@ -25,6 +25,7 @@ type CanvasImageTask struct {
 	Status          string                `json:"status"`
 	Progress        int                   `json:"progress"`
 	Prompt          string                `json:"prompt" gorm:"type:text"`
+	RevisedPrompt   string                `json:"revisedPrompt,omitempty" gorm:"-"`
 	GenerationType  string                `json:"generationType"`
 	Endpoint        string                `json:"endpoint"`
 	ContentType     string                `json:"contentType"`

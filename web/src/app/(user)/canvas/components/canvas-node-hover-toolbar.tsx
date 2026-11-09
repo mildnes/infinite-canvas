@@ -310,6 +310,12 @@ export function CanvasNodeInfoModal({ node, open, onClose }: { node: CanvasNodeD
                             <InfoRow label="状态" value={node.metadata?.status || "idle"} />
                             {batchCount > 1 ? <InfoRow label="图片组" value={`${batchCount} 张`} /> : null}
                             {(isPanoramaNodeType(node.type) ? node.metadata?.panoramaSourcePrompt : node.metadata?.prompt) ? <InfoRow label="提示词" value={isPanoramaNodeType(node.type) ? node.metadata?.panoramaSourcePrompt : node.metadata?.prompt} /> : null}
+                            {isCanvasImageNodeType(node.type) && node.metadata?.revisedPrompt?.trim() && node.metadata.revisedPrompt.trim() !== node.metadata.prompt?.trim() ? (
+                                <details className="space-y-2 text-xs opacity-70">
+                                    <summary className="cursor-pointer">模型实际使用的提示词</summary>
+                                    <div className="whitespace-pre-wrap break-words">{node.metadata.revisedPrompt}</div>
+                                </details>
+                            ) : null}
                             {imageBytes ? <InfoRow label="图片大小" value={formatBytes(imageBytes)} /> : null}
                             {node.metadata?.errorDetails ? (
                                 <div className="rounded-lg border p-3 text-red-400" style={{ borderColor: theme.node.stroke }}>

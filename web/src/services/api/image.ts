@@ -42,7 +42,7 @@ type ChatImagesApiResponse = {
     msg?: string;
 };
 
-type GeneratedImage = { id: string; dataUrl: string; seed?: number } & Partial<UploadedImage>;
+type GeneratedImage = { id: string; dataUrl: string; seed?: number; revisedPrompt?: string } & Partial<UploadedImage>;
 export type CanvasImageTask = {
     id: string;
     parent_task_id?: string;
@@ -56,6 +56,7 @@ export type CanvasImageTask = {
     workflowRef?: string;
     model?: string;
     prompt?: string;
+    revisedPrompt?: string;
     status: "queued" | "processing" | "completed" | "failed" | string;
     progress?: number;
     url?: string;
@@ -457,11 +458,11 @@ function parseImagePayload(payload: ImageApiResponse, mime: string): GeneratedIm
     if (typeof payload.code === "number" && payload.code !== 0) {
         throw new ImageRequestError(payload.msg || "请求失败", payload);
     }
-    const images =
-        payload.data
-            ?.map((item) => resolveImageDataUrl(item, mime))
-            .filter((value): value is string => Boolean(value))
-            .map((dataUrl) => ({ id: nanoid(), dataUrl })) || [];
+    const images = payload.data?.flatMap((item) => {
+        const dataUrl = resolveImageDataUrl(item, mime);
+        const revisedPrompt = typeof item.revised_prompt === "string" && item.revised_prompt.trim() ? item.revised_prompt : undefined;
+        return dataUrl ? [{ id: nanoid(), dataUrl, ...(revisedPrompt ? { revisedPrompt } : {}) }] : [];
+    }) || [];
 
     if (images.length === 0) {
         throw new ImageRequestError("接口没有返回图片", payload);
@@ -1228,7 +1229,7 @@ async function syncGeneratedImages(images: GeneratedImage[], owner?: GeneratedIm
         const stored = await autoSyncImage(image.dataUrl, image.id, image.storageKey, owner);
         if (!active()) throw new Error("登录状态已变化");
         return stored
-            ? { id: image.id, dataUrl: stored.url, seed: image.seed, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType }
+            ? { ...image, dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType }
             : image;
     }));
 }
@@ -1309,6 +1310,7 @@ export async function createCanvasImageTask(config: AiConfig & { seedIndex?: num
             node_id: options.nodeId || "",
             model: config.model,
             prompt,
+            ...(image.revisedPrompt ? { revisedPrompt: image.revisedPrompt } : {}),
             status: "completed",
             progress: 100,
             image_url: image.dataUrl,

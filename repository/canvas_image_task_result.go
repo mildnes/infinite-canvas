@@ -25,6 +25,12 @@ func archiveCanvasImageResult(tx *gorm.DB, task model.CanvasImageTask) error {
 		Model: task.Model, Status: "completed", Progress: 100, ImageURL: task.ImageURL, StorageKey: task.StorageKey,
 		Width: task.Width, Height: task.Height, MimeType: task.MimeType, Bytes: task.Bytes,
 		CreatedAt: task.CreatedAt, UpdatedAt: task.UpdatedAt, StartedAt: task.StartedAt, CompletedAt: task.CompletedAt}
+	var metadata struct {
+		RevisedPrompt string `json:"_image_revised_prompt"`
+	}
+	if json.Unmarshal([]byte(task.RequestBody), &metadata) == nil {
+		result.RevisedPrompt = metadata.RevisedPrompt
+	}
 	for _, image := range task.ImageStorage {
 		if image == nil || !stableCanvasImageResult(image.URL, image.StorageKey) {
 			continue

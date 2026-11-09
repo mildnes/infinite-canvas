@@ -6327,6 +6327,7 @@ function applyCanvasImageTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
                 mediaStatus: "ok" as const,
                 mediaError: undefined,
                 content: url,
+                revisedPrompt: task.revisedPrompt ?? (restoringPersistedMedia ? node.metadata?.revisedPrompt : undefined),
                 storageKey: task.storageKey || "",
 				originalUrl: task.originalUrl,
                 status: NODE_STATUS_SUCCESS,
