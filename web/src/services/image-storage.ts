@@ -157,6 +157,7 @@ export async function autoSyncImage(url: string, resultId: string, storageKey?: 
     const active = () => useUserStore.getState().token === ownerToken && (owner?.active?.() ?? true);
     if (!active()) throw new Error("登录状态已变化");
     if (!url || storageKey) return null;
+    if (url.startsWith("data:image/svg+xml")) return uploadImage(url, { localOnly: true });
     if (ownerToken) {
         return generatedImageRequests.run(`generated:${ownerToken}:image:${resultId}`, async () => {
             if (!active()) throw new Error("登录状态已变化");
@@ -258,12 +259,17 @@ export async function uploadImage(input: string | Blob, options: UploadImageOpti
     } else {
         blob = url;
     }
-    if (!options.localOnly) {
+    if (!options.localOnly && blob.type !== "image/svg+xml") {
         const serverUpload = await maybeUploadImageToServer(blob, options.token);
         if (serverUpload) return serverUpload;
     }
     const storageKey = `image:${nanoid()}`;
     await store.setItem(storageKey, blob);
+    if (blob.type === "image/svg+xml") {
+        const url = await blobToDataUrl(blob);
+        objectUrls.set(storageKey, url);
+        return { url, storageKey, width: 0, height: 0, bytes: blob.size, mimeType: blob.type };
+    }
     const urlObj = URL.createObjectURL(blob);
     objectUrls.set(storageKey, urlObj);
     const meta = await readImageMeta(urlObj);
@@ -368,7 +374,7 @@ async function resolveLocalImageUrl(storageKey: string) {
     if (cached) return cached;
     const blob = await store.getItem<Blob>(storageKey);
     if (!blob) return "";
-    const url = URL.createObjectURL(blob);
+    const url = blob.type === "image/svg+xml" ? await blobToDataUrl(blob) : URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
     return url;
 }

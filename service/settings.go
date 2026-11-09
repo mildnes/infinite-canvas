@@ -915,7 +915,7 @@ func normalizeImageOutputCapabilities(capabilities map[string]model.ImageOutputC
 		for _, format := range capability.Formats {
 			format = model.ImageOutputFormat(strings.ToLower(strings.TrimSpace(string(format))))
 			switch format {
-			case model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatPNG, model.ImageOutputFormatJPEG:
+			case model.ImageOutputFormatPNGTransparent, model.ImageOutputFormatPNG, model.ImageOutputFormatJPEG, model.ImageOutputFormatSVG:
 				if !seen[format] {
 					seen[format] = true
 					formats = append(formats, format)

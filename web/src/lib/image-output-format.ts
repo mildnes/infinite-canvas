@@ -2,7 +2,7 @@ import type { ModelChannelProtocol } from "@/lib/model-channel";
 import type { WorkflowFieldMapping, WorkflowRef } from "@/lib/workflow-channel";
 import sharedOutputCapabilityRules from "./image-output-capability-rules.json" with { type: "json" };
 
-export type ImageOutputFormat = "png-transparent" | "png" | "jpeg";
+export type ImageOutputFormat = "png-transparent" | "png" | "jpeg" | "svg";
 export type ImageOutputFormatSelection = ImageOutputFormat | "auto";
 
 export type ImageOutputCapability = {
@@ -67,10 +67,11 @@ export const imageOutputFormatOptions: Array<{ value: ImageOutputFormat; label: 
     { value: "png-transparent", label: "透明 PNG" },
     { value: "png", label: "PNG（不透明）" },
     { value: "jpeg", label: "JPG" },
+    { value: "svg", label: "SVG（矢量）" },
 ];
 
 export function normalizeImageOutputFormat(value: unknown): ImageOutputFormatSelection {
-    return value === "png-transparent" || value === "png" || value === "jpeg" ? value : "auto";
+    return value === "png-transparent" || value === "png" || value === "jpeg" || value === "svg" ? value : "auto";
 }
 
 export function resolveImageOutputFormat(selection: unknown, capability: ImageOutputCapability | null | undefined) {
@@ -159,7 +160,7 @@ function workflowCapabilityForConfig(config: ImageOutputConfig) {
 
 function normalizeCapability(value: ImageOutputCapability | undefined): ImageOutputCapability | null {
     if (!value || !Array.isArray(value.formats)) return null;
-    const formats = Array.from(new Set(value.formats.filter((format): format is ImageOutputFormat => format === "png-transparent" || format === "png" || format === "jpeg")));
+    const formats = Array.from(new Set(value.formats.filter((format): format is ImageOutputFormat => format === "png-transparent" || format === "png" || format === "jpeg" || format === "svg")));
     const defaultFormat = formats.includes(value.defaultFormat as ImageOutputFormat) ? value.defaultFormat : undefined;
     return { formats, ...(defaultFormat ? { defaultFormat } : {}) };
 }
@@ -205,7 +206,7 @@ function localImageOutputCapability(channel: ImageOutputChannel, model: string):
             && excludeModelRegex?.test(normalizedModel) !== true;
     });
     if (!match) return null;
-    const formats = Array.from(new Set(match.rule.formats.filter((format): format is ImageOutputFormat => format === "png-transparent" || format === "jpeg")));
+    const formats = Array.from(new Set(match.rule.formats.filter((format): format is ImageOutputFormat => format === "png-transparent" || format === "jpeg" || format === "svg")));
     const defaultFormat = formats.includes(match.rule.defaultFormat as ImageOutputFormat) ? match.rule.defaultFormat as ImageOutputFormat : undefined;
     return { formats, ...(defaultFormat ? { defaultFormat } : {}) };
 }

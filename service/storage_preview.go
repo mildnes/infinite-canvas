@@ -292,6 +292,9 @@ func generateStoragePreview(ctx context.Context, id string) (int64, error) {
 	if object.DeletedAt != "" || !strings.HasPrefix(object.MimeType, "image/") {
 		return 0, errors.New("对象已删除或不是图片")
 	}
+	if NormalizeStorageMIME(object.MimeType) == "image/svg+xml" {
+		return 0, errors.New("SVG 不生成位图预览，请读取原文件")
+	}
 	if !previewID.MatchString(id) {
 		return 0, errors.New("预览对象标识无效")
 	}

@@ -73,7 +73,7 @@ async function encodePreview(blob: Blob, sourceSize?: ImagePreviewSourceSize): P
 
 // Use bytes already held by an upload; never fetch another original to make a preview.
 export function prepareImagePreview(blob: Blob, sourceSize?: ImagePreviewSourceSize): Promise<Blob | null> {
-    if (!blob.type.startsWith("image/") || typeof document === "undefined") return Promise.resolve(null);
+    if (!blob.type.startsWith("image/") || blob.type === "image/svg+xml" || typeof document === "undefined") return Promise.resolve(null);
     if (sourceSize && (!Number.isFinite(sourceSize.width) || !Number.isFinite(sourceSize.height) || sourceSize.width <= 0 || sourceSize.height <= 0)) return Promise.resolve(null);
     const existing = prepared.get(blob);
     if (existing) return existing;

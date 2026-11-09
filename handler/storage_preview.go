@@ -8,12 +8,19 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/tigerowo/infinite-canvas/repository"
 	"github.com/tigerowo/infinite-canvas/service"
 	"gorm.io/gorm"
 )
 
 func FilePreview(w http.ResponseWriter, r *http.Request, id string) {
 	file, err := service.OpenStoragePreview(id)
+	if err != nil {
+		if object, lookupErr := repository.GetStorageObject(id); lookupErr == nil && service.NormalizeStorageMIME(object.MimeType) == "image/svg+xml" {
+			FileContent(w, r, id)
+			return
+		}
+	}
 	serveFilePreview(w, r, file, err)
 }
 

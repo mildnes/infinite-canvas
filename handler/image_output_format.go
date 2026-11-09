@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -50,6 +51,22 @@ func normalizeImageOutputFormatRequest(body []byte, contentType string, channel 
 		requested, hasSelection := readRequestedImageOutputFormat(toStringSafe(target["output_format"]), toStringSafe(target["background"]))
 		if !hasSelection {
 			continue
+		}
+		if requested == model.ImageOutputFormatSVG {
+			if endpoint != "/images/generations" {
+				return body, contentType, result, errors.New("SVG 仅支持文生图 /images/generations")
+			}
+			allowed := false
+			for _, format := range capability.Formats {
+				allowed = allowed || format == model.ImageOutputFormatSVG
+			}
+			if !supported || !allowed {
+				return body, contentType, result, errors.New("当前渠道不支持 SVG，请切换到 LD-低价GPT 渠道")
+			}
+			payload["n"] = 1
+			for _, key := range []string{"stream", "partial_images", "output_compression", "prompt_rewriter"} {
+				delete(payload, key)
+			}
 		}
 		result = resolveImageOutputFormat(requested, capability, supported)
 		applyImageOutputFormat(target, result.Format, channel)
@@ -206,6 +223,8 @@ func readRequestedImageOutputFormat(format string, background string) (model.Ima
 		return model.ImageOutputFormatPNG, true
 	case "jpg", "jpeg":
 		return model.ImageOutputFormatJPEG, true
+	case "svg":
+		return model.ImageOutputFormatSVG, true
 	default:
 		return "", false
 	}
@@ -265,6 +284,8 @@ func imageOutputWireValues(format string, channel model.ModelChannel) (string, s
 		return "png", ""
 	case model.ImageOutputFormatJPEG:
 		return "jpeg", ""
+	case model.ImageOutputFormatSVG:
+		return "svg", ""
 	default:
 		return "", ""
 	}

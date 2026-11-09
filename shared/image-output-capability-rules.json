@@ -2,6 +2,13 @@
   "schemaVersion": 1,
   "rules": [
     {
+      "id": "qzz-gpt-image-2-6-svg",
+      "channel": { "protocols": ["openai"], "baseUrlContains": ["aiimg.qzz.io"], "combine": "all" },
+      "model": { "kind": "regex", "value": "^gpt-image-2-6-(flare|sunburst)$" },
+      "formats": ["png-transparent", "jpeg", "svg"],
+      "defaultFormat": "png-transparent"
+    },
+    {
       "id": "kie-image-jpeg",
       "channel": {
         "protocols": ["kie"],

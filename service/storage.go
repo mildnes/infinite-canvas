@@ -1181,6 +1181,8 @@ type listBucketResult struct {
 
 func extensionForContentType(contentType string) string {
 	switch strings.ToLower(strings.Split(contentType, ";")[0]) {
+	case "image/svg+xml":
+		return ".svg"
 	case "image/jpeg":
 		return ".jpg"
 	case "image/webp":

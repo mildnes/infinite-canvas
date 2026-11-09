@@ -909,6 +909,7 @@ function ImageContent({
                             fallbackCanvasPreview(event.currentTarget, original);
                         }}
                         onLoad={(event) => {
+                            if (node.metadata?.mimeType === "image/svg+xml" || node.metadata?.content?.startsWith("data:image/svg+xml")) return;
                             const miss = previewMiss.current;
                             const image = event.currentTarget;
                             if (image.currentSrc === image.src) onMediaLoaded?.(node, image.naturalWidth, image.naturalHeight);

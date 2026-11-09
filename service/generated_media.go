@@ -141,7 +141,11 @@ func saveGeneratedMedia(userID, contentType string, data []byte, objectID string
 		_ = os.Remove(filepath.Join(dir, name))
 		return UploadedStorageObject{}, err
 	}
-	width, height := generatedMediaDimensions(data)
+	width, height := 0, 0
+	isSVG := NormalizeStorageMIME(contentType) == "image/svg+xml"
+	if !isSVG {
+		width, height = generatedMediaDimensions(data)
+	}
 	object := model.StorageObject{
 		ID: objectID, ProviderID: generatedMediaProviderID, ObjectKey: name,
 		MimeType: contentType, Bytes: int64(len(data)), SHA256: checksum, Width: width, Height: height,
@@ -151,7 +155,7 @@ func saveGeneratedMedia(userID, contentType string, data []byte, objectID string
 		_ = os.Remove(filepath.Join(dir, name))
 		return UploadedStorageObject{}, err
 	}
-	if strings.HasPrefix(contentType, "image/") {
+	if strings.HasPrefix(contentType, "image/") && !isSVG {
 		QueueStoragePreview(objectID, 10*time.Second)
 	}
 	return UploadedStorageObject{

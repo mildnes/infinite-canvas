@@ -113,6 +113,7 @@ const (
 	// the upstream request carries output_format=png without a transparent
 	// background, so the result keeps its normal opaque background.
 	ImageOutputFormatPNG ImageOutputFormat = "png"
+	ImageOutputFormatSVG ImageOutputFormat = "svg"
 
 	ImageOutputFormatJPEG ImageOutputFormat = "jpeg"
 )

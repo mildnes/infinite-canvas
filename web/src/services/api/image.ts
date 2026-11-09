@@ -139,7 +139,11 @@ export function applyImageOutputFormatFields(target: Record<string, unknown>, fo
     if (!format || !(protocol === "openai" || protocol === "apimart" || protocol === "kie")) return target;
     if (format === "png-transparent" && protocol !== "openai" && protocol !== "apimart") return target;
 
-    target.output_format = format === "jpeg" ? (protocol === "kie" ? "jpg" : "jpeg") : "png";
+    target.output_format = format === "svg" ? "svg" : format === "jpeg" ? (protocol === "kie" ? "jpg" : "jpeg") : "png";
+    if (format === "svg") {
+        target.n = 1;
+        for (const field of ["stream", "partial_images", "output_compression", "prompt_rewriter"]) delete target[field];
+    }
     if (format === "png-transparent") target.background = "transparent";
     else delete target.background;
     return target;
@@ -210,7 +214,8 @@ function applyImageOutputFormat(target: Record<string, unknown>, config: AiConfi
 function imageResponseMime(config: AiConfig, requestInterface: ImageOutputRequestInterface = "images") {
     const protocol = imageOutputProtocol(config);
     if ((protocol === "apimart" || protocol === "kie") && requestInterface !== "images") return IMAGE_MIME;
-    return selectedImageOutputFormat(config) === "jpeg" ? "image/jpeg" : IMAGE_MIME;
+    const format = selectedImageOutputFormat(config);
+    return format === "svg" ? "image/svg+xml" : format === "jpeg" ? "image/jpeg" : IMAGE_MIME;
 }
 
 function imageResponseMimeFromHeader(response: Response, fallback: string) {
@@ -307,7 +312,7 @@ function createImageRequestParams(config: AiConfig): ImageRequestParams {
     const zhipu = isZhipuImageModel(config.model);
     const quality = zhipu ? normalizeZhipuImageQuality(config.model, normalizedQuality) : normalizedQuality;
     return {
-        n: normalizeBoundedInteger(config.count, 1, 1, 15),
+        n: config.imageOutputFormat === "svg" ? 1 : normalizeBoundedInteger(config.count, 1, 1, 15),
         quality,
         // Use the canonical quality for ratio-derived dimensions even when a
         // provider maps it to its own enum (for example zhipu hd/standard).
@@ -1179,11 +1184,14 @@ async function requestAndParseImages(config: AiConfig, endpoint: string, request
             if (!active()) throw new Error("登录状态已变化");
             logged = true;
             void writeLocalAICallLog(config, endpoint, startedAt, response.status, timeoutSeconds, stringifyLogPayload(requestBody), stringifyLogPayload(error.detail || error.message), error.message);
-            throw new ImageRequestError(error.message, error.detail);
+            throw new ImageRequestError(config.imageOutputFormat === "svg" && [400,422].includes(response.status) ? "当前渠道不支持 SVG，请切换到 LD-低价GPT 渠道。" + error.message : error.message, error.detail);
         }
         notifyImageOutputFallback(response, config, requestOwner);
         notifyImageQualityFallback(response, config, requestOwner);
         const parsed = await parseResponse(response, imageResponseMimeFromHeader(response, imageResponseMime(config, requestInterface)));
+        if (config.imageOutputFormat === "svg" && parsed.images.some(image => !image.dataUrl.startsWith("data:image/svg+xml;"))) {
+            throw new ImageRequestError("当前渠道不支持 SVG，请切换到 LD-低价GPT 渠道。");
+        }
         if (!active()) throw new Error("登录状态已变化");
         logged = true;
         void writeLocalAICallLog(config, endpoint, startedAt, response.status, timeoutSeconds, stringifyLogPayload(requestBody), parsed.responseBody, "");
@@ -1200,6 +1208,11 @@ async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?
     const active = () => !owner || useUserStore.getState().token === owner.ownerToken && (owner.active?.() ?? true);
     if (!active()) throw new Error("登录状态已变化");
     signal?.throwIfAborted();
+    if (config.imageOutputFormat === "svg") {
+        if (references.length || config.imageWorkflowRef) throw new ImageRequestError("SVG 仅支持文生图，不支持参考图编辑或工作流。");
+        if (!imageOutputCapabilityForConfig(config, config.model)?.formats.includes("svg")) throw new ImageRequestError("当前渠道不支持 SVG，请切换到 LD-低价GPT 渠道。");
+        config = { ...config, count: "1", streamImages: "", apiMode: "images" };
+    }
     assertImageReferencesSupported(config.model, references);
     const params = createImageRequestParams(config);
     params.signal = signal;
@@ -1298,6 +1311,13 @@ export async function requestEdit(config: AiConfig & { seedIndex?: number; seedC
 }
 
 export async function createCanvasImageTask(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[], options: CanvasImageTaskOptions = {}): Promise<CanvasImageTask> {
+    if (config.imageOutputFormat === "svg") {
+        const owner = { ownerToken: useUserStore.getState().token };
+        const images = await syncGeneratedImages(await requestImages(config, prompt, references, options.signal, owner), owner);
+        options.signal?.throwIfAborted();
+        const image = images[0];
+        return { id: options.clientTaskId || nanoid(), source: options.source || "canvas", source_id: options.sourceId, node_id: options.nodeId, model: config.model, prompt, status: "completed", progress: 100, image_url: image.dataUrl, storageKey: image.storageKey, mimeType: "image/svg+xml", bytes: image.bytes, revisedPrompt: image.revisedPrompt };
+    }
     if (!usesAccountProxy(config)) {
         const images = await requestImages({ ...config, count: "1" }, prompt, references, options.signal);
         options.signal?.throwIfAborted();

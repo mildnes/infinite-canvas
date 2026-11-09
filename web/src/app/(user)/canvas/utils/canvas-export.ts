@@ -106,6 +106,7 @@ function safeFileName(value: string) {
 }
 
 function fileExtension(mimeType: string, storageKey: string) {
+    if (mimeType === "image/svg+xml") return "svg";
     if (mimeType.includes("png")) return "png";
     if (mimeType.includes("jpeg")) return "jpg";
     if (mimeType.includes("webp")) return "webp";

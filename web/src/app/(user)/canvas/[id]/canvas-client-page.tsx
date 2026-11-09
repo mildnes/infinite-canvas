@@ -495,7 +495,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         : "当前渠道未声明图片输出格式能力，已恢复渠道默认格式");
             }
         }
-        return { ...config, imageOutputFormat: format };
+        return { ...config, imageOutputFormat: format, ...(format === "svg" ? { count: "1", canvasImageCount: "1" } : {}) };
     }, [currentAccountId, message, projectId]);
     const resolvedAgentConfig = useMemo<CanvasAgentConfig>(() => {
         const imageSelection = resolveCanvasAgentImageSelection(effectiveConfig, agentConfig);
@@ -6324,15 +6324,15 @@ function applyCanvasImageTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
             metadata: {
                 ...metadata,
                 taskPollError: undefined,
-                mediaStatus: "ok" as const,
-                mediaError: undefined,
+                mediaStatus: task.mimeType === "image/svg+xml" ? "local-only" as const : "ok" as const,
+                mediaError: task.mimeType === "image/svg+xml" ? "SVG 已保存在本机，当前文件策略不支持上云" : undefined,
                 content: url,
                 revisedPrompt: task.revisedPrompt ?? (restoringPersistedMedia ? node.metadata?.revisedPrompt : undefined),
                 storageKey: task.storageKey || "",
 				originalUrl: task.originalUrl,
                 status: NODE_STATUS_SUCCESS,
-                naturalWidth: stored?.width || naturalWidth,
-                naturalHeight: stored?.height || naturalHeight,
+                naturalWidth: task.mimeType === "image/svg+xml" ? undefined : stored?.width || naturalWidth,
+                naturalHeight: task.mimeType === "image/svg+xml" ? undefined : stored?.height || naturalHeight,
                 bytes: task.bytes || 0,
                 mimeType: task.mimeType || "image/png",
                 progress: 100,

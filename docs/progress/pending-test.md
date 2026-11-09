@@ -5,6 +5,19 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
+## SVG 单张矢量输出（本机模式，云端要求未完成）
+
+- [范围] 新增 SVG 格式值与仅命中 `aiimg.qzz.io` 的 GPT Image 2.6 flare/sunburst 默认能力规则；普通 rolldek 能力规则不含 SVG。管理端显式能力声明继续优先。PNG/JPEG/透明 PNG 的规则和已有工作流不变，未新增 complexity、GIF、markup 或 frame_count 参数。
+- [请求] SVG 只走 `/images/generations`，客户端和服务端均强制 `n=1`，移除 streaming／partial_images／output_compression／prompt_rewriter 字段，带参考图编辑或工作流时明确拒绝。所选渠道无 SVG 声明或上游返回不支持时，明确提示“当前渠道不支持 SVG，请切换到 LD-低价GPT 渠道”，不静默改为 PNG 重试。
+- [界面] 图片设置增加“SVG（矢量）”，仅对声明支持的当前渠道显示。选中时数量显示并锁定为 1，解释仅支持单张及本机保存限制；画布生成配置也将数量限制为 1。
+- [保存与显示] Base64 XML 使用 `data:image/svg+xml;base64,...`；原始 Blob 写入既有 IndexedDB 图片缓存，重开通过本地键恢复 data URL。节点标为 local-only 并说明当前文件策略不支持上云；SVG 不经过生成媒体上传接口，仍使用原 PNG/JPEG 路径处理位图。图片下载保留节点唯一命名，ZIP 导出 SVG 条目使用 `.svg`。
+- [位图跳过] SVG 不调用前端位图预览解码或节点位图尺寸回填；生成媒体内部保存及服务器预览按 MIME 跳过 `image.Decode*`。`/preview` 没有 SVG 位图缓存时转为原文件响应，保留 `/content` 的 `application/octet-stream + attachment + nosniff` 策略，不解析或光栅化 SVG。
+- [未完成／约束冲突] 本轮要求的“SVG 上云且 `/api/files/:id/content` 返回 `Content-Type: image/svg+xml`”与同时保留现有上传／文件 MIME 白名单和 Content-Disposition 冲突。当前白名单拒绝 SVG，trusted-generated 校验也拒绝 XML；本实现仅添加 `.svg` 扩展名映射，绝不加 MIME 豁免。因此 SVG 云存储及该 Content-Type 验收未完成，需要用户决定是否接受本机模式，或另行制定安全服务端方案。
+- [生命周期边界] 为保留现有服务端文件策略，SVG 通过现有图片代理同步获取结果后写入本机，未创建服务端后台图片任务；关闭页面前尚未收到的 SVG 不具备普通后台任务的恢复能力，不能承诺服务端停止／退款语义与后台任务一致。普通 PNG/JPEG 仍创建原有后台任务，未改其停止、计费或恢复链路。
+- [先红后绿] 新前端测试在旧代码上观察到 SVG 被写为 PNG、`n=6`、选项缺失、位图解码调用 1 次、错误文案缺少渠道提示，以及本地恢复为 blob URL；修复后全部通过。独立 Go 测试确认原扩展名 `.bin` 红、新 `.svg` 绿；MIME 拒绝和 SVG 单节点下载命名是旧代码本来就绿的守卫。按主仓库 checkout 方式进行最终反向验证，命令与结果见本轮报告。
+- [验证] 统一前端全量为 122 文件／819 项通过，使用现有 CI 的 `tsx --test --test-force-exit`，无失败、跳过或取消；`go test ./... -count=1`、`go test -race ./handler ./service ./repository -count=1`、`npx tsc --noEmit --incremental false` 均通过。首次并发 race 超过 55 秒命令窗口被终止，单独重跑已全绿，不把超时当通过。仅本批 Go 文件格式检查及 `git diff --check a28f32d..HEAD` 在最终提交后执行。
+- [ ] 用户确认本机 SVG 模式是否可接受；Hermes 验收实际 LD-低价GPT 矢量输出、rolldek 不提供 SVG、数量锁定、下载及同浏览器重开，另行复核改写提示词展示。未调用真实收费上游、未运行构建、未部署，也未操作生产库。
+
 ## 图片节点显示模型改写提示词
 
 - [行为] `/images/generations` 的 `data[].revised_prompt` 经前端解析和生成媒体持久化保留为 `revisedPrompt`；画布异步任务将首张结果的改写文本保存到现有请求摘要 JSON 中，读取任务时返回 `revisedPrompt`，未增加数据库列。完成结果回写独立的节点 `metadata.revisedPrompt`，不覆盖 `metadata.prompt`。

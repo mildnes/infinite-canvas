@@ -395,6 +395,9 @@ async function repairCanvasMediaRefWithOptions(
     const loginPending = Boolean(useUserStore.getState().token && !useUserStore.getState().isReady);
     const canUpload = allowUpload && await options.uploadReadiness();
     if (useUserStore.getState().token !== ownerToken) return unchanged();
+    if (kind === "image" && originalContent.startsWith("data:image/svg+xml") && isLocalImageKey(originalKey)) {
+        return { ref: { ...ref, mediaStatus: "local-only", mediaError: "SVG 已保存在本机，当前文件策略不支持上云" }, changed: ref.mediaStatus !== "local-only" || ref.mediaError !== "SVG 已保存在本机，当前文件策略不支持上云", uploaded: false };
+    }
 
     // 1) server: pointer
     if (isServerKey(storageKey)) {
@@ -449,7 +452,11 @@ async function repairCanvasMediaRefWithOptions(
         const localBlob = kind === "image" ? await getImageBlob(storageKey).catch(() => null) : await getMediaBlob(storageKey).catch(() => null);
         if (useUserStore.getState().token !== ownerToken) return unchanged();
         if (localBlob) {
-            if (canUpload) {
+            if (kind === "image" && localBlob.type === "image/svg+xml") {
+                content = await resolveImageUrl(storageKey, "");
+                mediaStatus = content ? "local-only" : "broken";
+                mediaError = content ? "SVG 已保存在本机，当前文件策略不支持上云" : "本地缓存不可用";
+            } else if (canUpload) {
                 try {
                     const result = kind === "image" ? await tryUploadImageSource(localBlob, filename, ownerToken) : await tryUploadMediaSource(localBlob, filename, ownerToken);
                     if (useUserStore.getState().token !== ownerToken) return unchanged();

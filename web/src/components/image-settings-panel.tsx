@@ -53,7 +53,8 @@ export function ImageSettingsPanel({ config, model, onConfigChange, theme, showT
     const [snapDimensionToStep, setSnapDimensionToStep] = useState(true);
     const notifiedFallback = useRef("");
     const quality = config.quality || "auto";
-    const count = Math.max(1, Math.min(maxCount, Math.floor(Math.abs(Number(config.count)) || 1)));
+    const svgSelected = config.imageOutputFormat === "svg";
+    const count = svgSelected ? 1 : Math.max(1, Math.min(maxCount, Math.floor(Math.abs(Number(config.count)) || 1)));
     const activeSize = config.size || "auto";
     const selectedAspect = aspectOptions.find((item) => (item.size || item.value) === activeSize || item.value === activeSize);
     const dimensions = readSizeDimensions(activeSize, selectedAspect || aspectOptions[0]);
@@ -131,7 +132,7 @@ export function ImageSettingsPanel({ config, model, onConfigChange, theme, showT
                                 自动
                             </OptionPill>
                             {imageOutputFormatOptions.filter((item) => outputCapability.formats.includes(item.value)).map((item) => (
-                                <OptionPill key={item.value} selected={selectedOutputFormat === item.value} theme={theme} onClick={() => onConfigChange("imageOutputFormat", item.value)}>
+                                <OptionPill key={item.value} selected={selectedOutputFormat === item.value} theme={theme} onClick={() => { onConfigChange("imageOutputFormat", item.value); if (item.value === "svg") onConfigChange("count", "1"); }}>
                                     {item.label}
                                 </OptionPill>
                             ))}
@@ -186,14 +187,15 @@ export function ImageSettingsPanel({ config, model, onConfigChange, theme, showT
                 {showCount ? (
                     <div className="space-y-2.5">
                         <SettingTitle color={theme.node.muted}>生成张数</SettingTitle>
-                        <div className="grid grid-cols-4 gap-2.5">
+                        {svgSelected ? <div className="text-xs opacity-60">SVG 仅支持 1 张；当前文件策略下仅保存在本机，可下载原矢量文件。</div> : null}
+                        <fieldset disabled={svgSelected} className="grid grid-cols-4 gap-2.5 disabled:opacity-50">
                             {Array.from({ length: quickCount }, (_, index) => index + 1).map((value) => (
                                 <OptionPill key={value} selected={count === value} theme={theme} onClick={() => onConfigChange("count", String(value))}>
                                     {value} 张
                                 </OptionPill>
                             ))}
                             <CountInput value={count} max={maxCount} theme={theme} onChange={(value) => onConfigChange("count", String(value || 1))} />
-                        </div>
+                        </fieldset>
                     </div>
                 ) : null}
             </div>
