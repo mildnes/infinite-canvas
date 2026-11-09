@@ -137,6 +137,7 @@ export function ImageSettingsPanel({ config, model, onConfigChange, theme, showT
                                 </OptionPill>
                             ))}
                         </div>
+                        {svgSelected ? <div className="text-xs" style={{ color: theme.node.muted }}>矢量输出，适合图标 / logo / 简单扁平图形。人物、照片、复杂插画请用 PNG。</div> : null}
                     </div>
                 ) : hasOutputFormatContext ? (
                     <div className="space-y-2.5">

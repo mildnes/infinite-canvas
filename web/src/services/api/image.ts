@@ -1170,6 +1170,16 @@ async function requestChatImagesSingle(config: AiConfig, prompt: string, inputIm
     );
 }
 
+function svgGenerationErrorMessage(message: string, status: number) {
+    const reason = message.includes("Upstream did not attach an SVG file")
+        ? "模型未能产出矢量文件"
+        : message.includes("Unsupported SVG element") ? "生成内容超出矢量格式表达能力" : "";
+    if (!reason && [400, 422].includes(status) && /SVG generation requires|(?:unsupported|not supported).*(?:svg|output_format)|(?:svg|output_format).*(?:unsupported|not supported)/i.test(message)) {
+        return `当前渠道不支持 SVG，请切换到 LD-低价GPT 渠道。上游：${message}`;
+    }
+    return `SVG 生成失败：${reason ? `${reason}（${message}）` : message}。矢量格式适合图标、logo、简单图形；人物、照片、复杂插画请改用 PNG。`;
+}
+
 async function requestAndParseImages(config: AiConfig, endpoint: string, requestBody: unknown, timeoutSeconds: number, fetchResponse: () => Promise<Response>, parseResponse: (response: Response, mime: string) => Promise<ParsedImageResponse>, requestInterface: ImageOutputRequestInterface = "images", owner?: GeneratedImageOwner) {
     const active = () => !owner || useUserStore.getState().token === owner.ownerToken && (owner.active?.() ?? true);
     const startedAt = Date.now();
@@ -1184,7 +1194,7 @@ async function requestAndParseImages(config: AiConfig, endpoint: string, request
             if (!active()) throw new Error("登录状态已变化");
             logged = true;
             void writeLocalAICallLog(config, endpoint, startedAt, response.status, timeoutSeconds, stringifyLogPayload(requestBody), stringifyLogPayload(error.detail || error.message), error.message);
-            throw new ImageRequestError(config.imageOutputFormat === "svg" && [400,422].includes(response.status) ? "当前渠道不支持 SVG，请切换到 LD-低价GPT 渠道。" + error.message : error.message, error.detail);
+            throw new ImageRequestError(config.imageOutputFormat === "svg" ? svgGenerationErrorMessage(error.message, response.status) : error.message, error.detail);
         }
         notifyImageOutputFallback(response, config, requestOwner);
         notifyImageQualityFallback(response, config, requestOwner);

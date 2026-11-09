@@ -5,6 +5,16 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
+## SVG 失败保留真实错误，不轮询孤儿任务
+
+- [范围] 基于 `7693c030f2e1a0b61ddec9d8bd0094ac4a1218d5`，仅修改前端图片错误提示、画布任务标识与设置提示。普通生成、局部编辑、角度、全景和重试入口在 SVG 模式下均不写入 `imageTaskId`；成功结果也不写入 `imageTaskResultId`，失败清除任务查询错误标记。已有 SVG 孤儿 ID 不进入自动轮询、重开恢复或“重新查询”分支，后续重试仍走浏览器生成，不恢复历史上游结果。
+- [错误] 不再把所有 SVG 的 400／422 响应都解释为渠道不支持。`Upstream did not attach an SVG file` 显示“模型未能产出矢量文件”，`Unsupported SVG element` 显示“生成内容超出矢量格式表达能力”；两者都保留英文原文并建议人物、照片和复杂插画改用 PNG。其他失败保留原始 message；`SVG generation requires ...` 等明确不支持的响应仍提示切换到 LD-低价GPT，且保留原文。
+- [界面] 选择“SVG（矢量）”后，输出格式下方以次要文字显示“矢量输出，适合图标 / logo / 简单扁平图形。人物、照片、复杂插画请用 PNG。”，不弹窗、不阻断。现有 600 秒图片请求超时未改。
+- [不变量] SVG 仍只走 `/images/generations`，不创建服务端后台任务、不上云，完成后仍为 `local-only` 并显示原有提示；`n=1` 及四个不支持参数的清除保持。PNG／JPEG／透明 PNG 的任务 ID、轮询、错误文案和模型改写提示词保持；没有改后端、文件 MIME／鉴权、数据库或依赖。
+- [先红后绿] 在主仓库执行 `git checkout 7693c03 -- 'web/src/app/(user)/canvas/[id]/canvas-client-page.tsx' web/src/services/api/image.ts web/src/components/image-settings-panel.tsx` 后，最终测试实际执行旧回调和旧请求处理：SVG 加载期 ID 为 `client_image_task_source-new-1`（预期 `undefined`），成功 ID 为 `browser-only-result`（预期 `undefined`），真实生成失败被加上“当前渠道不支持 SVG”，四个其他入口遗留假 ID，面板无适用提示，已有孤儿 ID 被判为可恢复任务；19 项中 9 个业务断言失败、10 个原有正确行为通过。守卫包括原 SVG 7 项、真不支持／PNG 错误原文、SVG 本机模式／改写提示词及位图生命周期，没有将守卫算作红灯。随后用 `git checkout HEAD -- <上述文件>` 恢复修复，19／19 通过；未使用 worktree 或 stash。
+- [验证] 最终定向为 84／84 通过，覆盖五个提交入口、失败和成功期间零 SVG 查询、真实错误与 detail、SVG 本机模式和 revisedPrompt、PNG／JPEG／透明 PNG 正常轮询及失败原文。前端全量在 `web/` 下使用 Node + tsx `--test --test-force-exit`，123 文件／831 项通过，失败、跳过、取消均为 0；`npx tsc --noEmit --incremental false` 退出 0。新增孤儿 ID 检查先观察到 `legacy-svg-orphan` 被判为可恢复任务，修复后自动查询和批量恢复调用均为 0。提交后执行 `git diff --check 7693c03..HEAD` 检查完整范围。
+- [ ] Hermes 真实上游验收：LD-低价GPT + gpt-image-2.6-sunburst + SVG，复杂人物 prompt 失败时显示原文、中文原因及 PNG 建议，网络面板不出现图片任务轮询；简单红苹果 prompt 成功时显示 SVG，本机保存和下载正常，节点不登记服务端任务 ID。Codex 使用确定性模拟响应验证，未调用收费上游、未运行生产构建、未操作生产库或部署。已有失败节点的真实上游错误若此前已丢失，本次无法从孤儿 ID 恢复。
+
 ## SVG 单张矢量输出（本机模式，云端要求未完成）
 
 - [范围] 新增 SVG 格式值与仅命中 `aiimg.qzz.io` 的 GPT Image 2.6 flare/sunburst 默认能力规则；普通 rolldek 能力规则不含 SVG。管理端显式能力声明继续优先。PNG/JPEG/透明 PNG 的规则和已有工作流不变，未新增 complexity、GIF、markup 或 frame_count 参数。

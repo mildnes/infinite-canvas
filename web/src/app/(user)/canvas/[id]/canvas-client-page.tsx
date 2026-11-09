@@ -985,7 +985,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         pollingVideoNodeIdsRef.current.delete(node.id);
                     });
             });
-            const imageTargets = nodesRef.current.filter((node) => isCanvasImageNodeType(node.type) && node.metadata?.status === NODE_STATUS_LOADING && !node.metadata.content && node.metadata.imageTaskId);
+            const imageTargets = nodesRef.current.filter((node) => isCanvasImageNodeType(node.type) && node.metadata?.imageOutputFormat !== "svg" && node.metadata?.status === NODE_STATUS_LOADING && !node.metadata.content && node.metadata.imageTaskId);
             imageTargets.forEach((node) => {
                 if (pollingImageNodeIdsRef.current.has(node.id) || !node.metadata?.imageTaskId) return;
                 const workflowToken = node.metadata.workflowRef ? useUserStore.getState().token : "";
@@ -3126,7 +3126,7 @@ const maskEditImageNode = useCallback(
                 position: { x: node.position.x + node.width + 96, y: node.position.y },
                 width: node.width,
                 height: node.height,
-                metadata: { prompt, status: NODE_STATUS_LOADING, startedAt: Date.now(), progress: 0, imageTaskId: clientTaskId, ...generationMetadata },
+                metadata: { prompt, status: NODE_STATUS_LOADING, startedAt: Date.now(), progress: 0, imageTaskId: generationConfig.imageOutputFormat === "svg" ? undefined : clientTaskId, ...generationMetadata },
             };
             setMaskEditNodeId(null);
             setRunningNodeId(childId);
@@ -3146,7 +3146,7 @@ const maskEditImageNode = useCallback(
                 if (error instanceof Error && error.name === "AbortError") return;
                 const errorDetails = error instanceof Error ? error.message : "局部修改失败";
                 message.error(errorDetails);
-                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails } } : item)));
+                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails, ...(generationConfig.imageOutputFormat === "svg" ? { imageTaskId: undefined, imageTaskResultId: undefined, taskPollError: undefined } : {}) } } : item)));
             } finally {
                 setRunningNodeId(null);
             }
@@ -3216,7 +3216,7 @@ const generateAngleNode = useCallback(
                     position: { x: node.position.x + node.width + 96, y: node.position.y },
                     width: imageConfig.width,
                     height: imageConfig.height,
-                    metadata: { prompt, status: NODE_STATUS_LOADING, imageTaskId: clientTaskId, startedAt, progress: 0, ...generationMetadata },
+                    metadata: { prompt, status: NODE_STATUS_LOADING, imageTaskId: generationConfig.imageOutputFormat === "svg" ? undefined : clientTaskId, startedAt, progress: 0, ...generationMetadata },
                 },
             ]);
             setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: node.id, toNodeId: childId }]);
@@ -3232,7 +3232,7 @@ const generateAngleNode = useCallback(
                 if (!nodeRunActive(childId, run) || run.stopping) return;
                 if (error instanceof Error && error.name === "AbortError") return;
                 const errorDetails = error instanceof Error ? error.message : "生成失败";
-                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails } } : item)));
+                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails, ...(generationConfig.imageOutputFormat === "svg" ? { imageTaskId: undefined, imageTaskResultId: undefined, taskPollError: undefined } : {}) } } : item)));
             } finally {
                 setRunningNodeId(null);
             }
@@ -3582,7 +3582,7 @@ const generateAngleNode = useCallback(
                             status: NODE_STATUS_LOADING,
                             startedAt: generationStartedAt,
                             progress: 0,
-                            imageTaskId: workflowRef && count > 1 ? undefined : primaryTargetId ? targetTaskIds[primaryTargetId] : undefined,
+                            imageTaskId: panoramaGenerationConfig.imageOutputFormat === "svg" || (workflowRef && count > 1) ? undefined : primaryTargetId ? targetTaskIds[primaryTargetId] : undefined,
                             primaryImageId: count > 1 ? primaryTargetId : undefined,
                             isBatchRoot: count > 1,
                             batchChildIds: count > 1 ? childIds : undefined,
@@ -3610,7 +3610,7 @@ const generateAngleNode = useCallback(
                             status: NODE_STATUS_LOADING,
                             startedAt: generationStartedAt,
                             progress: 0,
-                            imageTaskId: targetTaskIds[id],
+                            imageTaskId: panoramaGenerationConfig.imageOutputFormat === "svg" ? undefined : targetTaskIds[id],
                             batchRootId: count > 1 ? rootId : undefined,
                         },
                     }));
@@ -3666,10 +3666,10 @@ const generateAngleNode = useCallback(
                                     return prev.map((node) => {
                                         if (node.id !== targetId && node.id !== rootId) return node;
                                         if (node.id === rootId && (targetId === rootId || !root?.metadata?.primaryImageId)) {
-                                            return { ...node, metadata: { ...node.metadata, status: NODE_STATUS_LOADING, imageTaskId: task.id, imageTaskResultId: undefined, primaryImageId: targetId, startedAt: parseCanvasTaskTime(task.started_at ?? task.startedAt ?? task.created_at ?? task.createdAt) || generationStartedAt, progress: task.progress || 0, errorDetails: undefined } };
+                                            return { ...node, metadata: { ...node.metadata, status: NODE_STATUS_LOADING, imageTaskId: panoramaGenerationConfig.imageOutputFormat === "svg" ? undefined : task.id, imageTaskResultId: undefined, primaryImageId: targetId, startedAt: parseCanvasTaskTime(task.started_at ?? task.startedAt ?? task.created_at ?? task.createdAt) || generationStartedAt, progress: task.progress || 0, errorDetails: undefined } };
                                         }
                                         if (node.id === targetId) {
-                                            return { ...node, metadata: { ...node.metadata, status: NODE_STATUS_LOADING, imageTaskId: task.id, imageTaskResultId: undefined, startedAt: parseCanvasTaskTime(task.started_at ?? task.startedAt ?? task.created_at ?? task.createdAt) || generationStartedAt, progress: task.progress || 0, errorDetails: undefined } };
+                                            return { ...node, metadata: { ...node.metadata, status: NODE_STATUS_LOADING, imageTaskId: panoramaGenerationConfig.imageOutputFormat === "svg" ? undefined : task.id, imageTaskResultId: undefined, startedAt: parseCanvasTaskTime(task.started_at ?? task.startedAt ?? task.created_at ?? task.createdAt) || generationStartedAt, progress: task.progress || 0, errorDetails: undefined } };
                                         }
                                         return node;
                                     });
@@ -3680,7 +3680,7 @@ const generateAngleNode = useCallback(
                                 const errorDetails = error instanceof Error ? error.message : "全景图生成失败";
                                 setNodes((prev) => workflowRef
                                     ? applyCanvasImageTaskUpdate(prev, targetId, { id: targetTaskIds[targetId], source: "workflow", status: "failed", error: { message: errorDetails } }, generationStartedAt, { width: panoramaNodeConfig.width, height: panoramaNodeConfig.height })
-                                    : prev.map((node) => (node.id === targetId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_ERROR, errorDetails } } : node)));
+                                    : prev.map((node) => (node.id === targetId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_ERROR, errorDetails, ...(panoramaGenerationConfig.imageOutputFormat === "svg" ? { imageTaskId: undefined, imageTaskResultId: undefined, taskPollError: undefined } : {}) } } : node)));
                                 return false;
                             }
                         }),
@@ -3738,7 +3738,7 @@ const generateAngleNode = useCallback(
                             status: NODE_STATUS_LOADING,
                             startedAt: generationStartedAt,
                             progress: 0,
-                            imageTaskId: workflowRef && count > 1 ? undefined : primaryTargetId ? targetTaskIds[primaryTargetId] : undefined,
+                            imageTaskId: generationConfig.imageOutputFormat === "svg" || (workflowRef && count > 1) ? undefined : primaryTargetId ? targetTaskIds[primaryTargetId] : undefined,
                             primaryImageId: count > 1 ? primaryTargetId : undefined,
                             isBatchRoot: count > 1,
                             batchChildIds: count > 1 ? childIds : undefined,
@@ -3759,7 +3759,7 @@ const generateAngleNode = useCallback(
                         },
                         width: imageSize.width,
                         height: imageSize.height,
-                        metadata: { prompt: effectivePrompt, cameraControl: sourceNode?.metadata?.cameraControl, status: NODE_STATUS_LOADING, startedAt: generationStartedAt, progress: 0, imageTaskId: targetTaskIds[id], batchRootId: count > 1 ? rootId : undefined, ...generationMetadata, workflowRef },
+                        metadata: { prompt: effectivePrompt, cameraControl: sourceNode?.metadata?.cameraControl, status: NODE_STATUS_LOADING, startedAt: generationStartedAt, progress: 0, imageTaskId: generationConfig.imageOutputFormat === "svg" ? undefined : targetTaskIds[id], batchRootId: count > 1 ? rootId : undefined, ...generationMetadata, workflowRef },
                     }));
                     const batchConnections = [...(isEmptyImageNode || overwriteExisting ? [] : [{ id: nanoid(), fromNodeId: nodeId, toNodeId: rootId }]), ...childIds.map((childId) => ({ id: nanoid(), fromNodeId: rootId, toNodeId: childId }))];
 
@@ -3834,12 +3834,12 @@ const generateAngleNode = useCallback(
                                         if (node.id === rootId && (targetId === rootId || !root?.metadata?.primaryImageId))
                                             return {
                                                 ...node,
-                                                metadata: { ...node.metadata, status: NODE_STATUS_LOADING, imageTaskId: task.id, imageTaskResultId: undefined, primaryImageId: targetId, startedAt: parseCanvasTaskTime(task.started_at ?? task.startedAt ?? task.created_at ?? task.createdAt) || generationStartedAt, progress: task.progress || 0, errorDetails: undefined },
+                                                metadata: { ...node.metadata, status: NODE_STATUS_LOADING, imageTaskId: generationConfig.imageOutputFormat === "svg" ? undefined : task.id, imageTaskResultId: undefined, primaryImageId: targetId, startedAt: parseCanvasTaskTime(task.started_at ?? task.startedAt ?? task.created_at ?? task.createdAt) || generationStartedAt, progress: task.progress || 0, errorDetails: undefined },
                                             };
                                         if (node.id === targetId)
                                             return {
                                                 ...node,
-                                                metadata: { ...node.metadata, status: NODE_STATUS_LOADING, imageTaskId: task.id, imageTaskResultId: undefined, startedAt: parseCanvasTaskTime(task.started_at ?? task.startedAt ?? task.created_at ?? task.createdAt) || generationStartedAt, progress: task.progress || 0, errorDetails: undefined },
+                                                metadata: { ...node.metadata, status: NODE_STATUS_LOADING, imageTaskId: generationConfig.imageOutputFormat === "svg" ? undefined : task.id, imageTaskResultId: undefined, startedAt: parseCanvasTaskTime(task.started_at ?? task.startedAt ?? task.created_at ?? task.createdAt) || generationStartedAt, progress: task.progress || 0, errorDetails: undefined },
                                             };
                                         return node;
                                     });
@@ -3851,7 +3851,7 @@ const generateAngleNode = useCallback(
                                 const errorDetails = error instanceof Error ? error.message : "生成失败";
                                 setNodes((prev) => workflowRef
                                     ? applyCanvasImageTaskUpdate(prev, targetId, { id: targetTaskIds[targetId], source: "workflow", status: "failed", error: { message: errorDetails } }, generationStartedAt, { width: imageSize.width, height: imageSize.height })
-                                    : prev.map((node) => (node.id === targetId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_ERROR, errorDetails } } : node)));
+                                    : prev.map((node) => (node.id === targetId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_ERROR, errorDetails, ...(generationConfig.imageOutputFormat === "svg" ? { imageTaskId: undefined, imageTaskResultId: undefined, taskPollError: undefined } : {}) } } : node)));
                                 return false;
                             }
                         }),
@@ -4596,7 +4596,7 @@ const generateAngleNode = useCallback(
             setNodes((prev) => prev.map((item) => {
                 const isRetryTarget = item.id === retryTargetId;
                 if (!isRetryTarget && !(retryMirrorsRoot && item.id === retryBatchRootId)) return item;
-                return { ...item, metadata: { ...item.metadata, status: NODE_STATUS_LOADING, stopState: undefined, errorDetails: undefined, content: undefined, storageKey: "", progress: 0, startedAt: retryStartedAt, ...(item.type === CanvasNodeType.Video ? { videoTaskId: retryVideoTaskId, videoTaskVideoId: undefined } : {}), ...(isCanvasImageNodeType(item.type) ? { imageTaskId: isRetryTarget ? retryImageTaskId : undefined, imageTaskResultId: undefined } : {}), ...(item.type === CanvasNodeType.Audio ? { audioTaskId: retryAudioTaskId, audioTaskResultId: undefined } : {}) } };
+                return { ...item, metadata: { ...item.metadata, status: NODE_STATUS_LOADING, stopState: undefined, errorDetails: undefined, content: undefined, storageKey: "", progress: 0, startedAt: retryStartedAt, ...(item.type === CanvasNodeType.Video ? { videoTaskId: retryVideoTaskId, videoTaskVideoId: undefined } : {}), ...(isCanvasImageNodeType(item.type) ? { imageTaskId: generationConfig.imageOutputFormat === "svg" ? undefined : isRetryTarget ? retryImageTaskId : undefined, imageTaskResultId: undefined } : {}), ...(item.type === CanvasNodeType.Audio ? { audioTaskId: retryAudioTaskId, audioTaskResultId: undefined } : {}) } };
             }));
 
             try {
@@ -4652,7 +4652,7 @@ const generateAngleNode = useCallback(
                                     ...item.metadata,
                                     ...(isPanoramaNodeType(item.type) ? { prompt: item.metadata?.panoramaSourcePrompt || item.metadata?.prompt || "", panoramaSourcePrompt: item.metadata?.panoramaSourcePrompt || item.metadata?.prompt || "", panoramaFinalPrompt: prompt, panoramaProjection: undefined } : { prompt }),
                                     ...generationMetadata,
-                                    imageTaskId: task.id,
+                                    imageTaskId: generationConfig.imageOutputFormat === "svg" ? undefined : task.id,
                                     imageTaskResultId: undefined,
                                     startedAt: parseCanvasTaskTime(task.started_at ?? task.startedAt ?? task.created_at ?? task.createdAt) || retryStartedAt,
                                     progress: task.progress || 0,
@@ -4674,7 +4674,7 @@ const generateAngleNode = useCallback(
                     setNodes((prev) => applyCanvasImageTaskUpdate(prev, retryTargetId, failedTask, retryStartedAt, { width: node.width, height: node.height }));
                     setConnections((prev) => applyCanvasImageTaskConnections(prev, retryTargetId, failedTask, retryBatchRootId));
                 } else {
-                    setNodes((prev) => prev.map((item) => (item.id === retryTargetId || (retryMirrorsRoot && item.id === retryBatchRootId) ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails } } : item)));
+                    setNodes((prev) => prev.map((item) => (item.id === retryTargetId || (retryMirrorsRoot && item.id === retryBatchRootId) ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails, ...(isCanvasImageNodeType(item.type) && generationConfig.imageOutputFormat === "svg" ? { imageTaskId: undefined, imageTaskResultId: undefined, taskPollError: undefined } : {}) } } : item)));
                 }
             } finally {
                 setRunningNodeId(null);
@@ -6261,6 +6261,7 @@ async function recoverPersistedCanvasImageTasks(nodes: CanvasNodeData[]) {
     const targets = nodes.filter(
         (node) =>
             isCanvasImageNodeType(node.type) &&
+            node.metadata?.imageOutputFormat !== "svg" &&
             !node.metadata?.content &&
             !node.metadata?.storageKey &&
             Boolean(node.metadata?.imageTaskId) &&
@@ -6307,7 +6308,7 @@ function applyCanvasImageTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
             startedAt: taskStartedAt,
             durationMs: Date.now() - taskStartedAt,
             progress,
-            imageTaskId: task.id || node.metadata?.imageTaskId,
+            imageTaskId: node.metadata?.imageOutputFormat === "svg" || task.mimeType === "image/svg+xml" ? undefined : task.id || node.metadata?.imageTaskId,
         };
         if (!completed || !url || failed) return { ...node, metadata };
         const stored = task.imageStorage?.find((image) => image?.url === url);
@@ -6336,7 +6337,7 @@ function applyCanvasImageTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
                 bytes: task.bytes || 0,
                 mimeType: task.mimeType || "image/png",
                 progress: 100,
-                imageTaskResultId: task.id,
+                imageTaskResultId: task.mimeType === "image/svg+xml" ? undefined : task.id,
                 panoramaProjection: isPanorama ? ("equirectangular" as const) : undefined,
             },
         };
@@ -6715,7 +6716,7 @@ function resetInterruptedGeneration(nodes: CanvasNodeData[]) {
 function canvasRecoverableTaskId(node: CanvasNodeData) {
     if (node.metadata?.status === "cancelled") return "";
     if (node.type === CanvasNodeType.Video) return canvasVideoTaskId(node.metadata);
-    if (isCanvasImageNodeType(node.type)) return node.metadata?.imageTaskId || "";
+    if (isCanvasImageNodeType(node.type)) return node.metadata?.imageOutputFormat === "svg" ? "" : node.metadata?.imageTaskId || "";
     if (node.type === CanvasNodeType.Audio) return node.metadata?.audioTaskId || "";
     return "";
 }
