@@ -1661,6 +1661,8 @@ function parseGeminiImages(payload: Record<string, unknown>) {
         const content = candidate.content && typeof candidate.content === "object" ? candidate.content as Record<string, unknown> : {};
         const parts = Array.isArray(content.parts) ? content.parts as Array<Record<string, unknown>> : [];
         return parts.flatMap((part) => {
+            // 排除 Gemini 的「思考图」：thought=true 的 part 是中间草稿，不是正式结果。（移植自上游 a166ac8）
+            if (part.thought === true) return [];
             const inlineData = part.inlineData && typeof part.inlineData === "object" ? part.inlineData as Record<string, unknown> : {};
             const data = typeof inlineData.data === "string" ? inlineData.data : "";
             if (!data) return [];

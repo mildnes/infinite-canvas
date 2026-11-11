@@ -911,6 +911,11 @@ func collectImageCandidatesWithInlineLimit(value any, depth int, includeChatImag
 		}
 		return result
 	case map[string]any:
+		// 排除 Gemini 的「思考图」：thinking 过程会以 thought=true + inlineData 返回中间草稿，
+		// 若不排除会把思考草图当正式结果。（移植自上游 a166ac8）
+		if thought, _ := typed["thought"].(bool); thought && typed["inlineData"] != nil {
+			return nil
+		}
 		keys := []string{"url", "b64_json", "partial_image_b64", "image_url", "image", "image_data", "base64", "inlineData", "parts", "content", "candidates", "result", "response", "data", "output", "text"}
 		if includeChatImages {
 			keys = append(keys, "choices", "message", "images")
